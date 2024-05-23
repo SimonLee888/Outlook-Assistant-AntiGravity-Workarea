@@ -1,0 +1,4 @@
+﻿[*.vb]
+
+# IDE0059: 指派了不必要的值
+dotnet_diagnostic.IDE0059.severity = suggestion

@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Outlook Assistant": {
+      "commandName": "Project",
+      "hotReloadEnabled": false
+    }
+  }
+}

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -33,6 +33,11 @@
 
   <ItemGroup>
     <Compile Remove="Form1_bak.vb" />
+    <Compile Remove="SelectColorTheme.vb" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="sync.ffs_db" />
   </ItemGroup>
 
   <ItemGroup>
@@ -67,7 +72,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Linq.Parallel" Version="4.3.0" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="WinForms.DataVisualization" Version="1.9.2" />
   </ItemGroup>
@@ -108,6 +112,10 @@
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.vb</LastGenOutput>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Update="Form1_Main.vb" />
+    <Compile Update="Form1_ComL3.vb" />
   </ItemGroup>
 
 </Project>

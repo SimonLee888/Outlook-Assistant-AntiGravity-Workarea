@@ -1,0 +1,31 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <_LastSelectedProfileId>D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 2022\Projects\Outlook Assistant\My Project\PublishProfiles\FolderProfile.pubxml</_LastSelectedProfileId>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Update="Form1_ComL3.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="Form1_Main.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="Form1_Win32API.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="DebugForm.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="Form1.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="Form1_SimTree.vb">
+      <SubType>Component</SubType>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Update="DebugForm.resx">
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,30 @@
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.exe
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.deps.json
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.runtimeconfig.json
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.pdb
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\System.Management.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\WinForms.DataVisualization.Utilities.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\WinForms.DataVisualization.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\runtimes\win\lib\net8.0\System.Management.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\Microsoft.Windows.SDK.NET.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\bin\Debug\net10.0-windows10.0.17763.0\WinRT.Runtime.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.vbproj.AssemblyReference.cache
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Interop.Microsoft.Office.Interop.Outlook.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Interop.Redemption.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.vbproj.ResolveComReference.cache
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook_Assistant.DebugForm.resources
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook_Assistant.Form1.resources
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook_Assistant.Resources.resources
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.vbproj.GenerateResource.cache
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.GeneratedMSBuildEditorConfig.editorconfig
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.AssemblyInfoInputs.cache
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.AssemblyInfo.vb
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.vbproj.CoreCompileInputs.cache
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.sourcelink.json
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook .9F7F07C8.Up2Date
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\refint\Outlook Assistant.dll
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.pdb
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\Outlook Assistant.genruntimeconfig.cache
+D:\Users\Simon\Dropbox\私人文件\Visual Studio\Visual Studio 18 (2026)\Outlook Assistant - (AntiGravity測試區)\obj\Debug\net10.0-windows10.0.17763.0\ref\Outlook Assistant.dll

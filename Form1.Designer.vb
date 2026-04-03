@@ -1,5 +1,6 @@
-Ôªø<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
+<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
 Partial Class Form1
+
     Inherits System.Windows.Forms.Form
 
     'Form overrides dispose to clean up the component list.
@@ -18,14 +19,15 @@ Partial Class Form1
     Private components As System.ComponentModel.IContainer
 
     'NOTE: The following procedure is required by the Windows Form Designer
-    'It can be modified using the Windows Form Designer.  
+    'It can be modified using the Windows Form Designer.
     'Do not modify it using the code editor.
+
     <System.Diagnostics.DebuggerStepThrough()>
     Private Sub InitializeComponent()
-        components = New ComponentModel.Container()
         Dim ChartArea1 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
         Dim Legend1 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
         Dim Series1 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
+        Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(Form1))
         TabControl1 = New TabControl()
         TabPage1 = New TabPage()
         SplitContainer1 = New SplitContainer()
@@ -38,11 +40,11 @@ Partial Class Form1
         ColumnHeader15 = New ColumnHeader()
         TabPage2 = New TabPage()
         SplitContainer2 = New SplitContainer()
-        TreeView2 = New TreeView()
-        CheckSub2 = New CheckBox()
+        CheckSubFolder2 = New CheckBox()
         ListView2 = New ListView()
         ColumnHeader21 = New ColumnHeader()
         ColumnHeader22 = New ColumnHeader()
+        ColumnHeader23 = New ColumnHeader()
         Chart2 = New DataVisualization.Charting.Chart()
         TabPage3 = New TabPage()
         SplitContainer3 = New SplitContainer()
@@ -66,7 +68,6 @@ Partial Class Form1
         TextBox3 = New TextBox()
         CheckAttachName = New CheckBox()
         GroupBox2 = New GroupBox()
-        Button8 = New Button()
         UnitMax = New ComboBox()
         UnitMin = New ComboBox()
         NumberMax = New NumericUpDown()
@@ -89,22 +90,17 @@ Partial Class Form1
         Button5 = New Button()
         Label2 = New Label()
         TabPage6 = New TabPage()
-        Redemption = New Button()
+        LoadCache = New Button()
+        SaveCache = New Button()
+        checkIncludeAllFolders = New CheckBox()
+        CheckRDO = New CheckBox()
         buttonClearCache = New Button()
         CheckDebug = New CheckBox()
-        btnDebug = New Button()
         ToolStripStatusLabel1 = New ToolStripStatusLabel()
-        lblStatus1 = New ToolStripStatusLabel()
-        lblStatus2 = New ToolStripStatusLabel()
-        lblStatus3 = New ToolStripStatusLabel()
+        ProgressBar1 = New ToolStripStatusLabel()
+        ProgressBar2 = New ToolStripStatusLabel()
         ToolStripProgressBar1 = New ToolStripStatusLabel()
         StatusStrip1 = New StatusStrip()
-        tmrPreCache = New Timer(components)
-        Timer2 = New Timer(components)
-        Timer3 = New Timer(components)
-        BackgroundWorker1 = New ComponentModel.BackgroundWorker()
-        BackgroundWorker2 = New ComponentModel.BackgroundWorker()
-        BackgroundWorker3 = New ComponentModel.BackgroundWorker()
         TabControl1.SuspendLayout()
         TabPage1.SuspendLayout()
         CType(SplitContainer1, ComponentModel.ISupportInitialize).BeginInit()
@@ -113,7 +109,6 @@ Partial Class Form1
         SplitContainer1.SuspendLayout()
         TabPage2.SuspendLayout()
         CType(SplitContainer2, ComponentModel.ISupportInitialize).BeginInit()
-        SplitContainer2.Panel1.SuspendLayout()
         SplitContainer2.Panel2.SuspendLayout()
         SplitContainer2.SuspendLayout()
         CType(Chart2, ComponentModel.ISupportInitialize).BeginInit()
@@ -152,7 +147,7 @@ Partial Class Form1
         TabControl1.Controls.Add(TabPage5)
         TabControl1.Controls.Add(TabPage6)
         TabControl1.Dock = DockStyle.Fill
-        TabControl1.Font = New Font("Microsoft JhengHei UI", 10.2F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        TabControl1.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         TabControl1.Location = New Point(0, 0)
         TabControl1.Margin = New Padding(4)
         TabControl1.Name = "TabControl1"
@@ -170,7 +165,7 @@ Partial Class Form1
         TabPage1.Padding = New Padding(4)
         TabPage1.Size = New Size(998, 1278)
         TabPage1.TabIndex = 0
-        TabPage1.Text = "Ë≥áÊñôÂ§æÂÖßÂÆπ"
+        TabPage1.Text = "∏ÍÆ∆ß®≤Œ≠p"
         TabPage1.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer1
@@ -196,7 +191,7 @@ Partial Class Form1
         ' TreeView1
         ' 
         TreeView1.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        TreeView1.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        TreeView1.Font = New Font("Microsoft JhengHei UI", 10F)
         TreeView1.HideSelection = False
         TreeView1.Location = New Point(0, 0)
         TreeView1.Margin = New Padding(4)
@@ -206,47 +201,46 @@ Partial Class Form1
         ' 
         ' ListView1
         ' 
-        ListView1.Activation = ItemActivation.OneClick
         ListView1.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView1.Columns.AddRange(New ColumnHeader() {ColumnHeader11, ColumnHeader12, ColumnHeader13, ColumnHeader14, ColumnHeader15})
-        ListView1.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        ListView1.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView1.FullRowSelect = True
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(650, 1244)
+        ListView1.Size = New Size(612, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
         ' 
         ' ColumnHeader11
         ' 
-        ColumnHeader11.Text = "Ë≥áÊñôÂ§æÂêçÁ®±"
+        ColumnHeader11.Text = "∏ÍÆ∆ß®¶W∫Ÿ"
         ColumnHeader11.Width = 150
         ' 
         ' ColumnHeader12
         ' 
-        ColumnHeader12.Text = "ÈÉµ‰ª∂Êï∏Èáè"
+        ColumnHeader12.Text = "∂l•Ûº∆∂q"
         ColumnHeader12.TextAlign = HorizontalAlignment.Right
         ColumnHeader12.Width = 100
         ' 
         ' ColumnHeader13
         ' 
-        ColumnHeader13.Text = "Ë≥áÊñôÂ§æÊï∏Èáè"
+        ColumnHeader13.Text = "∏ÍÆ∆ß®º∆∂q"
         ColumnHeader13.TextAlign = HorizontalAlignment.Right
         ColumnHeader13.Width = 100
         ' 
         ' ColumnHeader14
         ' 
-        ColumnHeader14.Text = "ÈÉµ‰ª∂Á∏ΩË®à"
+        ColumnHeader14.Text = "∂l•Û¡`≠p"
         ColumnHeader14.TextAlign = HorizontalAlignment.Right
         ColumnHeader14.Width = 100
         ' 
         ' ColumnHeader15
         ' 
-        ColumnHeader15.Text = "FolderSize"
+        ColumnHeader15.Text = "∏ÍÆ∆ß®§j§p"
         ColumnHeader15.TextAlign = HorizontalAlignment.Right
-        ColumnHeader15.Width = 100
+        ColumnHeader15.Width = 200
         ' 
         ' TabPage2
         ' 
@@ -257,7 +251,7 @@ Partial Class Form1
         TabPage2.Padding = New Padding(4)
         TabPage2.Size = New Size(998, 1278)
         TabPage2.TabIndex = 1
-        TabPage2.Text = "Áµ±Ë®àÂúñË°®"
+        TabPage2.Text = "≤Œ≠pπœ™Ì"
         TabPage2.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer2
@@ -267,13 +261,9 @@ Partial Class Form1
         SplitContainer2.Margin = New Padding(4)
         SplitContainer2.Name = "SplitContainer2"
         ' 
-        ' SplitContainer2.Panel1
-        ' 
-        SplitContainer2.Panel1.Controls.Add(TreeView2)
-        ' 
         ' SplitContainer2.Panel2
         ' 
-        SplitContainer2.Panel2.Controls.Add(CheckSub2)
+        SplitContainer2.Panel2.Controls.Add(CheckSubFolder2)
         SplitContainer2.Panel2.Controls.Add(ListView2)
         SplitContainer2.Panel2.Controls.Add(Chart2)
         SplitContainer2.Size = New Size(990, 1270)
@@ -282,52 +272,47 @@ Partial Class Form1
         SplitContainer2.TabIndex = 6
         SplitContainer2.TabStop = False
         ' 
-        ' TreeView2
+        ' CheckSubFolder2
         ' 
-        TreeView2.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        TreeView2.Font = New Font("Microsoft JhengHei UI", 10.2F)
-        TreeView2.HideSelection = False
-        TreeView2.Location = New Point(0, 400)
-        TreeView2.Margin = New Padding(4)
-        TreeView2.Name = "TreeView2"
-        TreeView2.Size = New Size(300, 844)
-        TreeView2.TabIndex = 1
-        ' 
-        ' CheckSub2
-        ' 
-        CheckSub2.AutoSize = True
-        CheckSub2.Location = New Point(4, 400)
-        CheckSub2.Margin = New Padding(4)
-        CheckSub2.Name = "CheckSub2"
-        CheckSub2.Size = New Size(117, 26)
-        CheckSub2.TabIndex = 3
-        CheckSub2.Text = "Âê´Â≠êË≥áÊñôÂ§æ"
-        CheckSub2.UseVisualStyleBackColor = True
+        CheckSubFolder2.AutoSize = True
+        CheckSubFolder2.FlatStyle = FlatStyle.System
+        CheckSubFolder2.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        CheckSubFolder2.Location = New Point(4, 400)
+        CheckSubFolder2.Margin = New Padding(4)
+        CheckSubFolder2.Name = "CheckSubFolder2"
+        CheckSubFolder2.Size = New Size(120, 25)
+        CheckSubFolder2.TabIndex = 3
+        CheckSubFolder2.Text = "ßt§l∏ÍÆ∆ß®"
+        CheckSubFolder2.UseVisualStyleBackColor = True
         ' 
         ' ListView2
         ' 
         ListView2.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
-        ListView2.Columns.AddRange(New ColumnHeader() {ColumnHeader21, ColumnHeader22})
-        ListView2.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        ListView2.Columns.AddRange(New ColumnHeader() {ColumnHeader21, ColumnHeader22, ColumnHeader23})
+        ListView2.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView2.FullRowSelect = True
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(650, 395)
+        ListView2.Size = New Size(612, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
         ' 
         ' ColumnHeader21
         ' 
-        ColumnHeader21.Text = "Âπ¥‰ªΩ"
+        ColumnHeader21.Text = "¶~•˜"
         ColumnHeader21.Width = 200
         ' 
         ' ColumnHeader22
         ' 
-        ColumnHeader22.Text = "ÈÉµ‰ª∂Êï∏Èáè"
+        ColumnHeader22.Text = "∂l•Ûº∆∂q"
         ColumnHeader22.TextAlign = HorizontalAlignment.Right
         ColumnHeader22.Width = 100
+        ' 
+        ' ColumnHeader23
+        ' 
+        ColumnHeader23.Text = ""
         ' 
         ' Chart2
         ' 
@@ -344,7 +329,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(619, 857)
+        Chart2.Size = New Size(581, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -357,7 +342,7 @@ Partial Class Form1
         TabPage3.Padding = New Padding(4)
         TabPage3.Size = New Size(998, 1278)
         TabPage3.TabIndex = 2
-        TabPage3.Text = "Â∞ãÊâæÈôÑ‰ª∂Ê™îÊ°à"
+        TabPage3.Text = "¥Mß‰™˛•Û¿…Æ◊"
         TabPage3.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer3
@@ -389,7 +374,7 @@ Partial Class Form1
         ' TreeView3
         ' 
         TreeView3.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        TreeView3.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        TreeView3.Font = New Font("Microsoft JhengHei UI", 10F)
         TreeView3.HideSelection = False
         TreeView3.Location = New Point(0, 0)
         TreeView3.Margin = New Padding(4)
@@ -401,23 +386,25 @@ Partial Class Form1
         ' 
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
-        CheckSubFolder3.Location = New Point(552, 56)
+        CheckSubFolder3.FlatStyle = FlatStyle.System
+        CheckSubFolder3.Location = New Point(522, 66)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
-        CheckSubFolder3.Size = New Size(117, 26)
+        CheckSubFolder3.Size = New Size(126, 27)
         CheckSubFolder3.TabIndex = 32
-        CheckSubFolder3.Text = "Âê´Â≠êË≥áÊñôÂ§æ"
+        CheckSubFolder3.Text = "ßt§l∏ÍÆ∆ß®"
+        CheckSubFolder3.TextAlign = ContentAlignment.MiddleCenter
         CheckSubFolder3.UseVisualStyleBackColor = True
         ' 
         ' Button3_Stop
         ' 
         Button3_Stop.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3_Stop.FlatStyle = FlatStyle.System
-        Button3_Stop.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3_Stop.Location = New Point(573, 90)
+        Button3_Stop.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        Button3_Stop.Location = New Point(535, 90)
         Button3_Stop.Margin = New Padding(4)
         Button3_Stop.Name = "Button3_Stop"
-        Button3_Stop.Size = New Size(96, 29)
+        Button3_Stop.Size = New Size(96, 42)
         Button3_Stop.TabIndex = 33
         Button3_Stop.Text = "STOP"
         Button3_Stop.UseVisualStyleBackColor = True
@@ -427,11 +414,11 @@ Partial Class Form1
         ' 
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
-        Button3.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(573, 19)
+        Button3.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        Button3.Location = New Point(562, 16)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
-        Button3.Size = New Size(96, 29)
+        Button3.Size = New Size(96, 42)
         Button3.TabIndex = 31
         Button3.Text = "Go"
         Button3.UseVisualStyleBackColor = True
@@ -443,6 +430,7 @@ Partial Class Form1
         GroupBox3.Controls.Add(CheckAttCount)
         GroupBox3.Controls.Add(Label3)
         GroupBox3.FlatStyle = FlatStyle.Flat
+        GroupBox3.Font = New Font("Microsoft JhengHei UI", 9.5F)
         GroupBox3.Location = New Point(517, 4)
         GroupBox3.Margin = New Padding(4)
         GroupBox3.Name = "GroupBox3"
@@ -461,7 +449,7 @@ Partial Class Form1
         CountMax.Maximum = New Decimal(New Integer() {1000, 0, 0, 0})
         CountMax.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
         CountMax.Name = "CountMax"
-        CountMax.Size = New Size(71, 29)
+        CountMax.Size = New Size(71, 28)
         CountMax.TabIndex = 20
         CountMax.TextAlign = HorizontalAlignment.Right
         CountMax.Value = New Decimal(New Integer() {2, 0, 0, 0})
@@ -473,7 +461,7 @@ Partial Class Form1
         CountMin.Margin = New Padding(4)
         CountMin.Maximum = New Decimal(New Integer() {1000, 0, 0, 0})
         CountMin.Name = "CountMin"
-        CountMin.Size = New Size(71, 29)
+        CountMin.Size = New Size(71, 28)
         CountMin.TabIndex = 18
         CountMin.TextAlign = HorizontalAlignment.Right
         CountMin.Value = New Decimal(New Integer() {1, 0, 0, 0})
@@ -481,12 +469,13 @@ Partial Class Form1
         ' CheckAttCount
         ' 
         CheckAttCount.AutoSize = True
+        CheckAttCount.FlatStyle = FlatStyle.System
         CheckAttCount.Location = New Point(8, 28)
         CheckAttCount.Margin = New Padding(4)
         CheckAttCount.Name = "CheckAttCount"
-        CheckAttCount.Size = New Size(100, 26)
+        CheckAttCount.Size = New Size(104, 25)
         CheckAttCount.TabIndex = 9
-        CheckAttCount.Text = "ÈôÑ‰ª∂ÂÄãÊï∏"
+        CheckAttCount.Text = "™˛•Û≠”º∆"
         CheckAttCount.UseVisualStyleBackColor = True
         ' 
         ' Label3
@@ -495,7 +484,7 @@ Partial Class Form1
         Label3.Location = New Point(82, 62)
         Label3.Margin = New Padding(4, 0, 4, 0)
         Label3.Name = "Label3"
-        Label3.Size = New Size(23, 22)
+        Label3.Size = New Size(21, 20)
         Label3.TabIndex = 22
         Label3.Text = "~"
         ' 
@@ -504,41 +493,41 @@ Partial Class Form1
         ListView3.AllowColumnReorder = True
         ListView3.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView3.Columns.AddRange(New ColumnHeader() {ColumnHeader31, ColumnHeader32, ColumnHeader34, ColumnHeader33, ColumnHeader35, ColumnHeader36})
-        ListView3.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        ListView3.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView3.FullRowSelect = True
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(650, 1133)
+        ListView3.Size = New Size(612, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
         ' 
         ' ColumnHeader31
         ' 
-        ColumnHeader31.Text = "ÈÉµ‰ª∂‰∏ªÊó®"
+        ColumnHeader31.Text = "∂l•Û•D¶Æ"
         ColumnHeader31.Width = 200
         ' 
         ' ColumnHeader32
         ' 
-        ColumnHeader32.Text = "ÈÉµ‰ª∂Â§ßÂ∞è"
+        ColumnHeader32.Text = "∂l•Û§j§p"
         ColumnHeader32.TextAlign = HorizontalAlignment.Right
         ColumnHeader32.Width = 80
         ' 
         ' ColumnHeader34
         ' 
-        ColumnHeader34.Text = "Êî∂Âà∞Êó•Êúü"
+        ColumnHeader34.Text = "¶¨®Ï§È¥¡"
         ColumnHeader34.TextAlign = HorizontalAlignment.Center
         ColumnHeader34.Width = 90
         ' 
         ' ColumnHeader33
         ' 
-        ColumnHeader33.Text = "ÂØÑ‰ª∂ËÄÖ"
+        ColumnHeader33.Text = "±H•Û™Ã"
         ColumnHeader33.Width = 85
         ' 
         ' ColumnHeader35
         ' 
-        ColumnHeader35.Text = "ÈôÑ‰ª∂ÂÄãÊï∏"
+        ColumnHeader35.Text = "™˛•Û≠”º∆"
         ColumnHeader35.TextAlign = HorizontalAlignment.Center
         ColumnHeader35.Width = 65
         ' 
@@ -552,6 +541,7 @@ Partial Class Form1
         GroupBox1.Controls.Add(TextBox3)
         GroupBox1.Controls.Add(CheckAttachName)
         GroupBox1.FlatStyle = FlatStyle.Flat
+        GroupBox1.Font = New Font("Microsoft JhengHei UI", 9.5F)
         GroupBox1.Location = New Point(4, 4)
         GroupBox1.Margin = New Padding(4)
         GroupBox1.Name = "GroupBox1"
@@ -566,24 +556,25 @@ Partial Class Form1
         TextBox3.Location = New Point(8, 60)
         TextBox3.Margin = New Padding(4)
         TextBox3.Name = "TextBox3"
-        TextBox3.Size = New Size(151, 29)
+        TextBox3.Size = New Size(151, 28)
         TextBox3.TabIndex = 13
         TextBox3.Text = "pdf"
         ' 
         ' CheckAttachName
         ' 
         CheckAttachName.AutoSize = True
+        CheckAttachName.FlatStyle = FlatStyle.System
+        CheckAttachName.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         CheckAttachName.Location = New Point(8, 28)
         CheckAttachName.Margin = New Padding(4)
         CheckAttachName.Name = "CheckAttachName"
-        CheckAttachName.Size = New Size(148, 26)
+        CheckAttachName.Size = New Size(150, 25)
         CheckAttachName.TabIndex = 12
-        CheckAttachName.Text = "ÈôÑ‰ª∂ÂêçÁ®± (ÊúÄÊÖ¢)"
+        CheckAttachName.Text = "™˛•Û¶W∫Ÿ (≥Ã∫C)"
         CheckAttachName.UseVisualStyleBackColor = True
         ' 
         ' GroupBox2
         ' 
-        GroupBox2.Controls.Add(Button8)
         GroupBox2.Controls.Add(UnitMax)
         GroupBox2.Controls.Add(UnitMin)
         GroupBox2.Controls.Add(NumberMax)
@@ -591,6 +582,7 @@ Partial Class Form1
         GroupBox2.Controls.Add(CheckSize)
         GroupBox2.Controls.Add(Label1)
         GroupBox2.FlatStyle = FlatStyle.Flat
+        GroupBox2.Font = New Font("Microsoft JhengHei UI", 9.5F)
         GroupBox2.Location = New Point(179, 4)
         GroupBox2.Margin = New Padding(4)
         GroupBox2.Name = "GroupBox2"
@@ -600,36 +592,27 @@ Partial Class Form1
         GroupBox2.TabStop = False
         GroupBox2.Text = "GroupBox2"
         ' 
-        ' Button8
-        ' 
-        Button8.Enabled = False
-        Button8.Location = New Point(229, 22)
-        Button8.Name = "Button8"
-        Button8.Size = New Size(94, 29)
-        Button8.TabIndex = 32
-        Button8.Text = "Button8"
-        Button8.UseVisualStyleBackColor = True
-        Button8.Visible = False
-        ' 
         ' UnitMax
         ' 
+        UnitMax.FlatStyle = FlatStyle.System
         UnitMax.FormattingEnabled = True
         UnitMax.Items.AddRange(New Object() {"KB", "MB", "GB"})
         UnitMax.Location = New Point(244, 60)
         UnitMax.Margin = New Padding(4)
         UnitMax.Name = "UnitMax"
-        UnitMax.Size = New Size(57, 30)
+        UnitMax.Size = New Size(57, 28)
         UnitMax.TabIndex = 21
         UnitMax.Text = "MB"
         ' 
         ' UnitMin
         ' 
+        UnitMin.FlatStyle = FlatStyle.System
         UnitMin.FormattingEnabled = True
         UnitMin.Items.AddRange(New Object() {"KB", "MB", "GB"})
         UnitMin.Location = New Point(86, 60)
         UnitMin.Margin = New Padding(4)
         UnitMin.Name = "UnitMin"
-        UnitMin.Size = New Size(57, 30)
+        UnitMin.Size = New Size(57, 28)
         UnitMin.TabIndex = 19
         UnitMin.Text = "KB"
         ' 
@@ -640,7 +623,7 @@ Partial Class Form1
         NumberMax.Maximum = New Decimal(New Integer() {1000, 0, 0, 0})
         NumberMax.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
         NumberMax.Name = "NumberMax"
-        NumberMax.Size = New Size(71, 29)
+        NumberMax.Size = New Size(71, 28)
         NumberMax.TabIndex = 20
         NumberMax.TextAlign = HorizontalAlignment.Right
         NumberMax.Value = New Decimal(New Integer() {10, 0, 0, 0})
@@ -652,7 +635,7 @@ Partial Class Form1
         NumberMin.Maximum = New Decimal(New Integer() {1000, 0, 0, 0})
         NumberMin.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
         NumberMin.Name = "NumberMin"
-        NumberMin.Size = New Size(71, 29)
+        NumberMin.Size = New Size(71, 28)
         NumberMin.TabIndex = 18
         NumberMin.TextAlign = HorizontalAlignment.Right
         NumberMin.Value = New Decimal(New Integer() {200, 0, 0, 0})
@@ -662,12 +645,13 @@ Partial Class Form1
         CheckSize.AutoSize = True
         CheckSize.Checked = True
         CheckSize.CheckState = CheckState.Checked
+        CheckSize.FlatStyle = FlatStyle.System
         CheckSize.Location = New Point(8, 28)
         CheckSize.Margin = New Padding(4)
         CheckSize.Name = "CheckSize"
-        CheckSize.Size = New Size(100, 26)
+        CheckSize.Size = New Size(104, 25)
         CheckSize.TabIndex = 9
-        CheckSize.Text = "ÈôÑ‰ª∂Â§ßÂ∞è"
+        CheckSize.Text = "™˛•Û§j§p"
         CheckSize.UseVisualStyleBackColor = True
         ' 
         ' Label1
@@ -676,7 +660,7 @@ Partial Class Form1
         Label1.Location = New Point(145, 62)
         Label1.Margin = New Padding(4, 0, 4, 0)
         Label1.Name = "Label1"
-        Label1.Size = New Size(23, 22)
+        Label1.Size = New Size(21, 20)
         Label1.TabIndex = 22
         Label1.Text = "~"
         ' 
@@ -689,7 +673,7 @@ Partial Class Form1
         TabPage4.Padding = New Padding(4)
         TabPage4.Size = New Size(998, 1278)
         TabPage4.TabIndex = 3
-        TabPage4.Text = "Â∞ãÊâæÁ≥ªÂàóÈÉµ‰ª∂"
+        TabPage4.Text = "¥Mß‰®t¶C∂l•Û"
         TabPage4.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer4
@@ -715,7 +699,7 @@ Partial Class Form1
         ' TreeView4
         ' 
         TreeView4.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        TreeView4.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        TreeView4.Font = New Font("Microsoft JhengHei UI", 10F)
         TreeView4.HideSelection = False
         TreeView4.Location = New Point(0, 0)
         TreeView4.Margin = New Padding(4)
@@ -727,35 +711,35 @@ Partial Class Form1
         ' 
         ListView4.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView4.Columns.AddRange(New ColumnHeader() {ColumnHeader9, ColumnHeader10})
-        ListView4.Font = New Font("Microsoft JhengHei UI", 10.2F)
+        ListView4.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView4.FullRowSelect = True
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(650, 1133)
+        ListView4.Size = New Size(612, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
         ' 
         ' ColumnHeader9
         ' 
-        ColumnHeader9.Text = "ÈÉµ‰ª∂‰∏ªÊó®"
+        ColumnHeader9.Text = "∂l•Û•D¶Æ"
         ColumnHeader9.Width = 100
         ' 
         ' ColumnHeader10
         ' 
-        ColumnHeader10.Text = "ÈáçË§áÊï∏Èáè"
+        ColumnHeader10.Text = "≠´Ω∆º∆∂q"
         ColumnHeader10.TextAlign = HorizontalAlignment.Right
         ColumnHeader10.Width = 100
         ' 
         ' Button4
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        Button4.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(554, 4)
+        Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        Button4.Location = New Point(516, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
-        Button4.Size = New Size(96, 29)
+        Button4.Size = New Size(96, 42)
         Button4.TabIndex = 3
         Button4.Text = "Go"
         Button4.UseVisualStyleBackColor = True
@@ -770,7 +754,7 @@ Partial Class Form1
         TabPage5.Padding = New Padding(4)
         TabPage5.Size = New Size(998, 1278)
         TabPage5.TabIndex = 4
-        TabPage5.Text = "Â∞ãÊâæÈáçË§áÈÉµ‰ª∂"
+        TabPage5.Text = "¥Mß‰≠´Ω∆∂l•Û"
         TabPage5.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer5
@@ -855,10 +839,12 @@ Partial Class Form1
         ' 
         ' TabPage6
         ' 
-        TabPage6.Controls.Add(Redemption)
+        TabPage6.Controls.Add(LoadCache)
+        TabPage6.Controls.Add(SaveCache)
+        TabPage6.Controls.Add(checkIncludeAllFolders)
+        TabPage6.Controls.Add(CheckRDO)
         TabPage6.Controls.Add(buttonClearCache)
         TabPage6.Controls.Add(CheckDebug)
-        TabPage6.Controls.Add(btnDebug)
         TabPage6.Location = New Point(4, 37)
         TabPage6.Margin = New Padding(4)
         TabPage6.Name = "TabPage6"
@@ -868,52 +854,83 @@ Partial Class Form1
         TabPage6.Text = "Debug"
         TabPage6.UseVisualStyleBackColor = True
         ' 
-        ' Redemption
+        ' LoadCache
         ' 
-        Redemption.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        Redemption.Font = New Font("Microsoft JhengHei UI", 10.2F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Redemption.Location = New Point(853, 99)
-        Redemption.Name = "Redemption"
-        Redemption.Size = New Size(129, 63)
-        Redemption.TabIndex = 7
-        Redemption.Text = "Load Redemption"
-        Redemption.UseVisualStyleBackColor = True
+        LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        LoadCache.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        LoadCache.Location = New Point(851, 193)
+        LoadCache.Name = "LoadCache"
+        LoadCache.Size = New Size(129, 63)
+        LoadCache.TabIndex = 12
+        LoadCache.Text = "Load Cache from Disk"
+        LoadCache.UseVisualStyleBackColor = True
+        ' 
+        ' SaveCache
+        ' 
+        SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SaveCache.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        SaveCache.Location = New Point(851, 107)
+        SaveCache.Name = "SaveCache"
+        SaveCache.Size = New Size(129, 63)
+        SaveCache.TabIndex = 11
+        SaveCache.Text = "Save Cache to Disk"
+        SaveCache.UseVisualStyleBackColor = True
+        ' 
+        ' checkIncludeAllFolders
+        ' 
+        checkIncludeAllFolders.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        checkIncludeAllFolders.Appearance = Appearance.Button
+        checkIncludeAllFolders.FlatStyle = FlatStyle.System
+        checkIncludeAllFolders.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        checkIncludeAllFolders.Location = New Point(706, 107)
+        checkIncludeAllFolders.Margin = New Padding(4)
+        checkIncludeAllFolders.Name = "checkIncludeAllFolders"
+        checkIncludeAllFolders.Size = New Size(129, 63)
+        checkIncludeAllFolders.TabIndex = 10
+        checkIncludeAllFolders.Text = "Include All Folders"
+        checkIncludeAllFolders.TextAlign = ContentAlignment.MiddleCenter
+        checkIncludeAllFolders.UseVisualStyleBackColor = True
+        ' 
+        ' CheckRDO
+        ' 
+        CheckRDO.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        CheckRDO.Appearance = Appearance.Button
+        CheckRDO.FlatStyle = FlatStyle.System
+        CheckRDO.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        CheckRDO.Location = New Point(706, 193)
+        CheckRDO.Margin = New Padding(4)
+        CheckRDO.Name = "CheckRDO"
+        CheckRDO.Size = New Size(129, 63)
+        CheckRDO.TabIndex = 9
+        CheckRDO.Text = "Load Redemption"
+        CheckRDO.TextAlign = ContentAlignment.MiddleCenter
+        CheckRDO.UseVisualStyleBackColor = True
         ' 
         ' buttonClearCache
         ' 
         buttonClearCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        buttonClearCache.Font = New Font("Microsoft JhengHei UI", 10.2F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        buttonClearCache.Location = New Point(853, 20)
+        buttonClearCache.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        buttonClearCache.Location = New Point(851, 20)
         buttonClearCache.Name = "buttonClearCache"
         buttonClearCache.Size = New Size(129, 63)
         buttonClearCache.TabIndex = 6
-        buttonClearCache.Text = "Clear Caches"
+        buttonClearCache.Text = "Clear Caches Memory"
         buttonClearCache.UseVisualStyleBackColor = True
         ' 
         ' CheckDebug
         ' 
         CheckDebug.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        CheckDebug.AutoSize = True
+        CheckDebug.Appearance = Appearance.Button
         CheckDebug.FlatStyle = FlatStyle.System
-        CheckDebug.Location = New Point(820, 262)
+        CheckDebug.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        CheckDebug.Location = New Point(706, 20)
         CheckDebug.Margin = New Padding(4)
         CheckDebug.Name = "CheckDebug"
-        CheckDebug.Size = New Size(162, 27)
+        CheckDebug.Size = New Size(129, 63)
         CheckDebug.TabIndex = 5
-        CheckDebug.Text = "DebugWindow"
+        CheckDebug.Text = "Debug Window"
+        CheckDebug.TextAlign = ContentAlignment.MiddleCenter
         CheckDebug.UseVisualStyleBackColor = True
-        ' 
-        ' btnDebug
-        ' 
-        btnDebug.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        btnDebug.Font = New Font("Microsoft JhengHei UI", 10.2F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        btnDebug.Location = New Point(853, 178)
-        btnDebug.Margin = New Padding(4)
-        btnDebug.Name = "btnDebug"
-        btnDebug.Size = New Size(129, 63)
-        btnDebug.TabIndex = 4
-        btnDebug.Text = "Debug Button"
-        btnDebug.UseVisualStyleBackColor = True
         ' 
         ' ToolStripStatusLabel1
         ' 
@@ -922,34 +939,25 @@ Partial Class Form1
         ToolStripStatusLabel1.Size = New Size(6, 24)
         ToolStripStatusLabel1.Text = "   "
         ' 
-        ' lblStatus1
+        ' ProgressBar1
         ' 
-        lblStatus1.AutoSize = False
-        lblStatus1.DisplayStyle = ToolStripItemDisplayStyle.Text
-        lblStatus1.ForeColor = Color.DimGray
-        lblStatus1.Name = "lblStatus1"
-        lblStatus1.Size = New Size(300, 24)
-        lblStatus1.Text = "lblStatus1"
-        lblStatus1.TextAlign = ContentAlignment.MiddleLeft
+        ProgressBar1.AutoSize = False
+        ProgressBar1.DisplayStyle = ToolStripItemDisplayStyle.Text
+        ProgressBar1.ForeColor = Color.DimGray
+        ProgressBar1.Name = "ProgressBar1"
+        ProgressBar1.Size = New Size(300, 24)
+        ProgressBar1.Text = "ProgressBar1"
+        ProgressBar1.TextAlign = ContentAlignment.MiddleLeft
         ' 
-        ' lblStatus2
+        ' ProgressBar2
         ' 
-        lblStatus2.AutoSize = False
-        lblStatus2.DisplayStyle = ToolStripItemDisplayStyle.Text
-        lblStatus2.ForeColor = Color.DimGray
-        lblStatus2.Name = "lblStatus2"
-        lblStatus2.Size = New Size(320, 24)
-        lblStatus2.Text = "lblStatus2"
-        lblStatus2.TextAlign = ContentAlignment.MiddleLeft
-        ' 
-        ' lblStatus3
-        ' 
-        lblStatus3.AutoSize = False
-        lblStatus3.ForeColor = Color.DimGray
-        lblStatus3.Name = "lblStatus3"
-        lblStatus3.Size = New Size(200, 24)
-        lblStatus3.Text = "lblStatus3"
-        lblStatus3.Visible = False
+        ProgressBar2.AutoSize = False
+        ProgressBar2.DisplayStyle = ToolStripItemDisplayStyle.Text
+        ProgressBar2.ForeColor = Color.DimGray
+        ProgressBar2.Name = "ProgressBar2"
+        ProgressBar2.Size = New Size(480, 24)
+        ProgressBar2.Text = "ProgressBar2"
+        ProgressBar2.TextAlign = ContentAlignment.MiddleLeft
         ' 
         ' ToolStripProgressBar1
         ' 
@@ -959,7 +967,7 @@ Partial Class Form1
         ' StatusStrip1
         ' 
         StatusStrip1.ImageScalingSize = New Size(20, 20)
-        StatusStrip1.Items.AddRange(New ToolStripItem() {ToolStripStatusLabel1, lblStatus1, lblStatus2, lblStatus3, ToolStripProgressBar1})
+        StatusStrip1.Items.AddRange(New ToolStripItem() {ToolStripStatusLabel1, ProgressBar1, ProgressBar2, ToolStripProgressBar1})
         StatusStrip1.Location = New Point(0, 1289)
         StatusStrip1.Name = "StatusStrip1"
         StatusStrip1.Padding = New Padding(1, 0, 18, 0)
@@ -975,6 +983,7 @@ Partial Class Form1
         Controls.Add(StatusStrip1)
         Controls.Add(TabControl1)
         DoubleBuffered = True
+        Icon = CType(resources.GetObject("$this.Icon"), Icon)
         Margin = New Padding(4)
         Name = "Form1"
         StartPosition = FormStartPosition.CenterScreen
@@ -986,7 +995,6 @@ Partial Class Form1
         CType(SplitContainer1, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer1.ResumeLayout(False)
         TabPage2.ResumeLayout(False)
-        SplitContainer2.Panel1.ResumeLayout(False)
         SplitContainer2.Panel2.ResumeLayout(False)
         SplitContainer2.Panel2.PerformLayout()
         CType(SplitContainer2, ComponentModel.ISupportInitialize).EndInit()
@@ -1021,79 +1029,52 @@ Partial Class Form1
         CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer5.ResumeLayout(False)
         TabPage6.ResumeLayout(False)
-        TabPage6.PerformLayout()
         StatusStrip1.ResumeLayout(False)
         StatusStrip1.PerformLayout()
         ResumeLayout(False)
         PerformLayout()
+
     End Sub
 
     Friend WithEvents TabControl1 As TabControl
-    Friend WithEvents TabPage1 As TabPage
-    Friend WithEvents ListView1 As ListView
-    Friend WithEvents ColumnHeader11 As ColumnHeader
-    Friend WithEvents ColumnHeader12 As ColumnHeader
-    Friend WithEvents ColumnHeader13 As ColumnHeader
-    Friend WithEvents ColumnHeader14 As ColumnHeader
-    Friend WithEvents TreeView1 As TreeView
-    Friend WithEvents TabPage2 As TabPage
-    Friend WithEvents TreeView2 As TreeView
-    Friend WithEvents Chart2 As DataVisualization.Charting.Chart
-    Friend WithEvents ListView2 As ListView
-    Friend WithEvents ColumnHeader21 As ColumnHeader
-    Friend WithEvents ColumnHeader22 As ColumnHeader
-    Friend WithEvents TabPage3 As TabPage
-    Friend WithEvents TabPage4 As TabPage
-    Friend WithEvents TreeView3 As TreeView
-    Friend WithEvents TreeView4 As TreeView
-    Friend WithEvents ListView4 As ListView
-    Friend WithEvents ColumnHeader9 As ColumnHeader
-    Friend WithEvents ColumnHeader10 As ColumnHeader
-    Friend WithEvents Button4 As Button
-    Friend WithEvents CheckSize As CheckBox
-    Friend WithEvents TabPage5 As TabPage
-    Friend WithEvents Button5 As Button
-    Friend WithEvents TextBox2 As TextBox
-    Friend WithEvents TextBox1 As TextBox
-    Friend WithEvents Label2 As Label
-    Friend WithEvents GroupBox1 As GroupBox
-    Friend WithEvents TextBox3 As TextBox
-    Friend WithEvents CheckAttachName As CheckBox
-    Friend WithEvents GroupBox2 As GroupBox
-    Friend WithEvents Label1 As Label
-    Friend WithEvents UnitMax As ComboBox
-    Friend WithEvents UnitMin As ComboBox
-    Friend WithEvents NumberMax As NumericUpDown
-    Friend WithEvents NumberMin As NumericUpDown
-    Friend WithEvents CheckSub2 As CheckBox
-    Friend WithEvents ColumnHeader15 As ColumnHeader
     Friend WithEvents SplitContainer1 As SplitContainer
     Friend WithEvents SplitContainer2 As SplitContainer
     Friend WithEvents SplitContainer3 As SplitContainer
     Friend WithEvents SplitContainer4 As SplitContainer
     Friend WithEvents SplitContainer5 As SplitContainer
-    Friend WithEvents TreeView5 As TreeView
-    Friend WithEvents lstEmails As ListBox
-    Friend WithEvents TabPage6 As TabPage
     Friend WithEvents ToolStripStatusLabel1 As ToolStripStatusLabel
-    Friend WithEvents lblStatus1 As ToolStripStatusLabel
-    Friend WithEvents lblStatus2 As ToolStripStatusLabel
-    Friend WithEvents lblStatus3 As ToolStripStatusLabel
+    Friend WithEvents ProgressBar1 As ToolStripStatusLabel
+    Friend WithEvents ProgressBar2 As ToolStripStatusLabel
     Friend WithEvents ToolStripProgressBar1 As ToolStripStatusLabel
     Friend WithEvents StatusStrip1 As StatusStrip
-    Friend WithEvents tmrPreCache As Timer
-    Friend WithEvents BackgroundWorker1 As System.ComponentModel.BackgroundWorker
-    Friend WithEvents Timer2 As Timer
-    Friend WithEvents BackgroundWorker2 As System.ComponentModel.BackgroundWorker
-    Friend WithEvents Timer3 As Timer
-    Friend WithEvents BackgroundWorker3 As System.ComponentModel.BackgroundWorker
-    Friend WithEvents btnDebug As Button
-    Friend WithEvents CheckDebug As CheckBox
-    Friend WithEvents GroupBox3 As GroupBox
-    Friend WithEvents CountMax As NumericUpDown
-    Friend WithEvents CountMin As NumericUpDown
-    Friend WithEvents CheckAttCount As CheckBox
-    Friend WithEvents Label3 As Label
+
+    'Friend WithEvents tmrPreCache As Timer
+    'Friend WithEvents Timer2 As Timer
+    'Friend WithEvents Timer3 As Timer
+    'Friend WithEvents BackgroundWorker1 As System.ComponentModel.BackgroundWorker
+    'Friend WithEvents BackgroundWorker2 As System.ComponentModel.BackgroundWorker
+    'Friend WithEvents BackgroundWorker3 As System.ComponentModel.BackgroundWorker
+
+    Friend WithEvents TabPage1 As TabPage
+    Friend WithEvents TreeView1 As TreeView
+    Friend WithEvents ListView1 As ListView
+    Friend WithEvents ColumnHeader11 As ColumnHeader
+    Friend WithEvents ColumnHeader12 As ColumnHeader
+    Friend WithEvents ColumnHeader13 As ColumnHeader
+    Friend WithEvents ColumnHeader14 As ColumnHeader
+
+    Friend WithEvents TabPage2 As TabPage
+    Friend WithEvents Chart2 As DataVisualization.Charting.Chart
+    Friend WithEvents ListView2 As ListView
+    Friend WithEvents ColumnHeader21 As ColumnHeader
+    Friend WithEvents ColumnHeader22 As ColumnHeader
+    Friend WithEvents ColumnHeader23 As ColumnHeader
+    Friend WithEvents CheckSubFolder2 As CheckBox
+    Friend WithEvents TextBox2 As TextBox
+    Friend WithEvents Label2 As Label
+
+    Friend WithEvents TabPage3 As TabPage
+    Friend WithEvents TreeView3 As TreeView
     Friend WithEvents ListView3 As ListView
     Friend WithEvents ColumnHeader31 As ColumnHeader
     Friend WithEvents ColumnHeader32 As ColumnHeader
@@ -1101,11 +1082,45 @@ Partial Class Form1
     Friend WithEvents ColumnHeader33 As ColumnHeader
     Friend WithEvents ColumnHeader35 As ColumnHeader
     Friend WithEvents ColumnHeader36 As ColumnHeader
-    Friend WithEvents Button8 As Button
-    Friend WithEvents buttonClearCache As Button
+    Friend WithEvents GroupBox1 As GroupBox
+    Friend WithEvents GroupBox2 As GroupBox
+    Friend WithEvents GroupBox3 As GroupBox
+    Friend WithEvents NumberMax As NumericUpDown
+    Friend WithEvents NumberMin As NumericUpDown
+    Friend WithEvents UnitMax As ComboBox
+    Friend WithEvents UnitMin As ComboBox
+    Friend WithEvents CountMax As NumericUpDown
+    Friend WithEvents CountMin As NumericUpDown
+    Friend WithEvents CheckAttCount As CheckBox
+    Friend WithEvents CheckAttachName As CheckBox
     Friend WithEvents CheckSubFolder3 As CheckBox
-    Friend WithEvents Button3_Stop As Button
+    Friend WithEvents Label3 As Label
     Friend WithEvents Button3 As Button
-    Friend WithEvents Redemption As Button
+    Friend WithEvents Button3_Stop As Button
+
+    Friend WithEvents TabPage4 As TabPage
+    Friend WithEvents TreeView4 As TreeView
+    Friend WithEvents ListView4 As ListView
+    Friend WithEvents ColumnHeader9 As ColumnHeader
+    Friend WithEvents ColumnHeader10 As ColumnHeader
+    Friend WithEvents Button4 As Button
+    Friend WithEvents CheckSize As CheckBox
+
+    Friend WithEvents TabPage5 As TabPage
+    Friend WithEvents TreeView5 As TreeView
+    Friend WithEvents Button5 As Button
+    Friend WithEvents TextBox1 As TextBox
+    Friend WithEvents TextBox3 As TextBox
+    Friend WithEvents Label1 As Label
+    Friend WithEvents ColumnHeader15 As ColumnHeader
+    Friend WithEvents lstEmails As ListBox
+
+    Friend WithEvents TabPage6 As TabPage
+    Friend WithEvents checkIncludeAllFolders As CheckBox
+    Friend WithEvents CheckDebug As CheckBox
+    Friend WithEvents CheckRDO As CheckBox
+    Friend WithEvents buttonClearCache As Button
+    Friend WithEvents LoadCache As Button
+    Friend WithEvents SaveCache As Button
 
 End Class

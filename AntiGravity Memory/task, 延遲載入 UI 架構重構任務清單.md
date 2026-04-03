@@ -1,0 +1,23 @@
+# 延遲載入 UI 架構重構任務清單
+
+- [x] 1. 全域變數更新
+  - [x] 將 `_isFirstInit` 替換為 `_isTabInitialized(5) As Boolean` 陣列。
+- [x] 2. 建立共用 UI 初始化副程式
+  - [x] `InitListViewAppearance(lv As ListView)`
+  - [x] `InitTreeViewAppearance(tv As TreeView)`
+  - [x] `InitSplitContainerBehavior(scnr As SplitContainer)`
+- [x] 3. 重構 `InitLookAndFeel()`
+  - [x] 保留 Form 的全域設定。
+  - [x] 只呼叫 `InitTab1UI()`。
+  - [x] 標記 `_isTabInitialized(0) = True` 和 `_isTabInitialized(1) = True`。
+- [x] 4. 拆解與重構分頁專屬初始化 (`InitTabXUI`)
+  - [x] `InitTab1UI()`: 設定 ListView1 欄位、TreeView1 等。
+  - [x] `InitTab2UI()`: ListView2, SimTree2, Chart2 排版與屬性。
+  - [x] `InitTab3UI()`: ListView3, TreeView3, 按鈕面板掛載與排版。
+  - [x] `InitTab4UI()`: ListView4, TreeView4, 按鈕面板。
+  - [x] `InitTab5UI()`: ListView5, TreeView5, 按鈕面板。
+- [x] 5. 改寫 `TabControl1_SelectedIndexChanged`
+  - [x] 依據 Index 判斷如果 `_isTabInitialized` 為 False 則呼叫對應的 `InitTabXUI()`。
+  - [x] 加入 `SuspendLayout()` 與 `ResumeLayout()` 機制。
+  - [x] 確認 UI 初始化後，再進行 `LoadStoreToTreeView` (若 `Nodes.Count = 0`)。
+- [x] 6. 確保沒有遺漏任何原生事件綁定。

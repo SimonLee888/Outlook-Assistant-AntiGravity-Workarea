@@ -1,7 +1,6 @@
-<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
+﻿<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
 Partial Class DebugForm
     Inherits System.Windows.Forms.Form
-
     'Form 覆寫 Dispose 以清除元件清單。
     <System.Diagnostics.DebuggerNonUserCode()> _
     Protected Overrides Sub Dispose(ByVal disposing As Boolean)
@@ -12,11 +11,10 @@ Partial Class DebugForm
         Finally
             MyBase.Dispose(disposing)
         End Try
-    End Sub
 
+    End Sub
     '為 Windows Form 設計工具的必要項
     Private components As System.ComponentModel.IContainer
-
     '注意: 以下為 Windows Form 設計工具所需的程序
     '可以使用 Windows Form 設計工具進行修改。
     '請勿使用程式碼編輯器進行修改。
@@ -29,12 +27,12 @@ Partial Class DebugForm
         ColumnHeader3 = New ColumnHeader()
         pnlSearch = New Panel()
         txtDebug = New TextBox()
-        chkSearchLogic = New CheckBox()
+        checkAndOr = New CheckBox()
         pnlSearch.SuspendLayout()
         SuspendLayout()
-        ' 
+        '
         ' lvwDebug
-        ' 
+        '
         lvwDebug.AutoArrange = False
         lvwDebug.Columns.AddRange(New ColumnHeader() {ColumnHeader1, ColumnHeader2, ColumnHeader3})
         resources.ApplyResources(lvwDebug, "lvwDebug")
@@ -46,39 +44,41 @@ Partial Class DebugForm
         lvwDebug.TabStop = False
         lvwDebug.UseCompatibleStateImageBehavior = False
         lvwDebug.View = View.Details
-        ' 
+        '
         ' ColumnHeader1
-        ' 
+        '
         resources.ApplyResources(ColumnHeader1, "ColumnHeader1")
-        ' 
+        '
         ' ColumnHeader2
-        ' 
+        '
         resources.ApplyResources(ColumnHeader2, "ColumnHeader2")
-        ' 
+        '
         ' ColumnHeader3
-        ' 
+        '
         resources.ApplyResources(ColumnHeader3, "ColumnHeader3")
-        ' 
+        '
         ' pnlSearch
-        ' 
+        '
         pnlSearch.Controls.Add(txtDebug)
-        pnlSearch.Controls.Add(chkSearchLogic)
+        pnlSearch.Controls.Add(checkAndOr)
         resources.ApplyResources(pnlSearch, "pnlSearch")
         pnlSearch.Name = "pnlSearch"
-        ' 
+        '
         ' txtDebug
-        ' 
+        '
         resources.ApplyResources(txtDebug, "txtDebug")
         txtDebug.Name = "txtDebug"
-        ' 
-        ' chkSearchLogic
-        ' 
-        resources.ApplyResources(chkSearchLogic, "chkSearchLogic")
-        chkSearchLogic.Name = "chkSearchLogic"
-        chkSearchLogic.UseVisualStyleBackColor = True
-        ' 
+        '
+        ' checkAndOr
+        '
+        resources.ApplyResources(checkAndOr, "checkAndOr")
+        checkAndOr.Checked = True
+        checkAndOr.CheckState = CheckState.Checked
+        checkAndOr.Name = "checkAndOr"
+        checkAndOr.UseVisualStyleBackColor = True
+        '
         ' DebugForm
-        ' 
+        '
         resources.ApplyResources(Me, "$this")
         AutoScaleMode = AutoScaleMode.Font
         AutoValidate = AutoValidate.EnableAllowFocusChange
@@ -89,13 +89,13 @@ Partial Class DebugForm
         pnlSearch.ResumeLayout(False)
         pnlSearch.PerformLayout()
         ResumeLayout(False)
-    End Sub
 
+    End Sub
     Friend WithEvents lvwDebug As ListView
     Friend WithEvents ColumnHeader1 As ColumnHeader
     Friend WithEvents ColumnHeader2 As ColumnHeader
     Friend WithEvents ColumnHeader3 As ColumnHeader
     Friend WithEvents txtDebug As TextBox
     Friend WithEvents pnlSearch As Panel
-    Friend WithEvents chkSearchLogic As CheckBox
+    Friend WithEvents checkAndOr As CheckBox
 End Class

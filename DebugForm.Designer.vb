@@ -1,4 +1,4 @@
-﻿<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
+<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
 Partial Class DebugForm
     Inherits System.Windows.Forms.Form
 
@@ -27,6 +27,10 @@ Partial Class DebugForm
         ColumnHeader1 = New ColumnHeader()
         ColumnHeader2 = New ColumnHeader()
         ColumnHeader3 = New ColumnHeader()
+        pnlSearch = New Panel()
+        txtDebug = New TextBox()
+        chkSearchLogic = New CheckBox()
+        pnlSearch.SuspendLayout()
         SuspendLayout()
         ' 
         ' lvwDebug
@@ -55,14 +59,35 @@ Partial Class DebugForm
         ' 
         resources.ApplyResources(ColumnHeader3, "ColumnHeader3")
         ' 
+        ' pnlSearch
+        ' 
+        pnlSearch.Controls.Add(txtDebug)
+        pnlSearch.Controls.Add(chkSearchLogic)
+        resources.ApplyResources(pnlSearch, "pnlSearch")
+        pnlSearch.Name = "pnlSearch"
+        ' 
+        ' txtDebug
+        ' 
+        resources.ApplyResources(txtDebug, "txtDebug")
+        txtDebug.Name = "txtDebug"
+        ' 
+        ' chkSearchLogic
+        ' 
+        resources.ApplyResources(chkSearchLogic, "chkSearchLogic")
+        chkSearchLogic.Name = "chkSearchLogic"
+        chkSearchLogic.UseVisualStyleBackColor = True
+        ' 
         ' DebugForm
         ' 
         resources.ApplyResources(Me, "$this")
         AutoScaleMode = AutoScaleMode.Font
         AutoValidate = AutoValidate.EnableAllowFocusChange
         Controls.Add(lvwDebug)
+        Controls.Add(pnlSearch)
         Name = "DebugForm"
         SizeGripStyle = SizeGripStyle.Show
+        pnlSearch.ResumeLayout(False)
+        pnlSearch.PerformLayout()
         ResumeLayout(False)
     End Sub
 
@@ -70,4 +95,7 @@ Partial Class DebugForm
     Friend WithEvents ColumnHeader1 As ColumnHeader
     Friend WithEvents ColumnHeader2 As ColumnHeader
     Friend WithEvents ColumnHeader3 As ColumnHeader
+    Friend WithEvents txtDebug As TextBox
+    Friend WithEvents pnlSearch As Panel
+    Friend WithEvents chkSearchLogic As CheckBox
 End Class

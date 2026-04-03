@@ -1,3 +1,5 @@
+Imports System.ComponentModel
+
 Public Class SimTree
 
     ' ==============================================================
@@ -52,8 +54,18 @@ Public Class SimTree
             Return _selectedNodes
         End Get
     End Property
+    <Browsable(False)>
+    <DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)>
     Public Shadows Property SelectedNode As TreeNode
         ' SelectedNode：Shadows 原生屬性
+        ' [Fix by AntiGravity, 2026/03/26]
+        ' 為什麼顯示紅色？
+        '   因為 Shadows 了基類的屬性，WinForms Designer 會試圖序列化它。
+        '   但 TreeNode 類型無法直接序列化，導致設計工具報錯（未設定其屬性內容序列化）。
+        ' 解決方法：
+        '   添加 <Browsable(False)> 隱藏於屬性視窗，
+        '   添加 <DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)> 告訴設計工具不要序列化此屬性。
+        '
         '   Get: 單選時回傳選定節點；多選時回傳 _lastClickedNode（最後被點選的那個）
         '        讓 Form1 的 EnsureVisible / ExpandTreeToDefaultInbox 等程式碼可以繼續正常使用
         '   Set: 清除所有選取，只選定指定節點（等同 SelectSingleNode，不觸發 AfterSelect）

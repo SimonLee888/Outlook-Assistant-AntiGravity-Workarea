@@ -161,7 +161,7 @@
     <value>4, 4, 4, 4</value>
   </data>
   <data name="lvwDebug.Size" type="System.Drawing.Size, System.Drawing">
-    <value>862, 521</value>
+    <value>862, 632</value>
   </data>
   <data name="lvwDebug.TabIndex" type="System.Int32, mscorlib">
     <value>0</value>
@@ -178,6 +178,90 @@
   <data name="&gt;&gt;lvwDebug.ZOrder" xml:space="preserve">
     <value>0</value>
   </data>
+  <data name="txtDebug.Dock" type="System.Windows.Forms.DockStyle, System.Windows.Forms">
+    <value>Fill</value>
+  </data>
+  <data name="txtDebug.Location" type="System.Drawing.Point, System.Drawing">
+    <value>0, 0</value>
+  </data>
+  <data name="txtDebug.Size" type="System.Drawing.Size, System.Drawing">
+    <value>802, 27</value>
+  </data>
+  <data name="txtDebug.TabIndex" type="System.Int32, mscorlib">
+    <value>0</value>
+  </data>
+  <data name="&gt;&gt;txtDebug.Name" xml:space="preserve">
+    <value>txtDebug</value>
+  </data>
+  <data name="&gt;&gt;txtDebug.Type" xml:space="preserve">
+    <value>System.Windows.Forms.TextBox, System.Windows.Forms, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="&gt;&gt;txtDebug.Parent" xml:space="preserve">
+    <value>pnlSearch</value>
+  </data>
+  <data name="&gt;&gt;txtDebug.ZOrder" xml:space="preserve">
+    <value>0</value>
+  </data>
+  <data name="chkSearchLogic.Appearance" type="System.Windows.Forms.Appearance, System.Windows.Forms">
+    <value>Button</value>
+  </data>
+  <data name="chkSearchLogic.Dock" type="System.Windows.Forms.DockStyle, System.Windows.Forms">
+    <value>Right</value>
+  </data>
+  <data name="chkSearchLogic.FlatStyle" type="System.Windows.Forms.FlatStyle, System.Windows.Forms">
+    <value>Flat</value>
+  </data>
+  <data name="chkSearchLogic.Location" type="System.Drawing.Point, System.Drawing">
+    <value>802, 0</value>
+  </data>
+  <data name="chkSearchLogic.Size" type="System.Drawing.Size, System.Drawing">
+    <value>60, 25</value>
+  </data>
+  <data name="chkSearchLogic.TabIndex" type="System.Int32, mscorlib">
+    <value>1</value>
+  </data>
+  <data name="chkSearchLogic.Text" xml:space="preserve">
+    <value>AND</value>
+  </data>
+  <data name="chkSearchLogic.TextAlign" type="System.Drawing.ContentAlignment, System.Drawing">
+    <value>MiddleCenter</value>
+  </data>
+  <data name="&gt;&gt;chkSearchLogic.Name" xml:space="preserve">
+    <value>chkSearchLogic</value>
+  </data>
+  <data name="&gt;&gt;chkSearchLogic.Type" xml:space="preserve">
+    <value>System.Windows.Forms.CheckBox, System.Windows.Forms, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="&gt;&gt;chkSearchLogic.Parent" xml:space="preserve">
+    <value>pnlSearch</value>
+  </data>
+  <data name="&gt;&gt;chkSearchLogic.ZOrder" xml:space="preserve">
+    <value>1</value>
+  </data>
+  <data name="pnlSearch.Dock" type="System.Windows.Forms.DockStyle, System.Windows.Forms">
+    <value>Bottom</value>
+  </data>
+  <data name="pnlSearch.Location" type="System.Drawing.Point, System.Drawing">
+    <value>0, 632</value>
+  </data>
+  <data name="pnlSearch.Size" type="System.Drawing.Size, System.Drawing">
+    <value>862, 25</value>
+  </data>
+  <data name="pnlSearch.TabIndex" type="System.Int32, mscorlib">
+    <value>2</value>
+  </data>
+  <data name="&gt;&gt;pnlSearch.Name" xml:space="preserve">
+    <value>pnlSearch</value>
+  </data>
+  <data name="&gt;&gt;pnlSearch.Type" xml:space="preserve">
+    <value>System.Windows.Forms.Panel, System.Windows.Forms, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="&gt;&gt;pnlSearch.Parent" xml:space="preserve">
+    <value>$this</value>
+  </data>
+  <data name="&gt;&gt;pnlSearch.ZOrder" xml:space="preserve">
+    <value>1</value>
+  </data>
   <metadata name="$this.Localizable" type="System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089">
     <value>True</value>
   </metadata>
@@ -185,7 +269,7 @@
     <value>9, 19</value>
   </data>
   <data name="$this.ClientSize" type="System.Drawing.Size, System.Drawing">
-    <value>862, 521</value>
+    <value>862, 657</value>
   </data>
   <data name="$this.Margin" type="System.Windows.Forms.Padding, System.Windows.Forms">
     <value>4, 4, 4, 4</value>

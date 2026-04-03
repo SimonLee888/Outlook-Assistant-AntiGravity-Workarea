@@ -1,0 +1,25 @@
+# Fallback Chain Refactoring Task
+
+- [ ] Refactor `GetSubFolderList`
+    - [ ] Add `Stopwatch` performance timing
+    - [ ] Update debug messages
+- [ ] Refactor `GetMailCount`
+    - [ ] Unify fallback chain comments (⓪, ①, ②, ...)
+    - [ ] Add explicit success/fail debug messages for each layer
+- [ ] Refactor `GetMailCountAll`
+    - [ ] Unify fallback chain comments
+    - [ ] Update debug messages
+- [ ] Refactor `GetFolderCount`
+    - [ ] Unify fallback chain comments
+    - [ ] Update debug messages
+- [ ] Refactor `GetFolderCountAll`
+    - [ ] Rewrite ⓪ with `ConcurrentQueue` + `Parallel.ForEach` (RDO BFS)
+    - [ ] Unify comments and debug messages
+- [ ] Refactor `GetFolderSize`
+    - [ ] Test `rdoFolder.Size` and `rdoFolder.FolderSize` in debug
+    - [ ] Implement RDO `GetTable` + `GetArray` layer
+    - [ ] Unify comments and debug messages
+- [ ] Refactor `GetFolderSizeAll`
+    - [ ] Rewrite ① with true `Parallel.ForEach` for size summation
+    - [ ] Unify comments and debug messages
+- [ ] Final verification and performance review

@@ -1,0 +1,41 @@
+﻿
+    Private Function GetSubFolderList(rootF
+older As Outlook.Folder, includeSubFolders 
+As Boolean) As List(Of Outlook.Folder)
+    Private Function GetSubFolderList_RDO(r
+ootFolder As Redemption.RDOFolder, includeS
+ubFolders As Boolean) As List(Of Redemption
+.RDOFolder)
+    Private Function GetFolderSizeOld_Async
+(folder As Outlook.Folder) As Long
+    Private Function GetMailCount(folder As
+ Outlook.Folder) As Integer
+    Private Async Function GetMailCountAll(
+rootFolder As Outlook.Folder, Optional onPr
+ogress As Action(Of Integer, Integer) = Not
+hing) As Task(Of Long)
+    Private Function GetFolderCount(folder 
+As Outlook.Folder) As Integer
+    Private Async Function GetFolderCountAl
+l(rootFolder As Outlook.Folder) As Task(Of 
+Integer)
+    Private Async Function GetFolderSize(fo
+lder As Outlook.Folder) As Task(Of Long)
+    Private Async Function GetFolderSizeAll
+(rootFolder As Outlook.Folder) As Task(Of L
+ong)
+    Private Function GetMailCountRecursive(
+folder As Outlook.Folder) As Integer
+    Private Async Function GetMailCountAll_
+1(rootFolder As Outlook.Folder, Optional on
+Progress As Action(Of Integer, Integer) = N
+othing) As Task(Of Long)
+    Private Async Function GetMailCountAll_
+2(rootFolder As Outlook.Folder, Optional on
+Progress As Action(Of Integer, Integer) = N
+othing) As Task(Of Long)
+    Private Async Function GetFolderSizeLeg
+acy(folder As Outlook.Folder) As Task(Of Lo
+ng)
+
+

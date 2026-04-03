@@ -214,7 +214,7 @@ Partial Class Form1
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(652, 1244)
+        ListView1.Size = New Size(650, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -287,10 +287,10 @@ Partial Class Form1
         TreeView2.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         TreeView2.Font = New Font("Microsoft JhengHei UI", 10.2F)
         TreeView2.HideSelection = False
-        TreeView2.Location = New Point(0, 0)
+        TreeView2.Location = New Point(0, 400)
         TreeView2.Margin = New Padding(4)
         TreeView2.Name = "TreeView2"
-        TreeView2.Size = New Size(300, 1244)
+        TreeView2.Size = New Size(300, 844)
         TreeView2.TabIndex = 1
         ' 
         ' CheckSub2
@@ -313,7 +313,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(652, 395)
+        ListView2.Size = New Size(650, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -344,7 +344,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(621, 857)
+        Chart2.Size = New Size(619, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -401,7 +401,7 @@ Partial Class Form1
         ' 
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
-        CheckSubFolder3.Location = New Point(554, 56)
+        CheckSubFolder3.Location = New Point(552, 56)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(117, 26)
@@ -414,7 +414,7 @@ Partial Class Form1
         Button3_Stop.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3_Stop.FlatStyle = FlatStyle.System
         Button3_Stop.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3_Stop.Location = New Point(575, 90)
+        Button3_Stop.Location = New Point(573, 90)
         Button3_Stop.Margin = New Padding(4)
         Button3_Stop.Name = "Button3_Stop"
         Button3_Stop.Size = New Size(96, 29)
@@ -428,7 +428,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(575, 19)
+        Button3.Location = New Point(573, 19)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(96, 29)
@@ -509,7 +509,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(652, 1133)
+        ListView3.Size = New Size(650, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -732,7 +732,7 @@ Partial Class Form1
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(652, 1133)
+        ListView4.Size = New Size(650, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
@@ -752,7 +752,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(556, 4)
+        Button4.Location = New Point(554, 4)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 29)
@@ -809,7 +809,6 @@ Partial Class Form1
         ' lstEmails
         ' 
         lstEmails.FormattingEnabled = True
-        lstEmails.ItemHeight = 22
         lstEmails.Location = New Point(4, 275)
         lstEmails.Margin = New Padding(4)
         lstEmails.Name = "lstEmails"
@@ -895,10 +894,11 @@ Partial Class Form1
         ' 
         CheckDebug.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckDebug.AutoSize = True
-        CheckDebug.Location = New Point(829, 262)
+        CheckDebug.FlatStyle = FlatStyle.System
+        CheckDebug.Location = New Point(820, 262)
         CheckDebug.Margin = New Padding(4)
         CheckDebug.Name = "CheckDebug"
-        CheckDebug.Size = New Size(153, 26)
+        CheckDebug.Size = New Size(162, 27)
         CheckDebug.TabIndex = 5
         CheckDebug.Text = "DebugWindow"
         CheckDebug.UseVisualStyleBackColor = True

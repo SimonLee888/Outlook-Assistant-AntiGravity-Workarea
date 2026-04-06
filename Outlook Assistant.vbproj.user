@@ -12,15 +12,12 @@
     </Compile>
     <Compile Update="Form1_ComL3.vb">
       <DependentUpon>Form1.vb</DependentUpon>
-      <SubType>Form</SubType>
     </Compile>
     <Compile Update="Form1_Main.vb">
       <DependentUpon>Form1.vb</DependentUpon>
-      <SubType>Form</SubType>
     </Compile>
     <Compile Update="Form1_Win32API.vb">
       <DependentUpon>Form1.vb</DependentUpon>
-      <SubType>Form</SubType>
     </Compile>
     <Compile Update="Form1_SimTree.vb">
       <SubType>Component</SubType>

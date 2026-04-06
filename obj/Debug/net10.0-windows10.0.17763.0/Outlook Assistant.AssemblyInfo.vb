@@ -16,7 +16,7 @@ Imports System.Reflection
 <Assembly: System.Reflection.AssemblyCompanyAttribute("Outlook Assistant"),  _
  Assembly: System.Reflection.AssemblyConfigurationAttribute("Debug"),  _
  Assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0"),  _
- Assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+81d5388e32f2485b81ea381b058ca560c5064040"),  _
+ Assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a375aa8a6229791bb7f9185914950f61b0bacd72"),  _
  Assembly: System.Reflection.AssemblyProductAttribute("Outlook Assistant"),  _
  Assembly: System.Reflection.AssemblyTitleAttribute("Outlook Assistant"),  _
  Assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0"),  _

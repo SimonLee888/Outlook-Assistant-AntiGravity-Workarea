@@ -25,7 +25,7 @@
     <Compile Update="Form1_SimTree.vb">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Update="SQLite.vb">
+    <Compile Update="Form1_SQLite2.vb">
       <SubType>Form</SubType>
     </Compile>
   </ItemGroup>

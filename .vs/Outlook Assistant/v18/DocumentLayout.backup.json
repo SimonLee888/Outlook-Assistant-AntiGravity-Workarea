@@ -3,8 +3,8 @@
   "WorkspaceRootPath": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\sqlite.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
-      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:sqlite.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
+      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_sqlite2.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
+      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1_sqlite2.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_main.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
@@ -56,8 +56,7 @@
               "ViewState": "AgIAAAAAAAAAAAAAAAAAABUAAABKAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
               "WhenOpened": "2026-04-06T09:04:46.33Z",
-              "IsPinned": true,
-              "EditorCaption": ""
+              "IsPinned": true
             },
             {
               "$type": "Document",
@@ -119,12 +118,12 @@
             {
               "$type": "Document",
               "DocumentIndex": 0,
-              "Title": "SQLite.vb",
-              "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\SQLite.vb",
-              "RelativeDocumentMoniker": "SQLite.vb",
-              "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\SQLite.vb",
-              "RelativeToolTip": "SQLite.vb",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAA==",
+              "Title": "Form1_SQLite2.vb",
+              "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_SQLite2.vb",
+              "RelativeDocumentMoniker": "Form1_SQLite2.vb",
+              "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_SQLite2.vb",
+              "RelativeToolTip": "Form1_SQLite2.vb",
+              "ViewState": "AgIAAAEAAAAAAAAAAAAmwAMAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
               "WhenOpened": "2026-04-06T10:32:59.703Z",
               "EditorCaption": ""

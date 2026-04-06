@@ -1,0 +1,16 @@
+[*.vb]
+
+# IDE0028: 簡化集合初始化
+dotnet_diagnostic.IDE0028.severity = silent
+
+# IDE0017: 簡化物件初始化
+dotnet_diagnostic.IDE0017.severity = silent
+
+# BC42099: 未使用的區域常數
+dotnet_diagnostic.BC42099.severity = none
+
+# IDE0031: 使用 null 傳播
+dotnet_diagnostic.IDE0031.severity = suggestion
+
+# IDE1006: 命名樣式
+dotnet_diagnostic.IDE1006.severity = silent

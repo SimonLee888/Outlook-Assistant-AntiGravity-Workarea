@@ -1,6 +1,6 @@
 ﻿Imports System.ComponentModel
 
-Public Class Form1_SimTree
+Public Class SimTree
 
     ' ==============================================================
     ' SimTree.vb  —  支援多選的自訂 TreeView 控制項

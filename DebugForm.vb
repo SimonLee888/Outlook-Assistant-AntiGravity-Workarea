@@ -341,6 +341,18 @@ Public Class DebugForm
         Dim selectedItem As ListViewItem = sender.GetItemAt(e.X, e.Y)
         If selectedItem Is Nothing Then Return
 
+        ' by AntiGravity, 2026/04/05: ── 標記功能 ──
+        ' 直接切換項目底色：橘色 ↔ 白色
+        ' DrawSubItem 本來就讀 e.Item.BackColor 來畫底色，這裡直接改它最簡單
+        ' (低頻雙擊操作，不會有閃爍問題)
+        If selectedItem.BackColor = Color.FromArgb(255, 140, 0) Then
+            selectedItem.BackColor = Color.White
+            selectedItem.ForeColor = Color.Black
+        Else
+            selectedItem.BackColor = Color.FromArgb(255, 140, 0) ' 亮橘色 #FF8C00
+            selectedItem.ForeColor = Color.White                  ' 白字確保對比度
+        End If
+
         ' ✅ 複製該行完整文字 (Tab 分隔三欄) 到剪貼簿
         Dim fullText As String = String.Join(vbTab, selectedItem.SubItems.Cast(Of ListViewItem.ListViewSubItem)().Select(Function(s) s.Text))
         Clipboard.SetText(fullText)
@@ -419,8 +431,9 @@ Public Class DebugForm
         Dim backColor As Color = e.Item.BackColor
         Dim foreColor As Color = e.Item.ForeColor
         ' 2026/04/01 by AntiGravity: 取代原本動態修改 Item.BackColor 的做法，改在渲染時直上高光
+        ' (標記項目的橘色底色已直接存在 item.BackColor，自然被上面這行讀到，不需要額外判斷)
         If _lastHighlightedPair IsNot Nothing AndAlso e.Item Is _lastHighlightedPair Then
-            backColor = Color.Cyan
+            backColor = Color.Cyan   ' 配對「開始/結束」行的高亮（此為渲染時注入，不污染 BackColor 屬性）
         End If
         If e.Item.Selected Then
             backColor = SystemColors.Highlight
@@ -669,8 +682,8 @@ Public Class DebugForm
         ' 3. 去噪: 為了讓「開始 (參數A)」能配對到「結束 (結果B)」，
         '    在提取核心時直接移除結尾的整組括號。
         '    比對時重點在於「方法名稱」與「狀態標記」是否一致。
-        If result.EndsWith(")") Then
-            Dim lastOpenParen As Integer = result.LastIndexOf("("c)
+        If result.EndsWith(CChar(")")) Then
+            Dim lastOpenParen As Integer = result.LastIndexOf(CChar("("))
             If lastOpenParen >= 0 Then
                 result = result.Substring(0, lastOpenParen).Trim()
             End If

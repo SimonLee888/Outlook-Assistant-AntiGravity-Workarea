@@ -1,4 +1,5 @@
-﻿Imports System.Runtime.InteropServices
+﻿Imports System.Numerics
+Imports System.Runtime.InteropServices
 Imports System.Windows.Forms.DataVisualization.Charting
 Imports Microsoft.Office.Interop.Outlook
 Imports Outlook = Microsoft.Office.Interop.Outlook
@@ -26,6 +27,7 @@ Imports Outlook = Microsoft.Office.Interop.Outlook
 'Imports Microsoft.VisualBasic.Devices
 'Imports Exception = Microsoft.Office.Interop.Outlook.Exception
 
+<System.ComponentModel.DesignerCategory("Form")>
 Partial Class Form1
 
 #Region "■ 01 全域宣告"
@@ -41,50 +43,35 @@ Partial Class Form1
     ' by AntiGravity, 2026/04/01: 延遲載入 UI 的狀態旗標
     ' Index   0: 取代原 _isFirstInit，標記 Form 與 Tab1 是否處於「首次啟動/首次選定」階段 (True=首次啟動中)
     ' Index 1~5: 對應 Tab1~Tab5 的 UI 是否已完成掛載 (True=已完成)
-    Private _isDebugMode As Boolean                 ' 是否為 Debug 模式，根據 VS 的編譯組態自動設定，是否顯示 DebugForm 以及是否啟用內部調試訊息
-    Private _isUserBusy As Boolean = False          ' ✅ 2026/04/01 by AntiGravity: 使用者操作忙碌旗標，用於暫緩背景預載程序
-    Private _isTab3_Stop As Boolean                 ' 搜尋附件的Tab3/Button3按下ESC中斷
     Private _isTabInitialized(5) As Boolean         ' 記錄每個 Tab 的 UI 是否已經初始化完成, (0)是FormLoad的第一次啟動, (1)~(5)分別對應 Tab1~Tab5
+    Private _isUserBusy As Boolean = False          ' ✅ 2026/04/01 by AntiGravity: 使用者操作忙碌旗標，用於暫緩背景預載程序
+    Private _isDebugMode As Boolean                 ' 是否為 Debug 模式，根據 VS 的編譯組態自動設定，是否顯示 DebugForm 以及是否啟用內部調試訊息
+    Private _iLikeNoisy As Boolean = False          ' 是否啟用過濾debug message 噪音的功能，預設為 False 不顯示高頻率的迴圈訊息，想要詳細訊息轟炸就切成 True
 
     '2026/3/10重構時停止使用全域變數來記錄遞迴過程中的資料, 改用傳遞參數以避免多線程或重入呼叫時資料被改寫的問題
     'Private _intTotalMailCount As Integer          ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
     'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
-    Private _cancelRequested As Boolean = False     ' todo: ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查
-    Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
+    Private _cancelRequested As Boolean = False     ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查
+    ' Private _isTab3_Stop As Boolean                 ' 2026/04/05 by AntiGravity: 已併入全域 _cancelRequested，不再單獨使用專屬旗標以簡化邏輯內容流程處理機制
+    ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
 
     ' 可複選Treeview 自訂控制項 及 ContextMenu 成員變數，只初始化一次，不在每次右鍵時重新建立
-    Private WithEvents SimTree1 As New Form1_SimTree
-    Private WithEvents SimTree2 As New Form1_SimTree
-    Private WithEvents SimTree3 As New Form1_SimTree
-    Private WithEvents SimTree4 As New Form1_SimTree
+    Private WithEvents SimTree1 As New SimTree
+    Private WithEvents SimTree2 As New SimTree
+    Private WithEvents SimTree3 As New SimTree
+    Private WithEvents SimTree4 As New SimTree
 
     Private _ctxListView1 As ContextMenuStrip
     Private rbExactMatch As New RadioButton()   ' tab5 用到的radio button
     Private rbFuzzyMatch As New RadioButton()   ' tab5 用到的radio button
     Private WithEvents ListView5 As New ListView()
 
-    Public Class ThemeColors
-        ' by AntiGravity, 2026/04/01: 統一管理專案色彩, 方便日後切換深色/淺色主題
-        ''' <summary>主要視窗或Panel背景色 (#F2F2F2)</summary>
-        Public Shared ReadOnly Gray95 As Color = Color.FromArgb(242, 242, 242)
-        ''' <summary>滑鼠懸停(Hover)的背景色 (#E5E5E5)</summary>
-        Public Shared ReadOnly MercuryGray As Color = Color.FromArgb(229, 229, 229)
-        ''' <summary>輕微的格線或邊框色 (#E0E0E0)</summary>
-        Public Shared ReadOnly AltoGray As Color = Color.FromArgb(224, 224, 224)
-        ''' <summary>主視覺品牌藍色 (如按鈕、連結文字) (#0078D4)</summary>
-        Public Shared ReadOnly Brand_Blue As Color = Color.FromArgb(0, 120, 212)
-        ''' <summary>深珊瑚紅 (#D83933)</summary>
-        Public Shared ReadOnly CoralRed As Color = Color.FromArgb(216, 57, 51)
-        ''' <summary>鐵鏽紅 (#A22C29)</summary>
-        Public Shared ReadOnly RustRed As Color = Color.FromArgb(162, 44, 41)
-    End Class
-
     ' [新增ProgressBar歷史紀錄 2026/4/2, by AntiGravity]
-    Private historyPopup As ToolStripDropDown
-    Private historyHoverIndex As Integer = -1
-    Private _statusHistory As New List(Of StatusHistoryItem)()
     Private Const MAX_HISTORY_COUNT As Integer = 100
-    Private WithEvents historyListBox As ListBox
+    Private WithEvents HistoryListBox As ListBox
+    Private _historyHoverIndex As Integer = -1
+    Private _historyPopup As ToolStripDropDown
+    Private _statusHistory As New List(Of StatusHistoryItem)()
     Public Structure StatusHistoryItem
         Public Time As DateTime
         Public Message As String
@@ -94,53 +81,61 @@ Partial Class Form1
 
 #Region "■ 02 Form 生命週期 & 外觀初始化"
 #Region "  ├ 表單行為及輔助函數"
-    Private Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        Dbg("開始")
-
-        ' by AntiGravity, 2026/04/01: 自動依據 VS 的編譯組態判斷是否為 Debug 模式
+    Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
 #If DEBUG Then
         _isDebugMode = True
 #Else
         _isDebugMode = False
-#End If
+#End If ' by AntiGravity, 2026/04/01: 自動依據 VS 的編譯組態判斷是否為 Debug 模式
 
-        ' 開始計時
+        Dbg("開始") ' debugForm 開始計時
         Dim stopwatch As New Stopwatch() : stopwatch.Start()
         Cursor = Cursors.AppStarting
         _isTabInitialized(0) = True ' 預設為 True，代表正在進行第一次啟動
         Me.KeyPreview = True        ' ✅ 讓 Form 優先攔截 ESC，否則 ESC 會先被 TreeView/ListBox 等子控制項消耗
 
-        If _isDebugMode Then
-            ' by AntiGravity, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
+        If _isDebugMode Then    ' by AntiGravity, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
             CheckDebug.Visible = True
             ' ✅ 2026/03/30 by AntiGravity: 改用 BeginInvoke 延遲啟動，避免 Load 期間同步觸發事件造成 UI 卡頓或 Handle 競爭
+            ' 移除原本導致Exception 的Task.Run 呼叫
             Me.BeginInvoke(Sub() CheckDebug.Checked = True)
-            ' 移除原本導致 InvalidOperationException 的重複 Task.Run 呼叫
-            ' debug: 這裡設成True 就會預設開啟 DebugForm，False 就是預設不開啟，設計階段方便debug用，正式版自動改成False
+            ' Memo: 這裡設成True 就會預設開啟 DebugForm，False 就是預設不開啟，設計階段方便debug用，正式版自動改成False
         End If
 
         InitOutlookNamespace()
         'InitRdoSession()
         InitLookAndFeel()       ' 設計程式外觀
         InitProgressBarEvents() ' 2026/04/02 by AntiGravity: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
+
+        ' 視窗縮放時同步 DebugForm — 2026/3/26 by AntiGravity
+        ' 原本的 ListView1 寬度調整邏輯已移至 HandleListViewResize 中，由 ListView 自行處理 Resize 事件
+        ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
+        ' by AntiGravity, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
+        AddHandler Me.Resize, Sub() SyncDebugFormPosition()
+        AddHandler Me.Move, Sub() SyncDebugFormPosition()
+
         Me.BringToFront()
         Me.Show()               ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
 
-        ' PST檔太多, 啟動速度愈來愈差, 2024/5/17全部重寫, 依照20年前的做法動態載入:
-        ' 啟動時先載入第一層, 若第二層還有subFolders則暫加一個假的":::", 讓它能顯示"+"加號表示還有子資料夾就好
-        ' 只有當使用者點開 "+" 號展開節點時, 才真正去讀取該資料夾的子資料夾, 而不要一開始就全部讀取進來
+        '' 2026/04/06 by AntiGravity:
+        'InitDatabase()          ' by AntiGravity, 2026/04/06: 初始化 SQLite 快取資料庫
+        'Await LoadCachesFromSQLiteAsync()
+        '' 掛載 Setting 頁面的快取按鈕事件, 這裡使用 AddHandler 動態掛載，確保按鈕邏輯正確連結到 SQLite 處理函數
+        'AddHandler SaveCache.Click, Async Sub(s1, e1) Await SaveCachesToSQLiteAsync()   ' 1. SaveCache 按鈕點擊事件 (存入資料庫)
+        'AddHandler LoadCache.Click, Async Sub(s1, e1) Await LoadCachesFromSQLiteAsync() ' 2. LoadCache 按鈕點擊事件 (從資料庫讀回)
+
+        ' 2024/5/17, PST檔太多, 啟動速度愈來愈差, 全部重寫. 依照20年前的做法動態載入:
+        ' 啟動時只載入第一層表皮, 若下層有subFolders=True 則暫塞一個假的":::" 讓它能顯示"+"加號表示還有子資料夾就好
+        ' 只有當使用者點開 "+" 號展開節點時, 才真正去讀該項目的子資料夾, 不要一開始就花時間全讀
         LoadStoreToTreeView(_pstStoreList, TreeView1)
         ExpandTreeToDefaultInbox(TreeView1)
-        ' todo: 如果 PST 數量多，可以只先載入第一個 PST，其餘用 BeginInvoke 延遲載入?? (或用RDO載入?)
-        ' todo: 第一次formload的時候, 好像RDO 一直還沒init 完? 都是走MAPI??
+        ' pending: 第一次formload的時候, 好像RDO 一直還沒init 完? 都是走MAPI??
 
         ' 啟動完成, 停止計時, 顯示總共花費的時間
-        stopwatch.Stop() : ProgressBar1.Text = "啟動花費 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+        stopwatch.Stop() : Cursor = Cursors.Default
+        ProgressBar1.Text = "啟動花費 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
         ProgressBar2.Text = ""
-        Cursor = Cursors.Default
 
-        ' ✅ 2026-03-16 B4 CacheSniffer: 啟動完成後才 fire-and-forget，不阻塞 UI
-        'CacheSnifferAsync(_cacheSnifferCts.Token)  '裡面內建了等待 10 秒的延遲，確保 Form1_Load 完全結束、UI 呈現完畢，再開始佔用 Outlook COM
         Dbg("結束")
 
     End Sub
@@ -151,55 +146,40 @@ Partial Class Form1
         ' 讓第一頁先穩穩地顯示出來，不要與使用者剛啟動後的第一波對 TreeView1 的操作搶資源
 
         ' Tab1 順利載入後，才開始載入 Tab2~Tab5 的 UI 與資料，避免一開始就全部載入造成卡頓
-        ' 使用 WaitAndYieldIfBusy 確保使用者正在操作時會暫緩預載
+        ' 使用 TryToRelaxFor 確保使用者正在操作時會暫緩預載
         ' 依序初始化後面的標籤頁，拉出間隔避免卡住使用者剛進入畫面的第一波操作
         Dim delaySame As Integer = 500  ' 每個 Tab 之間的預載延遲，單位毫秒 (ms)，可以根據需要調整
         Dim delayDepends() As Integer = {500, 1000, 2000, 3000, 4000, 5000}
 
         ' by AntiGravity, 2026/04/03: 增加載入各 Tab 之間的視覺區隔
-        Await WaitAndYieldIfBusy(delayDepends(0))
+        Await TryToRelaxFor(delayDepends(0))
         If Not _isTabInitialized(2) Then
             InitTab2UI() : _isTabInitialized(2) = True
             LoadStoreToTreeView(_pstStoreList, SimTree2) : ExpandTreeToDefaultInbox(SimTree2)
         End If
 
-        Await WaitAndYieldIfBusy(delayDepends(0))
+        Await TryToRelaxFor(delayDepends(0))
         If Not _isTabInitialized(3) Then
             InitTab3UI() : _isTabInitialized(3) = True
-            Button3_Stop.Location = Button3.Location
             LoadStoreToTreeView(_pstStoreList, TreeView3) : ExpandTreeToDefaultInbox(TreeView3)
         End If
 
-        Await WaitAndYieldIfBusy(delayDepends(0))
+        Await TryToRelaxFor(delayDepends(0))
         If Not _isTabInitialized(4) Then
             InitTab4UI() : _isTabInitialized(4) = True
             LoadStoreToTreeView(_pstStoreList, TreeView4) : ExpandTreeToDefaultInbox(TreeView4)
         End If
 
-        Await WaitAndYieldIfBusy(delayDepends(0))
+        Await TryToRelaxFor(delayDepends(0))
         If Not _isTabInitialized(5) Then
             TreeView5.Visible = True : InitTab5UI() : _isTabInitialized(5) = True
             LoadStoreToTreeView(_pstStoreList, TreeView5) : ExpandTreeToDefaultInbox(TreeView5)
         End If
 
         Dbg("結束", "全部 Tab 背景載入完畢")
-        ' todo: 背景偷載完UI後, 再偷偷載入資料, 例如先載入第一層資料夾的郵件數量, 再載入第一層資料夾的大小, 以此類推逐層載入, 或者優先載入使用者點過的資料夾
-        ' todo: 使用timer或WaitAndYieldIfBusy(), 在背景偷偷預讀foldercounts --> mailcounts --> foldersize (逐層BFS? 還是逐個PST?)
-        ' todo: 用invoke() 在還沒點選前, 偷偷在背景計算foldersize逐一顯示
-        ' todo: 要偷讀的話, 也可以只先偷讀最花時間的personal-1 就好??
-    End Sub
-    Private Sub Form1_Move(sender As Object, e As EventArgs) Handles Me.Move
-        ' 視窗移動時同步 DebugForm — 2026/3/26 by AntiGravity
-        SyncDebugFormPosition()
-    End Sub
-    Private Sub Form1_Resize(sender As Object, e As EventArgs) Handles Me.Resize
-        ' 視窗縮放時同步 DebugForm — 2026/3/26 by AntiGravity
-        SyncDebugFormPosition()
-        ' 原本的 ListView1 寬度調整邏輯已移至 HandleListViewResize 中，由 ListView 自行處理 Resize 事件
-        If TabControl1.SelectedTab Is TabPage3 Then
-            Button3_Stop.Location = Button3.Location            ' 把stop按鈕跟button3重疊但不可見, 按下button3的查詢期間才visible
-            GroupBox3.Visible = SplitContainer3.Width >= 1100   ' Group3的附件個數篩選平常看不到, 拉開寬度才出現
-        End If
+        ' todo: 背景偷載完UI後再偷偷載入資料, 例如先載入第一層資料夾的郵件數量, 再載入第一層資料夾的大小, 以此類推逐層載入
+        ' todo: 用invoke()或WaitAndYieldIfBusy() 在還沒點選前, 偷偷在背景計算foldersize逐一顯示, 要偷讀的話, 也可以只先偷讀最花時間的personal-1 就好??
+        ' todo: 只要把快取存入磁碟, 啟動時重新載入就解決上面所有問題了!!!!!
 
     End Sub
     Private Sub Form1_ResizeEnd(sender As Object, e As EventArgs) Handles Me.ResizeEnd
@@ -208,16 +188,12 @@ Partial Class Form1
     Private Sub Form1_KeyDown(sender As Object, e As KeyEventArgs) Handles MyBase.KeyDown
         ' ── ESC 全域中斷 ──────────────────────────────────────────────
         ' KeyPreview=True 讓 Form 優先攔截 KeyDown，子控制項不會先吃掉 ESC
-        ' todo: ESC 全域中斷有時管用, 有時不管用
         If e.KeyCode = Keys.Escape Then
             ' Tab1: ComputeFolderStatsAsync 在 Yield 點檢查 _cancelRequested → 回空 List
             ' Tab2: ComputeYearCounts  在 For Each 頭部檢查 → Exit For 回傳已算部分
+            ' Tab3: 統一使用全域 _cancelRequested 旗標 (by AntiGravity, 2026/04/05)
             _cancelRequested = True
-
-            ' Tab3: 複用既有的 isTab3_Stop 旗標，不重複設計
-            _isTab3_Stop = True
             Button3.Enabled = True
-            Button3_Stop.Visible = False
 
             Cursor = Cursors.Default
             ProgressBar1.Text = "已中斷。"
@@ -226,7 +202,7 @@ Partial Class Form1
 
     End Sub
     Private Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
-        _cacheSnifferCts.Cancel()   ' ✅ 2026-03-16 B4: 通知 CacheSniffer 停止，避免程式關閉後 COM 呼叫繼續進行
+        '_cacheSnifferCts.Cancel()   ' ✅ 2026-03-16 B4: 通知 CacheSniffer 停止，避免程式關閉後 COM 呼叫繼續進行
 
         ' 釋放所有的 COM 物件占用資源
         If _pstStoreList IsNot Nothing Then
@@ -244,11 +220,11 @@ Partial Class Form1
 #Region "  ├ 物件及外觀初始化"
     Private Sub InitLookAndFeel()
         ' === 初始化共用物件的外觀及共通行為 ===
+        Dbg("開始")
         ' 2026-03-17 拆分: TreeView / ListView 各司其職的外觀設定移到獨立函數
         '   InitLookAndFeel()   ← 視窗位置、TabControl、ContextMenu、Chart2、Button、雜項
         '   InitTreeview()  ← TreeView / SimTree 字型、顏色、雙緩衝
         '   InitListview()  ← ListView 字型、基本樣式、雙緩衝、欄位定義
-        Dbg("開始")
 
         ' 設定程式標題
         Dim strApp As String = My.Application.Info.DirectoryPath & "\" & My.Application.Info.ProductName & ".EXE"
@@ -260,19 +236,19 @@ Partial Class Form1
         End If
 
         ' ── 視窗位置與背景色 ──
-        Me.BackColor = ThemeColors.Gray95
         If Screen.FromControl(Me).Bounds.Height > 2560 Then
             Me.Top = Screen.FromControl(Me).Bounds.Height * 0.45                '如果在直立式的4K螢幕上啟動, 就把表單放在下半部往上移5%
             Me.Left = (Screen.FromControl(Me).Bounds.Width - Me.Width) * 0.45   '不管在什麼解析度的螢幕上啟動, 都把表單放在螢幕中央往左移5%
         End If
+        Me.BackColor = ThemeColors.Gray95
 
         ' ── TabControl 字型與分頁名稱 ──
-        Dim strTabName As String() = {"資料夾統計", "依日期統計", "尋找附件", "尋找系列郵件", "尋找重覆郵件"}
-        TabControl1.Font = New Font(_fontDefault, _fontBold)
-        TabControl1.Padding = New Point(12, 8)
+        Dim strTabName As String() = {"資料夾統計", "依日期統計", "尋找附件", "尋找系列郵件", "尋找重覆郵件", "Setting"}
         For i As Integer = 0 To strTabName.Length - 1
             TabControl1.TabPages(i).Text = strTabName(i)
         Next
+        TabControl1.Font = New Font(_fontDefault, _fontBold)
+        TabControl1.Padding = New Point(12, 8)
 
         ' ── 容器化佈局與動態控制項掛載 ──
         ' by AntiGravity, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
@@ -282,6 +258,8 @@ Partial Class Form1
         ' 2026/3/27 by AntiGravity: 修復 StatusStrip1 被 TabControl1 遮擋的問題
         StatusStrip1.SendToBack()
         TabControl1.BringToFront()
+
+        DebugGroup.Visible = _isDebugMode   ' 只在 Debug 模式才顯示 DebugGroup 及相關控制項
         Dbg("結束")
 
     End Sub
@@ -329,9 +307,42 @@ Partial Class Form1
     End Sub
     Private Sub InitSplitContainer(scnr As SplitContainer)
         scnr.Panel1MinSize = 0
+
         AddHandler scnr.MouseMove, Sub(s, ev) DirectCast(s, SplitContainer).Cursor = Cursors.SizeWE
         AddHandler scnr.MouseLeave, Sub(s, ev) DirectCast(s, SplitContainer).Cursor = Cursors.Default
         AddHandler scnr.MouseDown, AddressOf HandleSplitContainerMouseDown
+
+    End Sub
+    Private Sub InitProgressBarEvents()
+        ' ── ProgressBar 歷史紀錄 (by AntiGravity, 2026/04/02) ──
+        ''' <summary>
+        ''' 集中初始化 ProgressBar1 與 ProgressBar2 的互動事件 (TextChanged, Click, Hover)
+        ''' 2026/04/02 by AntiGravity
+        ''' </summary>
+
+        ' 1. 文字變更紀錄
+        AddHandler ProgressBar1.TextChanged, Sub() AppendStatusHistory(ProgressBar1.Text, "PB1")
+        AddHandler ProgressBar2.TextChanged, Sub() AppendStatusHistory(ProgressBar2.Text, "PB2")
+
+        ' 2. 點擊彈出歷史選單
+        AddHandler ProgressBar1.Click, Sub() ShowHistoryPopup("PB1", ProgressBar1)
+        AddHandler ProgressBar2.Click, Sub() ShowHistoryPopup("PB2", ProgressBar2)
+
+        ' 3. 滑鼠進入/離開視覺效果 (使用共用處理邏輯)
+        Dim hoverIn = Sub(s, ev)
+                          Dim lbl = DirectCast(s, ToolStripStatusLabel)
+                          lbl.BackColor = ThemeColors.MercuryGray
+                      End Sub
+        Dim hoverOut = Sub(s, ev)
+                           Dim lbl = DirectCast(s, ToolStripStatusLabel)
+                           lbl.BackColor = Color.Transparent
+                       End Sub
+
+        ' 註：ProgressBar1/2 實際上是 ToolStripStatusLabel
+        AddHandler ProgressBar1.MouseEnter, hoverIn
+        AddHandler ProgressBar2.MouseEnter, hoverIn
+        AddHandler ProgressBar1.MouseLeave, hoverOut
+        AddHandler ProgressBar2.MouseLeave, hoverOut
 
     End Sub
 
@@ -402,9 +413,9 @@ Partial Class Form1
 
         Chart2.BorderlineDashStyle = ChartDashStyle.Solid
         Chart2.BorderlineColor = ThemeColors.AltoGray
-        Chart2.ChartAreas(0).BackColor = ThemeColors.Gray95
-        Chart2.ChartAreas(0).AxisX.MajorGrid.LineColor = ThemeColors.AltoGray
-        Chart2.ChartAreas(0).AxisY.MajorGrid.LineColor = ThemeColors.AltoGray
+        Chart2.ChartAreas(0).BackColor = ThemeColors.bgColor
+        Chart2.ChartAreas(0).AxisX.MajorGrid.LineColor = ThemeColors.gridLine
+        Chart2.ChartAreas(0).AxisY.MajorGrid.LineColor = ThemeColors.gridLine
         Chart2.ChartAreas(0).Position = New ElementPosition(1, 1, 99, 99)   ' ── 最大化 ChartArea 和 InnerPlotPosition ──
         ' ChartArea.Position: ChartArea 在整個 Chart 控制項中的佔比 (單位: %)
 
@@ -444,9 +455,14 @@ Partial Class Form1
         pnlOptions_tab3.Controls.Add(GroupBox2)
         pnlOptions_tab3.Controls.Add(GroupBox3)
         pnlOptions_tab3.Controls.Add(Button3)
-        pnlOptions_tab3.Controls.Add(Button3_Stop)
         pnlOptions_tab3.Controls.Add(CheckSubFolder3)
         SplitContainer3.Panel2.Controls.Add(pnlOptions_tab3)
+
+        ' 2026/04/05 by AntiGravity: 優化顯示邏輯「純淨版」
+        ' 改用面板自身的 Resize 事件與 Lambda 運算，不需類別變數。
+        ' 這樣無論是調整視窗還是隱藏側邊欄，GroupBox3 都會依據「右側實際可用空間 (820px)」決定顯現與否。
+        AddHandler pnlOptions_tab3.Resize, Sub() GroupBox3.Visible = pnlOptions_tab3.Width >= 820
+        GroupBox3.Visible = pnlOptions_tab3.Width >= 820
 
         ' ── Button3 樣式 ──
         Button3.FlatStyle = FlatStyle.System
@@ -461,7 +477,7 @@ Partial Class Form1
         CheckSubFolder3.TextAlign = ContentAlignment.MiddleLeft
         CheckSubFolder3.AutoSize = True                                                 ' 1. 開啟 AutoSize 解決勾選框與文字「離得太遠」的問題 (寬度會自動縮短到剛好)
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Left                  ' 2. 清除 Anchor 避免設計時的自動定位干擾手動計算，之後再重設為右側關聯
-        CheckSubFolder3.Left = (Button3.Left + Button3.Width) - CheckSubFolder3.Width   ' 3. 重新計算右側對齊 (會在 AutoSize 完後的正確 Width 基礎上計算)
+        'CheckSubFolder3.Left = (Button3.Left + Button3.Width) - CheckSubFolder3.Width   ' 3. 重新計算右側對齊 (會在 AutoSize 完後的正確 Width 基礎上計算)
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right                 ' 4. 最後設定 Anchor，讓它在之後的視窗縮放中保持與 Button3 的右側對齊
 
         ' ------------------------------------------
@@ -484,8 +500,23 @@ Partial Class Form1
                                                      AutoResizeListViewColumns(ListView3) ' 加入自動縮放，依勾選狀態動態隱藏/顯示欄位
                                                  End Sub
 
-        AddHandler NumberMin.ValueChanged, Sub() NumberMin.Increment = If(NumberMin.Value < 100, 1, 10)
-        AddHandler NumberMax.ValueChanged, Sub() NumberMax.Increment = If(NumberMax.Value < 100, 1, 10)
+        ' 2026/04/05 by AntiGravity: 優化數值微調邏輯，根據單位 (KB/MB/GB) 與當前數值動態調整增幅
+        ' 並加入長按加速 (Accelerations) 提升大範圍調整效率
+        For Each num In {NumberMin, NumberMax}
+            num.Accelerations.Clear()
+            num.Accelerations.Add(New NumericUpDownAcceleration(2, 5))  ' 2 秒後加速 5 倍
+            num.Accelerations.Add(New NumericUpDownAcceleration(5, 50)) ' 5 秒後極速
+        Next
+
+        AddHandler NumberMin.ValueChanged, Sub() UpdateNumericIncrement(NumberMin, UnitMin)
+        AddHandler NumberMax.ValueChanged, Sub() UpdateNumericIncrement(NumberMax, UnitMax)
+        AddHandler UnitMin.SelectedIndexChanged, Sub() UpdateNumericIncrement(NumberMin, UnitMin)
+        AddHandler UnitMax.SelectedIndexChanged, Sub() UpdateNumericIncrement(NumberMax, UnitMax)
+
+        ' 初始化時先執行一次以同步正確增額
+        UpdateNumericIncrement(NumberMin, UnitMin)
+        UpdateNumericIncrement(NumberMax, UnitMax)
+
         Dbg("結束")
 
     End Sub
@@ -531,6 +562,7 @@ Partial Class Form1
         ' ── Tab5 選項面板 (為了支持穩定佈局，將頂部按鈕放入獨立 Panel) ──
         Dbg("開始")
 
+        TreeView5.Visible = True
         InitTreeView(TreeView5)
         InitListView(ListView5)
         InitSplitContainer(SplitContainer5)
@@ -578,23 +610,19 @@ Partial Class Form1
             .TextAntiAliasingQuality = TextAntiAliasingQuality.High
 
             ' 添加 Chart 的 Series
-            Dim series As New Series With {.ChartType = SeriesChartType.Column, .Name = "郵件數量"}
-            'series("PixelPointWidth") = "50" ' 設置長條圖的寬度
-            series.Color = Color.FromArgb(70, 130, 180) ' 深藍色
-            .Series.Add(series)
-
+            Dim mailCount As New Series With {.Name = "郵件數量",
+                                              .ChartType = SeriesChartType.Column,
+                                              .Color = ThemeColors.barNormal}
             ' 添加 Chart 的 ChartArea
-            Dim area1 As New ChartArea("chartArea")
-            With area1
-                .BackColor = Color.FromArgb(245, 245, 245) ' 淡灰色背景
-                .BorderColor = Color.DarkGray
-                .ShadowColor = Color.Transparent ' 關閉陰影效果
-
+            Dim mailChart As New ChartArea With {.Name = "長條圖",
+                                                 .BackColor = ThemeColors.Gray95,
+                                                 .BorderColor = Color.DarkGray}
+            With mailChart
                 ' 設置背景格線顏色和寬度
                 .AxisX.LineColor = Color.DimGray
                 .AxisY.LineColor = Color.DimGray
-                .AxisX.MajorGrid.LineColor = Color.LightGray ' 淡灰色
-                .AxisY.MajorGrid.LineColor = Color.LightGray ' 淡灰色
+                .AxisX.MajorGrid.LineColor = ThemeColors.gridLine ' 淡灰色
+                .AxisY.MajorGrid.LineColor = ThemeColors.gridLine ' 淡灰色
                 .AxisX.MajorGrid.LineWidth = 1 ' 寬度1
                 .AxisY.MajorGrid.LineWidth = 1 ' 寬度1
                 With .AxisX
@@ -615,14 +643,16 @@ Partial Class Form1
                     .MajorTickMark.TickMarkStyle = TickMarkStyle.AcrossAxis
                 End With
             End With
-            .ChartAreas.Add(area1)
+
+            .Series.Add(mailCount)
+            .ChartAreas.Add(mailChart)
         End With
         Dbg("結束")
 
     End Sub
 #End Region
 #Region "  └ 輔助函數"
-    Private Async Function WaitAndYieldIfBusy(baseDelayMs As Integer) As Task
+    Private Async Function TryToRelaxFor(baseDelayMs As Integer) As Task
         ''' <summary>
         ''' 智慧等待輔助函式
         ''' 先睡眠預定時間，若使用者正在忙碌(例如正在 AfterSelect 統計中)，則每 1000ms 檢查一次直到閒置。
@@ -630,7 +660,6 @@ Partial Class Form1
         ''' </summary>
 
         Await Task.Delay(baseDelayMs)   ' 1. 先執行基礎延遲
-
         While _isUserBusy               ' 2. 醒來後檢查旗標，若忙碌則循環等待
             Dbg("使用者忙碌中，背景預載暫緩 1000ms...")
             Await Task.Delay(1000)
@@ -669,7 +698,6 @@ Partial Class Form1
             Dim value = row(column)
             If value Is Nothing OrElse IsDBNull(value) Then Return defaultValue
             Return CType(value, T)
-
         Catch ex As System.Exception
             Dbg("SafeGet(Row) 失敗", $"{column} | {ex.Message}")
             Return defaultValue
@@ -686,7 +714,6 @@ Partial Class Form1
             If value Is Nothing OrElse IsDBNull(value) Then Return defaultValue
             ' 使用 Convert.ChangeType 確保數值型態（如 Long/Int/DateTime）能正確轉換
             Return CType(Convert.ChangeType(value, GetType(T)), T)
-
         Catch
             Return defaultValue
         End Try
@@ -699,48 +726,40 @@ Partial Class Form1
 #Region "  ├ 共用 UI控制項"
     Private Sub TabControl1_SelectedIndexChanged(sender As Object, e As EventArgs) Handles TabControl1.SelectedIndexChanged
         _isUserBusy = True
+        Dbg("開始")
 
-        ' by AntiGravity, 2026/04/01: 根據選定的分頁動態載入 UI 與資料 (Lazy Load UI)
-        Try
-            Dbg("開始", sender.Name)
-            Dim sw As New Stopwatch : sw.Start()
+        Try ' by AntiGravity, 2026/04/01: 根據選定的分頁動態載入 UI 與資料 (Lazy Load UI)
             ProgressBar1.Text = "" : ProgressBar2.Text = ""
-
             Dim selectedTab As TabPage = CType(sender, TabControl).SelectedTab
             Dim tabIndex As Integer = TabControl1.SelectedIndex + 1 ' 產生 1, 2, 3, 4, 5 (Tab1~5)
+
             ' 如果切換到 Debug 分頁 (TabIndex >= 6)，不需要執行底下的陣列檢查，不需初始化 UI 直接離開
             If tabIndex > 5 Then
-                If selectedTab.Text = "Debug" Then
+                If selectedTab.Text = "Setting" Then
                     ' 保留給 Debug 分頁的特別處理 (如果有)
-
+                    ' 保留給 Debug 分頁的特別處理 (如果有)
+                    ' 保留給 Debug 分頁的特別處理 (如果有)
+                    ' 保留給 Debug 分頁的特別處理 (如果有)
                 End If
-
-                sw.Stop() : ProgressBar1.Text = "切換頁面花費 " & sw.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
-                ProgressBar2.Text = "" : Return
+                Return
             End If
 
-            ' ── 黃金切割步驟 1: 即時建構目前分頁專屬 UI ──
+            ' ── 步驟 1: 即時建構目前分頁專屬 UI ──
             If Not _isTabInitialized(tabIndex) Then
                 selectedTab.SuspendLayout()
                 Select Case tabIndex
-                    Case 1
-                        If Not _isTabInitialized(1) Then InitTab1UI()
-                    Case 2
-                        InitTab2UI()
-                    Case 3
-                        InitTab3UI()
-                        Button3_Stop.Location = Button3.Location
-                    Case 4
-                        InitTab4UI()
-                    Case 5
-                        TreeView5.Visible = True
-                        InitTab5UI()
+                    Case 1 : InitTab1UI()
+                   'Case 1 : If Not _isTabInitialized(1) Then InitTab1UI() '這個保護現在好像不太需要了?
+                    Case 2 : InitTab2UI()
+                    Case 3 : InitTab3UI()
+                    Case 4 : InitTab4UI()
+                    Case 5 : InitTab5UI()
                 End Select
                 selectedTab.ResumeLayout()
                 _isTabInitialized(tabIndex) = True
             End If
 
-            ' ── 黃金切割步驟 2: 依照不同的頁面載入不同的treeview，並展開到預設的收件匣位置 ──
+            ' ── 步驟 2: 依照不同的頁面載入不同的treeview，並展開到預設的收件匣位置 ──
             Dim currentTree As TreeView = GetActiveTreeView()
             If currentTree IsNot Nothing Then
                 If currentTree.Nodes.Count = 0 Then
@@ -749,15 +768,13 @@ Partial Class Form1
                 End If
                 currentTree.Focus()
             End If
-
-            sw.Stop() : ProgressBar1.Text = "切換頁面花費 " & sw.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
-            ProgressBar2.Text = ""
+            Dbg("結束")
         Finally
             _isUserBusy = False
         End Try
 
     End Sub
-    Private Sub checkIncludeAllFolders_CheckedChanged(sender As Object, e As EventArgs) Handles checkIncludeAllFolders.CheckedChanged
+    Private Sub CheckShowAllFolders_CheckedChanged(sender As Object, e As EventArgs) Handles checkIncludeAllFolders.CheckedChanged
         ' by AntiGravity, 2026/03/30: 當切換顯示所有資料夾時，清空快取並標記所有 TreeView 為無效 (Nodes.Clear)
         ' 分頁在切換時，由 SelectedIndexChanged 自動按新過濾條件重新載入, 不需要在這裡重複載入，避免不必要的 COM 呼叫和 UI 重繪
         _cacheFolderTree.Clear()
@@ -779,15 +796,15 @@ Partial Class Form1
         End If
 
     End Sub
-    Private Sub buttonClearCache_Click(sender As Object, e As EventArgs) Handles buttonClearCache.Click
-        Dbg("開始", sender.Name)
+    Private Sub ClearCache_Click(sender As Object, e As EventArgs) Handles ClearCache.Click
+        Dbg("開始")
 
         ' Tab2 年份統計快取 (String key，安全直接清除)
         _yearCountsCache.Clear()
         _monthCountsCache.Clear()
 
-        ' Tab3 Phase1 快取 (Dictionary(Of String, FolderCacheTab3))
-        _tab3Phase1Cache.Clear()        ' 2026-03-16 新增
+        ' Tab3 附件搜尋快取 (String key，安全直接清除)
+        _cachePhase1tab3.Clear()       ' 第一階段搜尋結果快取 (資料夾展開用)
 
         ' 以下快取的 Key 已改為 String，.Clear() 安全且直接 (by AntiGravity, 2026/03/27 修正快取鍵值型別)
         _cacheMailCount.Clear()         ' 直屬郵件數量快取 (by AntiGravity, 2026/03/27 新增)
@@ -799,75 +816,47 @@ Partial Class Form1
         _cacheFolderTree.Clear()        ' 資料夾樹狀快取
         _cacheSubFolderList.Clear()     ' by AntiGravity: 平坦化展開結果快取
         _cacheIsMailFolder.Clear()      ' 資料夾類型快取
+        _cacheAttachFilename.Clear()    ' 附件名稱快取
 
         ProgressBar2.Text = "所有快取已清除，下次統計將重新從 Outlook 讀取。"
-        Dbg("結束", "所有快取已清除")
+        Dbg("結束")
 
     End Sub
-
-    Private Sub InitProgressBarEvents()
-        ' ── ProgressBar 歷史紀錄 (by AntiGravity, 2026/04/02) ──
-        ''' <summary>
-        ''' 集中初始化 ProgressBar1 與 ProgressBar2 的互動事件 (TextChanged, Click, Hover)
-        ''' 2026/04/02 by AntiGravity
-        ''' </summary>
-
-        ' 1. 文字變更紀錄
-        AddHandler ProgressBar1.TextChanged, Sub() AppendStatusHistory(ProgressBar1.Text, "PB1")
-        AddHandler ProgressBar2.TextChanged, Sub() AppendStatusHistory(ProgressBar2.Text, "PB2")
-
-        ' 2. 點擊彈出歷史選單
-        AddHandler ProgressBar1.Click, Sub() ShowHistoryPopup("PB1", ProgressBar1)
-        AddHandler ProgressBar2.Click, Sub() ShowHistoryPopup("PB2", ProgressBar2)
-
-        ' 3. 滑鼠進入/離開視覺效果 (使用共用處理邏輯)
-        Dim hoverIn = Sub(s, ev)
-                          Dim lbl = DirectCast(s, ToolStripStatusLabel)
-                          lbl.BackColor = ThemeColors.MercuryGray
-                      End Sub
-        Dim hoverOut = Sub(s, ev)
-                           Dim lbl = DirectCast(s, ToolStripStatusLabel)
-                           lbl.BackColor = Color.Transparent
-                       End Sub
-
-        ' 註：ProgressBar1/2 實際上是 ToolStripStatusLabel
-        AddHandler ProgressBar1.MouseEnter, hoverIn
-        AddHandler ProgressBar2.MouseEnter, hoverIn
-        AddHandler ProgressBar1.MouseLeave, hoverOut
-        AddHandler ProgressBar2.MouseLeave, hoverOut
-
+    Private Sub OKiLikeNoisy_CheckedChanged(sender As Object, e As EventArgs) Handles OKiLikeNoisy.CheckedChanged
+        _iLikeNoisy = OKiLikeNoisy.Checked
     End Sub
-    Private Sub historyListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles historyListBox.MouseMove
-        Dim newHoverIndex = historyListBox.IndexFromPoint(e.Location)
-        If historyHoverIndex <> newHoverIndex Then
+
+    Private Sub HistoryListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles HistoryListBox.MouseMove
+        Dim newHoverIndex = HistoryListBox.IndexFromPoint(e.Location)
+        If _historyHoverIndex <> newHoverIndex Then
             ' 只重繪前一個和新碰觸的項目，而不是整個 ListBox，大幅改善 Hover 和捲動的效能卡頓
-            Dim oldIndex = historyHoverIndex
-            historyHoverIndex = newHoverIndex
+            Dim oldIndex = _historyHoverIndex
+            _historyHoverIndex = newHoverIndex
 
             If oldIndex <> -1 AndAlso
-                oldIndex < historyListBox.Items.Count Then historyListBox.Invalidate(historyListBox.GetItemRectangle(oldIndex))
-            If historyHoverIndex <> -1 AndAlso
-                historyHoverIndex < historyListBox.Items.Count Then historyListBox.Invalidate(historyListBox.GetItemRectangle(historyHoverIndex))
+                oldIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(oldIndex))
+            If _historyHoverIndex <> -1 AndAlso
+                _historyHoverIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(_historyHoverIndex))
         End If
 
     End Sub
-    Private Sub historyListBox_MouseLeave(sender As Object, e As EventArgs) Handles historyListBox.MouseLeave
-        If historyHoverIndex <> -1 Then
-            Dim oldIndex = historyHoverIndex
-            historyHoverIndex = -1
-            If oldIndex < historyListBox.Items.Count Then historyListBox.Invalidate(historyListBox.GetItemRectangle(oldIndex))
+    Private Sub HistoryListBox_MouseLeave(sender As Object, e As EventArgs) Handles HistoryListBox.MouseLeave
+        If _historyHoverIndex <> -1 Then
+            Dim oldIndex = _historyHoverIndex
+            _historyHoverIndex = -1
+            If oldIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(oldIndex))
         End If
 
         ' 當滑鼠真正離開 Popup 範圍時再自動關閉 Popup
         Dim pt = System.Windows.Forms.Cursor.Position
-        If historyPopup IsNot Nothing AndAlso historyPopup.Visible Then
-            If Not historyPopup.Bounds.Contains(pt) Then historyPopup.Close()
+        If _historyPopup IsNot Nothing AndAlso _historyPopup.Visible Then
+            If Not _historyPopup.Bounds.Contains(pt) Then _historyPopup.Close()
         End If
 
     End Sub
-    Private Sub historyListBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles historyListBox.SelectedIndexChanged
-        If historyListBox.SelectedIndex >= 0 Then
-            Dim selectedText = historyListBox.SelectedItem.ToString()
+    Private Sub HistoryListBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles HistoryListBox.SelectedIndexChanged
+        If HistoryListBox.SelectedIndex >= 0 Then
+            Dim selectedText = HistoryListBox.SelectedItem.ToString()
             Try
                 Clipboard.SetText(selectedText)
             Catch
@@ -875,9 +864,9 @@ Partial Class Form1
         End If
 
     End Sub
-    Private Sub historyListBox_DrawItem(sender As Object, e As DrawItemEventArgs) Handles historyListBox.DrawItem
+    Private Sub HistoryListBox_DrawItem(sender As Object, e As DrawItemEventArgs) Handles HistoryListBox.DrawItem
         If e.Index < 0 Then Return
-        Dim isHovered = (e.Index = historyHoverIndex)
+        Dim isHovered = (e.Index = _historyHoverIndex)
         Dim isSelected = ((e.State And DrawItemState.Selected) = DrawItemState.Selected)
 
         ' 使用與 ListView 相似的 Hover 與 Select 背景色
@@ -892,13 +881,13 @@ Partial Class Form1
         'e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit
         'Dim textRect As New RectangleF(e.Bounds.X + 4, e.Bounds.Y + 3, e.Bounds.Width - 8, e.Bounds.Height - 4)
         'Using brush = New SolidBrush(foreColor)
-        '    e.Graphics.DrawString(historyListBox.Items(e.Index).ToString(), e.Font, brush, textRect)
+        '    e.Graphics.DrawString(HistoryListBox.Items(e.Index).ToString(), e.Font, brush, textRect)
         'End Using
 
         ' 恢復使用系統原生的 TextRenderer 確保呈現與普通 ListBox 相同的柔和抗鋸齒
         Dim textRect As New Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 4, e.Bounds.Height)
         Dim flags = TextFormatFlags.VerticalCenter Or TextFormatFlags.Left Or TextFormatFlags.EndEllipsis Or TextFormatFlags.PreserveGraphicsClipping
-        TextRenderer.DrawText(e.Graphics, historyListBox.Items(e.Index).ToString(), e.Font, textRect, foreColor, flags)
+        TextRenderer.DrawText(e.Graphics, HistoryListBox.Items(e.Index).ToString(), e.Font, textRect, foreColor, flags)
 
     End Sub
 #End Region
@@ -925,7 +914,7 @@ Partial Class Form1
 
         ' ── 還原上一個 hover 節點 (對稱結構第一部分) ──
         If _lastHoveredTreeNode IsNot Nothing Then
-            Dim sim As Form1_SimTree = TryCast(tv, Form1_SimTree)
+            Dim sim As SimTree = TryCast(tv, SimTree)
 
             If sim IsNot Nothing AndAlso sim.SelectedNodes.Contains(_lastHoveredTreeNode) Then
                 ' SimTree 選取節點: 根據焦點還原正確的選取色 (不能 Color.Empty)
@@ -939,7 +928,7 @@ Partial Class Form1
 
         ' ── 套用新 hover 色 (對稱結構第二部分) ──
         If node IsNot Nothing Then
-            Dim skipHover As Boolean = TypeOf tv Is Form1_SimTree AndAlso CType(tv, Form1_SimTree).SelectedNodes.Contains(node)
+            Dim skipHover As Boolean = TypeOf tv Is SimTree AndAlso CType(tv, SimTree).SelectedNodes.Contains(node)
             If Not skipHover Then
                 node.BackColor = ThemeColors.MercuryGray
                 node.ForeColor = SystemColors.InactiveCaptionText
@@ -1001,19 +990,19 @@ Partial Class Form1
             If sc.SplitterDistance > 20 Then
                 sc.Tag = sc.SplitterDistance        ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
                 sc.SplitterDistance = 10            ' 縮合至 10px 觸控區
-                Dbg("縮合側邊欄: " & sc.Name & ", 原始寬度: " & sc.Tag.ToString)
+                Dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
             Else
                 ' 💡 恢復寬度，若無紀錄則預設為 250px
                 Dim prevDist As Integer = If(TypeOf sc.Tag Is Integer, DirectCast(sc.Tag, Integer), 250)
                 If prevDist < 50 Then prevDist = 250    ' 防止恢復值過小
                 sc.SplitterDistance = prevDist
-                Dbg("恢復側邊欄: " & sc.Name & ", 目標寬度: " & prevDist)
+                Dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
             End If
         End If
 
     End Sub
     Private Sub HandleTreeViewKeyPress(sender As Object, e As KeyPressEventArgs)
-        Dbg("開始", sender.Name)
+        ' by AntiGravity, 2026/04/04: Issue 2 移除 Dbg("開始")—高頻按鍵事件，不需要追蹤
 
         ' 在這裡處理所有TreeView KeyPress 事件的程式碼
         If TypeOf sender Is TreeView Then
@@ -1135,41 +1124,54 @@ Partial Class Form1
 #End Region
 #Region "  └ 其他輔助事件"
     Private Async Sub ExpandTreeToDefaultInbox(tv As TreeView)
+        ' by AntiGravity, 2026/04/06: 使用Guard Clauses重構，減少巢狀層數並確保 EndUpdate 執行安全性
         Dbg("開始", tv.Name)
+
+        ' 1. 第一層Guard Clauses：沒節點直接走人
         If tv.Nodes.Count = 0 Then Return
-        tv.BeginUpdate()
+
+        ' 2. 第二層Guard Clauses：根節點沒子節點也沒什麼好展開的
         Dim rootNode = tv.Nodes(0)
-        If tv.Nodes(0).Nodes.Count > 0 Then
+        If rootNode.Nodes.Count = 0 Then Return
+
+        tv.BeginUpdate()
+        Try
             rootNode.Expand()
-            ' ---------------------------------------------------------------
-            ' 【修正1】ExpandTreeToDefaultInbox —— 迴圈上限寫錯
-            ' 把 tv.Nodes.Count - 1 改成 tv.Nodes(0).Nodes.Count - 1
-            ' ---------------------------------------------------------------
             ' ✅ 修正: 應遍歷第一個 PST 的「子資料夾」數量，而非根節點數量
             ' 舊版: tv.Nodes.Count - 1 = PST 個數 (通常=1) ，只會檢查第一個子資料夾
             ' 新版: tv.Nodes(0).Nodes.Count - 1 = 第一個 PST 下的所有子資料夾數
-            For i As Integer = 0 To rootNode.Nodes.Count - 1
-                Try
-                    Dim node As TreeNode = rootNode.Nodes(i)
-                    If node.Text.Contains("Inbox") Or node.Text.Contains("收件匣") Then
-                        Dbg("發現預設收件匣", node.FullPath)
-                        If TypeOf tv Is Form1_SimTree Then
-                            ' 2026/3/18: 必須明確 TryCast 到 SimTree，才能正確呼叫 AddSelectedNode 更新 _selectedNodes 和高亮色
-                            ' 同時, 把自訂控制項裡面的 FireAfterSelect() 從 private 改成 public, 直接手動觸發 AfterSelect 事件
-                            Dim st As Form1_SimTree = DirectCast(tv, Form1_SimTree)
-                            st.AddSelectedNode(node)    ' ← SimTree 專用路徑: 直接更新 _selectedNodes + 高亮
-                            st.FireAfterSelect(node)    ' ← 直接手動觸發 AfterSelect 事件，讓統計邏輯跑起來
-                        ElseIf TypeOf tv Is TreeView Then
-                            ' 2026/3/18: debug找了好幾天, 首次切換到tab2時, SimTree2無法正確選取到預設的收件匣
-                            ' 結果原來是下面這行 tv.SelectedNode = node 送到SimTree控制項, 沒有被觸發選中的event.
-                            tv.SelectedNode = node
-                        End If
-                        tv.Focus() : tv.Refresh() : tv.EndUpdate() : Await Task.Yield : Exit Sub
-                    End If
-                Catch
-                End Try
+            ' 遍歷第一個 PST 的「子資料夾」
+            For Each node As TreeNode In rootNode.Nodes
+
+                ' 3. 第三層Guard Clauses：不是收件匣就繼續找下一個 (過濾模式)
+                If Not (node.Text.Contains("Inbox") Or node.Text.Contains("收件匣")) Then Continue For
+                Dbg("發現預設收件匣", node.FullPath)
+
+                ' 4. 使用 TryCast 簡化類型判斷，減少多層 If
+                Dim st = TryCast(tv, SimTree)
+                If st IsNot Nothing Then
+                    ' 2026/3/18: 必須明確 TryCast 到 SimTree，才能正確呼叫 AddSelectedNode 更新 _selectedNodes 和高亮色
+                    ' 同時, 把自訂控制項裡面的 FireAfterSelect() 從 private 改成 public, 直接手動觸發 AfterSelect 事件
+                    st.AddSelectedNode(node)    ' ← SimTree 專用路徑: 直接更新 _selectedNodes + 高亮
+                    st.FireAfterSelect(node)    ' ← 直接手動觸發 AfterSelect 事件，讓統計邏輯跑起來
+                ElseIf TypeOf tv Is TreeView Then
+                    ' 2026/3/18: debug找了好幾天, 首次切換到tab2時, SimTree2無法正確選取到預設的收件匣
+                    ' 結果原來是下方的 tv.SelectedNode = node 送到SimTree控制項, 沒有被觸發選中的event
+                    ' 一定要自己主動去手動觸發 FireAfterSelect 事件
+                    tv.SelectedNode = node
+                End If
+                tv.Focus() : tv.Refresh()
+
+                ' 成功選取後提早返回 (Finally 塊會負責執行 EndUpdate)
+                Dbg("結束", $"{tv.Name}: 已成功選取預設收件匣")
+                Return
             Next
-        End If
+            Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾") ' by AntiGravity, 2026/04/04: Issue 3
+        Finally
+            ' 💡 確保無論中途 Return 或發生 Exception，UI 都不會卡在 BeginUpdate
+            tv.EndUpdate()
+        End Try
+        Await Task.Yield()
 
     End Sub
     Private Function GetActiveTreeView() As TreeView
@@ -1177,7 +1179,6 @@ Partial Class Form1
         ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 TreeView/SimTree, by AntiGravity, 2026/03/30
         ''' </summary>
         ' 在需要觸發 AfterSelect 或其他操作時，能夠根據目前選中的 Tab 頁面，準確地獲取對應的 TreeView 控制項
-        ' todo: 可用在tabControl1, 簡化case select裡面的重複邏輯
         Select Case TabControl1.SelectedIndex
             Case 0 : Return TreeView1
             Case 1 : Return SimTree2
@@ -1214,8 +1215,8 @@ Partial Class Form1
         Dim args As New TreeViewEventArgs(targetNode)
         If tv Is TreeView1 Then
             TreeView1_AfterSelect(tv, args)                             ' TreeView1 是原生控制項，直接呼叫 handler
-        ElseIf TypeOf tv Is Form1_SimTree Then
-            DirectCast(tv, Form1_SimTree).FireAfterSelect(targetNode)   ' SimTree2 必須呼叫 FireAfterSelect 才會執行內部統計邏輯並更新狀態
+        ElseIf TypeOf tv Is SimTree Then
+            DirectCast(tv, SimTree).FireAfterSelect(targetNode)   ' SimTree2 必須呼叫 FireAfterSelect 才會執行內部統計邏輯並更新狀態
         End If
 
     End Sub
@@ -1279,6 +1280,33 @@ Partial Class Form1
         End If
 
     End Sub
+    Private Sub UpdateNumericIncrement(num As NumericUpDown, unitCombobox As ComboBox)
+        ''' <summary>
+        ''' 根據當前選擇的單位與數值，動態更新 NumericUpDown 的增減幅度 (2026/04/05 by AntiGravity)
+        ''' </summary>
+
+        If num Is Nothing OrElse unitCombobox Is Nothing Then Return
+        Dim unit As String = If(unitCombobox.SelectedItem IsNot Nothing, unitCombobox.SelectedItem.ToString(), "KB")
+
+        If unit = "MB" OrElse unit = "GB" Then  ' MB/GB 單位下，固定增量為 1
+            num.Maximum = 1024
+            num.Minimum = 0.1
+            num.Increment = 0.1
+            num.DecimalPlaces = 1
+        Else                                    ' KB 單位下，根據數值範圍採用不同的階梯式增量
+            num.Maximum = 9999
+            num.Minimum = 1
+            num.DecimalPlaces = 0
+            Dim val = num.Value
+            If val < 50 Then
+                num.Increment = 1
+            ElseIf val < 210 Then
+                num.Increment = 10
+            Else
+                num.Increment = 100
+            End If
+        End If
+    End Sub
     Private Sub AppendStatusHistory(msg As String, source As String)
         If String.IsNullOrWhiteSpace(msg) Then Return
 
@@ -1305,66 +1333,66 @@ Partial Class Form1
         Dim filteredHistory = _statusHistory.Where(Function(hisItem) hisItem.Source = source).ToList()
         If filteredHistory.Count = 0 Then Return
 
-        If historyPopup Is Nothing Then
-            historyListBox = New ListBox() With {.BorderStyle = BorderStyle.None,
+        If _historyPopup Is Nothing Then
+            HistoryListBox = New ListBox() With {.BorderStyle = BorderStyle.None,
                                                  .Font = New Font(Me.Font.FontFamily, 9),
                                                  .IntegralHeight = False,
                                                  .DrawMode = DrawMode.OwnerDrawFixed,
                                                  .ItemHeight = 24}
 
-            Dim host = New ToolStripControlHost(historyListBox)
+            Dim host = New ToolStripControlHost(HistoryListBox)
             host.Margin = New Padding(0)
             host.Padding = New Padding(0)
 
-            historyPopup = New ToolStripDropDown()
-            historyPopup.Items.Add(host)
-            historyPopup.Padding = New Padding(1)
-            historyPopup.BackColor = ThemeColors.AltoGray
-            historyPopup.DropShadowEnabled = True
+            _historyPopup = New ToolStripDropDown()
+            _historyPopup.Items.Add(host)
+            _historyPopup.Padding = New Padding(1)
+            _historyPopup.BackColor = ThemeColors.AltoGray
+            _historyPopup.DropShadowEnabled = True
 
             ' 防止點選 ListBox 項目時 ToolStrip 自動關閉
-            AddHandler historyPopup.Closing, Sub(s, ev)
-                                                 If ev.CloseReason = ToolStripDropDownCloseReason.ItemClicked Then ev.Cancel = True
-                                             End Sub
+            AddHandler _historyPopup.Closing, Sub(s, ev)
+                                                  If ev.CloseReason = ToolStripDropDownCloseReason.ItemClicked Then ev.Cancel = True
+                                              End Sub
         End If
 
-        historyHoverIndex = -1
-        historyListBox.Items.Clear()
+        _historyHoverIndex = -1
+        HistoryListBox.Items.Clear()
         For Each item In filteredHistory
-            historyListBox.Items.Add($"[{item.Time.ToString("HH:mm:ss")}] {item.Message}")
+            HistoryListBox.Items.Add($"[{item.Time:HH:mm:ss}] {item.Message}")
         Next
 
         ' 動態計算最佳寬度與高度
         Dim maxWidth As Integer = 300
-        Using g = historyListBox.CreateGraphics()
-            For Each item In historyListBox.Items
-                Dim sz = g.MeasureString(item.ToString(), historyListBox.Font)
+        Using g = HistoryListBox.CreateGraphics()
+            For Each item In HistoryListBox.Items
+                Dim sz = g.MeasureString(item.ToString(), HistoryListBox.Font)
                 If sz.Width > maxWidth Then maxWidth = CInt(sz.Width)
             Next
         End Using
 
         Dim numItemsToShow = Math.Min(15, filteredHistory.Count) ' 最多同時顯示 15 筆
         Dim targetWidth = maxWidth + 40
-        Dim targetHeight = (historyListBox.ItemHeight * numItemsToShow) + 2
+        Dim targetHeight = (HistoryListBox.ItemHeight * numItemsToShow) + 2
 
         ' by AntiGravity, 2026/04/02: 先解除前一次的限制，確保這次能夠正常縮小
-        historyListBox.MinimumSize = Size.Empty
+        HistoryListBox.MinimumSize = Size.Empty
 
         ' 鐵血手段鎖死所有容器尺寸，解決被壓縮成 20px 的 Bug
-        historyPopup.AutoSize = False
-        historyPopup.Size = New Size(targetWidth, targetHeight)
+        _historyPopup.AutoSize = False
+        _historyPopup.Size = New Size(targetWidth, targetHeight)
 
-        Dim hpHost = DirectCast(historyPopup.Items(0), ToolStripControlHost)
+        Dim hpHost = DirectCast(_historyPopup.Items(0), ToolStripControlHost)
         hpHost.AutoSize = False
         hpHost.Size = New Size(targetWidth, targetHeight)
 
-        historyListBox.Size = New Size(targetWidth, targetHeight)
-        historyListBox.MinimumSize = New Size(targetWidth, targetHeight)
-        historyListBox.ClearSelected()
+        HistoryListBox.Size = New Size(targetWidth, targetHeight)
+        HistoryListBox.MinimumSize = New Size(targetWidth, targetHeight)
+        HistoryListBox.ClearSelected()
 
         ' 自動捲動到最底下 (因為最新的資料被放在清單底端)
-        If historyListBox.Items.Count > numItemsToShow Then
-            historyListBox.TopIndex = historyListBox.Items.Count - numItemsToShow
+        If HistoryListBox.Items.Count > numItemsToShow Then
+            HistoryListBox.TopIndex = HistoryListBox.Items.Count - numItemsToShow
         End If
 
         Dim popupX As Integer = clickedLabel.Bounds.Left                    ' 將 Popup 精準顯示在 被點擊的 Label 正上方
@@ -1378,11 +1406,47 @@ Partial Class Form1
             If popupX < 0 Then popupX = 0
         End If
 
-        Dim ptOffset = New Point(popupX, -(historyPopup.Height + 5))
-        historyPopup.Show(StatusStrip1, ptOffset)
+        Dim ptOffset = New Point(popupX, -(_historyPopup.Height + 5))
+        _historyPopup.Show(StatusStrip1, ptOffset)
 
     End Sub
+
 #End Region
+    Public Class ThemeColors
+        ' by AntiGravity, 2026/04/01: 統一管理專案色彩, 方便日後切換深色/淺色主題
+        ''' <summary>主要視窗或Panel背景色 (#F2F2F2)</summary>
+        Public Shared ReadOnly Gray95 As Color = Color.FromArgb(242, 242, 242)
+        ''' <summary>滑鼠懸停(Hover)的背景色 (#E5E5E5)</summary>
+        Public Shared ReadOnly MercuryGray As Color = Color.FromArgb(229, 229, 229)
+        ''' <summary>輕微的格線或邊框色 (#E0E0E0)</summary>
+        Public Shared ReadOnly AltoGray As Color = Color.FromArgb(224, 224, 224)
+        ''' <summary>主視覺品牌藍色 (如按鈕、連結文字) (#0078D4)</summary>
+        Public Shared ReadOnly Brand_Blue As Color = Color.FromArgb(0, 120, 212)
+        ''' <summary>穩重的簡報藍色 (#4682B4)</summary>
+        Public Shared ReadOnly Steel_Blue As Color = Color.FromArgb(70, 130, 180)
+        ''' <summary>輕快的藍色 (#8DB3D3)</summary>
+        Public Shared ReadOnly Polo_Blue As Color = Color.FromArgb(141, 179, 211)
+        ''' <summary>深珊瑚紅 (#D83933)</summary>
+        Public Shared ReadOnly CoralRed As Color = Color.FromArgb(216, 57, 51)
+        ''' <summary>鐵鏽紅 (#A22C29)</summary>
+        Public Shared ReadOnly RustRed As Color = Color.FromArgb(162, 44, 41)
+        ''' <summary>深橘金色，用於平均線或參考線，具備極佳辨識度 (#E67E22)</summary>
+        Public Shared ReadOnly DeepAmber As Color = Color.FromArgb(230, 126, 34)
+        ''' <summary>在紅藍灰上都能看清的青色，用於平均線或參考線，具備極佳辨識度 (#00D4FF)</summary>
+        Public Shared ReadOnly Cyan As Color = Color.FromArgb(0, 212, 255)
+
+        ''' <summary>Chart2 背景 很淺的藍色 (#EDF4FF)</summary>
+        Public Shared ReadOnly bgColor As Color = Color.FromArgb(237, 244, 255)
+        ''' <summary>Chart2 格線 稍明顯的淡藍色 (#FFAA00)</summary>
+        Public Shared ReadOnly gridLine As Color = Color.FromArgb(208, 223, 245)
+        ''' <summary>Chart2 普通柱 天藍 (#4A8FD4)</summary>
+        Public Shared ReadOnly barNormal As Color = Color.FromArgb(74, 143, 212)
+        ''' <summary>Chart2 突顯柱 珊瑚紅 (#FF5533)</summary>
+        Public Shared ReadOnly barHighlight As Color = Color.FromArgb(255, 85, 51)
+        ''' <summary>Chart2 平均線 琥珀 (#FFAA00)</summary>
+        Public Shared ReadOnly avgLineColor As Color = Color.FromArgb(255, 170, 0)
+    End Class
 #End Region
+
 
 End Class

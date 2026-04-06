@@ -24,9 +24,9 @@ Partial Class Form1
 
     <System.Diagnostics.DebuggerStepThrough()>
     Private Sub InitializeComponent()
-        Dim ChartArea1 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
-        Dim Legend1 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
-        Dim Series1 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
+        Dim ChartArea2 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
+        Dim Legend2 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
+        Dim Series2 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
         Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(Form1))
         TabControl1 = New TabControl()
         TabPage1 = New TabPage()
@@ -50,7 +50,6 @@ Partial Class Form1
         SplitContainer3 = New SplitContainer()
         TreeView3 = New TreeView()
         CheckSubFolder3 = New CheckBox()
-        Button3_Stop = New Button()
         Button3 = New Button()
         GroupBox3 = New GroupBox()
         CountMax = New NumericUpDown()
@@ -90,12 +89,17 @@ Partial Class Form1
         Button5 = New Button()
         Label2 = New Label()
         TabPage6 = New TabPage()
+        SettingGroup = New GroupBox()
+        RenewCache = New Button()
+        ClearCache = New Button()
+        checkIncludeAllFolders = New CheckBox()
         LoadCache = New Button()
         SaveCache = New Button()
-        checkIncludeAllFolders = New CheckBox()
         CheckRDO = New CheckBox()
-        buttonClearCache = New Button()
+        DebugGroup = New GroupBox()
+        OKiLikeNoisy = New CheckBox()
         CheckDebug = New CheckBox()
+        DebugButton = New Button()
         ToolStripStatusLabel1 = New ToolStripStatusLabel()
         ProgressBar1 = New ToolStripStatusLabel()
         ProgressBar2 = New ToolStripStatusLabel()
@@ -135,6 +139,8 @@ Partial Class Form1
         SplitContainer5.Panel2.SuspendLayout()
         SplitContainer5.SuspendLayout()
         TabPage6.SuspendLayout()
+        SettingGroup.SuspendLayout()
+        DebugGroup.SuspendLayout()
         StatusStrip1.SuspendLayout()
         SuspendLayout()
         ' 
@@ -208,7 +214,7 @@ Partial Class Form1
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(612, 1244)
+        ListView1.Size = New Size(579, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -294,7 +300,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(612, 395)
+        ListView2.Size = New Size(579, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -318,18 +324,18 @@ Partial Class Form1
         ' 
         Chart2.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         Chart2.BackGradientStyle = DataVisualization.Charting.GradientStyle.TopBottom
-        ChartArea1.Name = "ChartArea1"
-        Chart2.ChartAreas.Add(ChartArea1)
-        Legend1.Name = "Legend1"
-        Chart2.Legends.Add(Legend1)
+        ChartArea2.Name = "ChartArea1"
+        Chart2.ChartAreas.Add(ChartArea2)
+        Legend2.Name = "Legend1"
+        Chart2.Legends.Add(Legend2)
         Chart2.Location = New Point(0, 400)
         Chart2.Margin = New Padding(4)
         Chart2.Name = "Chart2"
-        Series1.ChartArea = "ChartArea1"
-        Series1.Legend = "Legend1"
-        Series1.Name = "Series1"
-        Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(581, 857)
+        Series2.ChartArea = "ChartArea1"
+        Series2.Legend = "Legend1"
+        Series2.Name = "Series1"
+        Chart2.Series.Add(Series2)
+        Chart2.Size = New Size(548, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -359,7 +365,6 @@ Partial Class Form1
         ' SplitContainer3.Panel2
         ' 
         SplitContainer3.Panel2.Controls.Add(CheckSubFolder3)
-        SplitContainer3.Panel2.Controls.Add(Button3_Stop)
         SplitContainer3.Panel2.Controls.Add(Button3)
         SplitContainer3.Panel2.Controls.Add(GroupBox3)
         SplitContainer3.Panel2.Controls.Add(ListView3)
@@ -387,7 +392,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(522, 66)
+        CheckSubFolder3.Location = New Point(544, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -396,31 +401,17 @@ Partial Class Form1
         CheckSubFolder3.TextAlign = ContentAlignment.MiddleCenter
         CheckSubFolder3.UseVisualStyleBackColor = True
         ' 
-        ' Button3_Stop
-        ' 
-        Button3_Stop.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        Button3_Stop.FlatStyle = FlatStyle.System
-        Button3_Stop.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3_Stop.Location = New Point(535, 90)
-        Button3_Stop.Margin = New Padding(4)
-        Button3_Stop.Name = "Button3_Stop"
-        Button3_Stop.Size = New Size(96, 42)
-        Button3_Stop.TabIndex = 33
-        Button3_Stop.Text = "STOP"
-        Button3_Stop.UseVisualStyleBackColor = True
-        Button3_Stop.Visible = False
-        ' 
         ' Button3
         ' 
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
-        Button3.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(562, 16)
+        Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        Button3.Location = New Point(550, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
-        Button3.Size = New Size(96, 42)
+        Button3.Size = New Size(108, 60)
         Button3.TabIndex = 31
-        Button3.Text = "Go"
+        Button3.Text = "開始搜尋"
         Button3.UseVisualStyleBackColor = True
         ' 
         ' GroupBox3
@@ -431,11 +422,11 @@ Partial Class Form1
         GroupBox3.Controls.Add(Label3)
         GroupBox3.FlatStyle = FlatStyle.Flat
         GroupBox3.Font = New Font("Microsoft JhengHei UI", 9.5F)
-        GroupBox3.Location = New Point(517, 4)
+        GroupBox3.Location = New Point(500, 4)
         GroupBox3.Margin = New Padding(4)
         GroupBox3.Name = "GroupBox3"
         GroupBox3.Padding = New Padding(4)
-        GroupBox3.Size = New Size(239, 100)
+        GroupBox3.Size = New Size(185, 100)
         GroupBox3.TabIndex = 23
         GroupBox3.TabStop = False
         GroupBox3.Text = "GroupBox3"
@@ -498,7 +489,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(612, 1133)
+        ListView3.Size = New Size(579, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -587,7 +578,7 @@ Partial Class Form1
         GroupBox2.Margin = New Padding(4)
         GroupBox2.Name = "GroupBox2"
         GroupBox2.Padding = New Padding(4)
-        GroupBox2.Size = New Size(330, 100)
+        GroupBox2.Size = New Size(310, 100)
         GroupBox2.TabIndex = 19
         GroupBox2.TabStop = False
         GroupBox2.Text = "GroupBox2"
@@ -620,13 +611,13 @@ Partial Class Form1
         ' 
         NumberMax.Location = New Point(166, 60)
         NumberMax.Margin = New Padding(4)
-        NumberMax.Maximum = New Decimal(New Integer() {1000, 0, 0, 0})
+        NumberMax.Maximum = New Decimal(New Integer() {10000, 0, 0, 0})
         NumberMax.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
         NumberMax.Name = "NumberMax"
         NumberMax.Size = New Size(71, 28)
         NumberMax.TabIndex = 20
         NumberMax.TextAlign = HorizontalAlignment.Right
-        NumberMax.Value = New Decimal(New Integer() {10, 0, 0, 0})
+        NumberMax.Value = New Decimal(New Integer() {5, 0, 0, 0})
         ' 
         ' NumberMin
         ' 
@@ -716,7 +707,7 @@ Partial Class Form1
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(612, 1133)
+        ListView4.Size = New Size(579, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
@@ -736,7 +727,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(516, 15)
+        Button4.Location = New Point(483, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 42)
@@ -839,98 +830,169 @@ Partial Class Form1
         ' 
         ' TabPage6
         ' 
-        TabPage6.Controls.Add(LoadCache)
-        TabPage6.Controls.Add(SaveCache)
-        TabPage6.Controls.Add(checkIncludeAllFolders)
-        TabPage6.Controls.Add(CheckRDO)
-        TabPage6.Controls.Add(buttonClearCache)
-        TabPage6.Controls.Add(CheckDebug)
+        TabPage6.Controls.Add(SettingGroup)
+        TabPage6.Controls.Add(DebugGroup)
         TabPage6.Location = New Point(4, 37)
         TabPage6.Margin = New Padding(4)
         TabPage6.Name = "TabPage6"
         TabPage6.Padding = New Padding(4)
         TabPage6.Size = New Size(998, 1278)
         TabPage6.TabIndex = 5
-        TabPage6.Text = "Debug"
+        TabPage6.Text = "Setting"
         TabPage6.UseVisualStyleBackColor = True
         ' 
-        ' LoadCache
+        ' SettingGroup
         ' 
-        LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        LoadCache.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        LoadCache.Location = New Point(851, 193)
-        LoadCache.Name = "LoadCache"
-        LoadCache.Size = New Size(129, 63)
-        LoadCache.TabIndex = 12
-        LoadCache.Text = "Load Cache from Disk"
-        LoadCache.UseVisualStyleBackColor = True
+        SettingGroup.Controls.Add(RenewCache)
+        SettingGroup.Controls.Add(ClearCache)
+        SettingGroup.Controls.Add(checkIncludeAllFolders)
+        SettingGroup.Controls.Add(LoadCache)
+        SettingGroup.Controls.Add(SaveCache)
+        SettingGroup.Controls.Add(CheckRDO)
+        SettingGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        SettingGroup.Location = New Point(8, 16)
+        SettingGroup.Name = "SettingGroup"
+        SettingGroup.Size = New Size(500, 500)
+        SettingGroup.TabIndex = 14
+        SettingGroup.TabStop = False
+        SettingGroup.Text = "設定選項"
         ' 
-        ' SaveCache
+        ' RenewCache
         ' 
-        SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        SaveCache.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        SaveCache.Location = New Point(851, 107)
-        SaveCache.Name = "SaveCache"
-        SaveCache.Size = New Size(129, 63)
-        SaveCache.TabIndex = 11
-        SaveCache.Text = "Save Cache to Disk"
-        SaveCache.UseVisualStyleBackColor = True
+        RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        RenewCache.BackColor = Color.Azure
+        RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        RenewCache.ForeColor = SystemColors.ActiveCaptionText
+        RenewCache.Location = New Point(167, 116)
+        RenewCache.Name = "RenewCache"
+        RenewCache.Size = New Size(129, 63)
+        RenewCache.TabIndex = 13
+        RenewCache.Text = "更新快取"
+        RenewCache.UseVisualStyleBackColor = False
+        ' 
+        ' ClearCache
+        ' 
+        ClearCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        ClearCache.BackColor = Color.MistyRose
+        ClearCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        ClearCache.ForeColor = SystemColors.ActiveCaptionText
+        ClearCache.Location = New Point(167, 29)
+        ClearCache.Name = "ClearCache"
+        ClearCache.Size = New Size(129, 63)
+        ClearCache.TabIndex = 6
+        ClearCache.Text = "清除快取"
+        ClearCache.UseVisualStyleBackColor = False
         ' 
         ' checkIncludeAllFolders
         ' 
         checkIncludeAllFolders.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         checkIncludeAllFolders.Appearance = Appearance.Button
         checkIncludeAllFolders.FlatStyle = FlatStyle.System
-        checkIncludeAllFolders.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        checkIncludeAllFolders.Location = New Point(706, 107)
+        checkIncludeAllFolders.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        checkIncludeAllFolders.Location = New Point(16, 29)
         checkIncludeAllFolders.Margin = New Padding(4)
         checkIncludeAllFolders.Name = "checkIncludeAllFolders"
+        checkIncludeAllFolders.Padding = New Padding(10)
         checkIncludeAllFolders.Size = New Size(129, 63)
         checkIncludeAllFolders.TabIndex = 10
-        checkIncludeAllFolders.Text = "Include All Folders"
+        checkIncludeAllFolders.Text = "顯示全部資料夾"
         checkIncludeAllFolders.TextAlign = ContentAlignment.MiddleCenter
         checkIncludeAllFolders.UseVisualStyleBackColor = True
+        ' 
+        ' LoadCache
+        ' 
+        LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        LoadCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        LoadCache.Location = New Point(318, 116)
+        LoadCache.Name = "LoadCache"
+        LoadCache.Size = New Size(129, 63)
+        LoadCache.TabIndex = 12
+        LoadCache.Text = "快取讀回從 SSD"
+        LoadCache.UseVisualStyleBackColor = True
+        ' 
+        ' SaveCache
+        ' 
+        SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SaveCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        SaveCache.Location = New Point(318, 29)
+        SaveCache.Name = "SaveCache"
+        SaveCache.Size = New Size(129, 63)
+        SaveCache.TabIndex = 11
+        SaveCache.Text = "快取存入到 SSD"
+        SaveCache.UseVisualStyleBackColor = True
         ' 
         ' CheckRDO
         ' 
         CheckRDO.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckRDO.Appearance = Appearance.Button
+        CheckRDO.BackColor = Color.Transparent
         CheckRDO.FlatStyle = FlatStyle.System
-        CheckRDO.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        CheckRDO.Location = New Point(706, 193)
+        CheckRDO.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        CheckRDO.Location = New Point(16, 116)
         CheckRDO.Margin = New Padding(4)
         CheckRDO.Name = "CheckRDO"
         CheckRDO.Size = New Size(129, 63)
         CheckRDO.TabIndex = 9
-        CheckRDO.Text = "Load Redemption"
+        CheckRDO.Text = "啟動 RDO"
         CheckRDO.TextAlign = ContentAlignment.MiddleCenter
-        CheckRDO.UseVisualStyleBackColor = True
+        CheckRDO.UseVisualStyleBackColor = False
         ' 
-        ' buttonClearCache
+        ' DebugGroup
         ' 
-        buttonClearCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        buttonClearCache.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        buttonClearCache.Location = New Point(851, 20)
-        buttonClearCache.Name = "buttonClearCache"
-        buttonClearCache.Size = New Size(129, 63)
-        buttonClearCache.TabIndex = 6
-        buttonClearCache.Text = "Clear Caches Memory"
-        buttonClearCache.UseVisualStyleBackColor = True
+        DebugGroup.Controls.Add(OKiLikeNoisy)
+        DebugGroup.Controls.Add(CheckDebug)
+        DebugGroup.Controls.Add(DebugButton)
+        DebugGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        DebugGroup.Location = New Point(8, 531)
+        DebugGroup.Name = "DebugGroup"
+        DebugGroup.Size = New Size(500, 500)
+        DebugGroup.TabIndex = 0
+        DebugGroup.TabStop = False
+        DebugGroup.Text = "Debug"
+        ' 
+        ' OKiLikeNoisy
+        ' 
+        OKiLikeNoisy.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        OKiLikeNoisy.Appearance = Appearance.Button
+        OKiLikeNoisy.FlatAppearance.CheckedBackColor = Color.LightCoral
+        OKiLikeNoisy.FlatStyle = FlatStyle.System
+        OKiLikeNoisy.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        OKiLikeNoisy.Location = New Point(16, 126)
+        OKiLikeNoisy.Margin = New Padding(4)
+        OKiLikeNoisy.Name = "OKiLikeNoisy"
+        OKiLikeNoisy.Padding = New Padding(10)
+        OKiLikeNoisy.Size = New Size(129, 63)
+        OKiLikeNoisy.TabIndex = 13
+        OKiLikeNoisy.Text = "OK我不怕吵"
+        OKiLikeNoisy.TextAlign = ContentAlignment.MiddleCenter
+        OKiLikeNoisy.UseVisualStyleBackColor = True
         ' 
         ' CheckDebug
         ' 
         CheckDebug.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckDebug.Appearance = Appearance.Button
+        CheckDebug.FlatAppearance.CheckedBackColor = Color.FromArgb(CByte(192), CByte(255), CByte(192))
         CheckDebug.FlatStyle = FlatStyle.System
-        CheckDebug.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        CheckDebug.Location = New Point(706, 20)
+        CheckDebug.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        CheckDebug.Location = New Point(16, 40)
         CheckDebug.Margin = New Padding(4)
         CheckDebug.Name = "CheckDebug"
         CheckDebug.Size = New Size(129, 63)
         CheckDebug.TabIndex = 5
-        CheckDebug.Text = "Debug Window"
+        CheckDebug.Text = "顯示 Debug 視窗"
         CheckDebug.TextAlign = ContentAlignment.MiddleCenter
         CheckDebug.UseVisualStyleBackColor = True
+        ' 
+        ' DebugButton
+        ' 
+        DebugButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        DebugButton.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        DebugButton.Location = New Point(167, 40)
+        DebugButton.Name = "DebugButton"
+        DebugButton.Size = New Size(129, 63)
+        DebugButton.TabIndex = 13
+        DebugButton.Text = "測試用按鈕"
+        DebugButton.UseVisualStyleBackColor = True
         ' 
         ' ToolStripStatusLabel1
         ' 
@@ -1029,6 +1091,8 @@ Partial Class Form1
         CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer5.ResumeLayout(False)
         TabPage6.ResumeLayout(False)
+        SettingGroup.ResumeLayout(False)
+        DebugGroup.ResumeLayout(False)
         StatusStrip1.ResumeLayout(False)
         StatusStrip1.PerformLayout()
         ResumeLayout(False)
@@ -1096,7 +1160,6 @@ Partial Class Form1
     Friend WithEvents CheckSubFolder3 As CheckBox
     Friend WithEvents Label3 As Label
     Friend WithEvents Button3 As Button
-    Friend WithEvents Button3_Stop As Button
 
     Friend WithEvents TabPage4 As TabPage
     Friend WithEvents TreeView4 As TreeView
@@ -1119,8 +1182,13 @@ Partial Class Form1
     Friend WithEvents checkIncludeAllFolders As CheckBox
     Friend WithEvents CheckDebug As CheckBox
     Friend WithEvents CheckRDO As CheckBox
-    Friend WithEvents buttonClearCache As Button
+    Friend WithEvents ClearCache As Button
     Friend WithEvents LoadCache As Button
     Friend WithEvents SaveCache As Button
+    Friend WithEvents DebugButton As Button
+    Friend WithEvents DebugGroup As GroupBox
+    Friend WithEvents OKiLikeNoisy As CheckBox
+    Friend WithEvents SettingGroup As GroupBox
+    Friend WithEvents RenewCache As Button
 
 End Class

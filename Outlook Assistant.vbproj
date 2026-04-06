@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -33,6 +33,7 @@
 
   <ItemGroup>
     <Compile Remove="Form1_bak.vb" />
+    <Compile Remove="Form1_SQLite.vb" />
     <Compile Remove="SelectColorTheme.vb" />
   </ItemGroup>
 
@@ -72,6 +73,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="WinForms.DataVisualization" Version="1.9.2" />
   </ItemGroup>
@@ -112,10 +114,6 @@
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.vb</LastGenOutput>
     </None>
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Update="Form1_Main.vb" />
-    <Compile Update="Form1_ComL3.vb" />
   </ItemGroup>
 
 </Project>

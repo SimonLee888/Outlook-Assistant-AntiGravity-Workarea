@@ -480,7 +480,7 @@ Module moduleStore
         '    _intProcessedCount = 0
         '    ' 在背景執行計算, 傳回給yearCounts
         '    Dim yearCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetYearCountsAsync_CL(selectedFolder, CheckSub2.Checked)
-        '    ShowTab2Result(yearCounts)
+        '    ShowResultTab2(yearCounts)
         '    stopwatch.Stop() ' 停止計時, 顯示總共花費的時間
         '    StatusUpdate(sender, yearCounts, stopwatch)
         '    sender.Enabled = True : sender.Focus() : Cursor = Cursors.Default
@@ -780,10 +780,10 @@ Module moduleStore
         '' todo: 3. for each item + for each attach 的迴圈, 是否改用items.setColumn 來限制欄位加快速度?
         '' todo: 4. 有無檔名+有無大小限制, 各種組合, 是否有更好的邏輯判斷式, 或是判斷順序?
         'If Not CheckAttachName.Checked OrElse TextBox3.Text.Length = 0 Then
-        '    Await ShowTab3Result(filteredBySize) '不管附件檔名, 只篩附件和大小
+        '    Await ShowResultTab3(filteredBySize) '不管附件檔名, 只篩附件和大小
         'Else ' 進一步篩選附件檔名, 及指定關鍵字
         '    Dim filteredByKeyword As List(Of MailItem) = Await FilterAttachByKeywordAsync3(filteredBySize, TextBox3.Text)
-        '    Await ShowTab3Result(filteredByKeyword)
+        '    Await ShowResultTab3(filteredByKeyword)
         'End If
         '' todo: 5. 試試以下幾個DASL 屬性 (是MAPI Extention??)
         ''DASL Name http: //schemas.microsoft.com/mapi/proptag/0x3707001F

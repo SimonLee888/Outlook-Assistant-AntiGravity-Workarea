@@ -100,9 +100,9 @@ Partial Class Form1
     Private Const RDW_ALLCHILDREN As Integer = &H80                 ' debugForm resize 時閃爍, 改手動redraw
     Private Const RDW_INVALIDATE As Integer = &H1                   ' debugForm resize 時閃爍, 改手動redraw
     Private Const RDW_UPDATENOW As Integer = &H100                  ' debugForm resize 時閃爍, 改手動redraw
-    Private Const RDW_ERASE As Integer = &H4                        ' 2026/03/28 by AntiGravity: 補上缺失定義
-    Private Const RDW_FRAME As Integer = &H400                      ' 2026/03/28 by AntiGravity: 補上缺失定義
-    Private Const WM_SETREDRAW As Integer = &HB                     ' 2026/3/26 by AntiGravity
+    Private Const RDW_ERASE As Integer = &H4                        ' 2026/03/28 by Gemini: 補上缺失定義
+    Private Const RDW_FRAME As Integer = &H400                      ' 2026/03/28 by Gemini: 補上缺失定義
+    Private Const WM_SETREDRAW As Integer = &HB                     ' 2026/3/26 by Gemini
     ' ↓ 新增 (2026-03-20) ListView1 進入資料夾用
     Private Const TVM_SELECTITEM As Integer = &H110B                ' = &H1100 + 11
     Private Const TVGN_CARET As Integer = &H9                       ' SendMessage 選取 Treeview 游標節點
@@ -138,11 +138,11 @@ Partial Class Form1
         For Each item As Object In nodesOrItems
             Dim text As String = If(TypeOf item Is TreeNode, DirectCast(item, TreeNode).Text, DirectCast(item, ListViewItem).Text)
             If text.Replace(" - ", "") = itemName.Replace(" - ", "") Then
-                Dbg("結束", $"找到: {itemName}") ' by AntiGravity, 2026/04/04: 補上找到時的結束（Issue 2）
+                Dbg("結束", $"找到: {itemName}") ' by Gemini, 2026/04/04: 補上找到時的結束（Issue 2）
                 Return item
             End If
         Next
-        Dbg("結束", $"找不到: {itemName}") ' by AntiGravity, 2026/04/04: 補上找不到時的結束（Issue 2）
+        Dbg("結束", $"找不到: {itemName}") ' by Gemini, 2026/04/04: 補上找不到時的結束（Issue 2）
         Return Nothing
 
     End Function

@@ -44,8 +44,8 @@ Partial Class Form1
     Private Shared ReadOnly _cacheFolderSizeAll As New ConcurrentDictionary(Of String, Long)        ' 整支子樹的所有子目錄郵件大小加總
 
     Private Shared ReadOnly _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)                  ' 資料夾是否為郵件類型快取
-    Private Shared ReadOnly _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))    ' 記什麼? 資料夾結構??
-    Private Shared ReadOnly _cacheSubFolderList As New ConcurrentDictionary(Of String, List(Of Outlook.Folder)) ' by AntiGravity: 記住 GetSubFolderList 的樹狀展開平坦化清單
+    Private Shared ReadOnly _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))    ' 已經排序的子資料夾清單快取 (GetSortedSubFolders) ，Key 是 FolderPath
+    Private Shared ReadOnly _cacheSubFolderList As New ConcurrentDictionary(Of String, List(Of Outlook.Folder)) ' by Gemini: 記住 GetSubFolderList 的樹狀展開平坦化清單
     Private Shared ReadOnly _cacheAttachFilename As New ConcurrentDictionary(Of String, List(Of String))        ' 附件檔名清單
 
     Public Structure MailItemInfo
@@ -58,14 +58,14 @@ Partial Class Form1
         Dim AttachCount As Integer
     End Structure
     Public Structure L3ProgressReport
-        ' by AntiGravity, 2026/04/02: 統一進度回報結構，用於 IProgress(Of T)
+        ' by Gemini, 2026/04/02: 統一進度回報結構，用於 IProgress(Of T)
         Dim CurrentCount As Integer   ' 目前完成數 (郵件數、資料夾數或位元組)
         Dim TotalCount As Integer     ' 總數 (分母)
         Dim Message As String         ' 顯示在狀態列的文字
         Dim IsIndeterminate As Boolean ' 是否為不確定的進度 (跑馬燈模式)
     End Structure
     Private Structure FolderSortInfo
-        ' by AntiGravity, 2026/03/29: 用於 GetSortedSubFolders 排序優化，減少 COM 屬性讀取次數 (O(N) vs O(N log N))
+        ' by Gemini, 2026/03/29: 用於 GetSortedSubFolders 排序優化，減少 COM 屬性讀取次數 (O(N) vs O(N log N))
         Dim FolderObj As Outlook.Folder
         Dim Name As String
         Dim HasChinese As Boolean
@@ -83,7 +83,7 @@ Partial Class Form1
 #Region "■ 10 底層 COM 函數群 (新設計，現役主力) "
 #Region "  ├ 各種載入函數"
     Private Sub InitOutlookNamespace()
-        ' by AntiGravity, 2026/04/01: 從 Form1_Load 抽離出 Outlook 初始化邏輯，優化結構並加入 TryMarshalRelease 以防內存洩漏
+        ' by Gemini, 2026/04/01: 從 Form1_Load 抽離出 Outlook 初始化邏輯，優化結構並加入 TryMarshalRelease 以防內存洩漏
         ' 1. 檢查系統中是否已經啟動 Outlook
         Dim processes() As Process = Process.GetProcessesByName("OUTLOOK")
         If processes.Length = 0 Then    ' 如果 Outlook 尚未啟動，顯示訊息並關閉應用程式
@@ -262,7 +262,7 @@ Partial Class Form1
         Dim stores As List(Of Outlook.Store) = space.Stores.Cast(Of Outlook.Store)().ToList()
         ' 使用 LINQ 排序Outlook.Store
         stores = stores.OrderBy(Function(st) If(TextHasChineseChar(st.DisplayName), 1, 0)).ThenBy(Function(st) st.DisplayName).ToList()
-        Dbg("結束", $"Profile={space.CurrentProfileName} | 庫數量: {stores.Count}") ' 2026/03/31 by AntiGravity
+        Dbg("結束", $"Profile={space.CurrentProfileName} | 庫數量: {stores.Count}") ' 2026/03/31 by Gemini
         Return stores
         ' ⚠️ 注意: 不在這裡 ReleaseComObject(space)
         ' space 就是外層的 objNameSpace，釋放後其他地方 (Tab2/Tab3 等) 再用 objNameSpace 會觸發 RCW 已釋放的例外
@@ -272,7 +272,7 @@ Partial Class Form1
     Private Function GetSortedSubFolders(folder As Outlook.Folder) As List(Of Outlook.Folder)
         ' ==========================================
         ' 取得引數folder下的所有subFolders並排序後傳回
-        ' 優化紀錄: 2026/03/29 by AntiGravity (Gemini 3.1 Pro)
+        ' 優化紀錄: 2026/03/29 by Gemini (Gemini 3.1 Pro)
         ' 1. 加入 L3 過濾: 只保留郵件目錄 (olMailItem)，排除行事曆/聯絡人等
         ' 2. 單次屬性讀取: 先快取 Name 後排序，避開 LINQ 重複打 COM 的 N log N 效能陷阱
         ' ==========================================
@@ -288,12 +288,12 @@ Partial Class Form1
             ''' subFolders = subFolders.OrderBy(Function(subFolder) If(TextHasChineseChar(subFolder.Name), 1, 0)).
             '''                         ThenBy(Function(subFolder) subFolder.Name).ToList()
             ''' [上面是舊版紀錄] 原本使用 LINQ 直接 Cast().ToList() 後排序，缺點是 OrderBy 會重複觸發 COM 讀取屬性
-            ' [下面是新版優化] by AntiGravity, 2026/03/29:
+            ' [下面是新版優化] by Gemini, 2026/03/29:
             ' 1. 動態過濾: 根據 checkIncludeAllFolders.Checked 決定是否顯示非郵件目錄
             ' 2. 單次屬性讀取: 先快取 Name 後排序，避開 LINQ 重複打 COM 的 N log N 效能陷阱
             For Each subFolder As Outlook.Folder In folder.Folders
                 ' 🔥 核心過濾: 正常若「沒勾選顯示全部」且「不是郵件資料夾」時就排除
-                ' by AntiGravity, 2026/04/01: 明確短路邏輯
+                ' by Gemini, 2026/04/01: 明確短路邏輯
                 ' 如果「沒勾選顯示全部」且「不是郵件資料夾」時就排除
                 If Not checkIncludeAllFolders.Checked Then
                     ' 只有在非全部顯示模式下，才去調用 IsMailFolder (現在已具備快取)
@@ -318,7 +318,7 @@ Partial Class Form1
         ' --------------------------------------------------------------
         ' GetSubFolderList: 取得目標資料夾下, 整個資料夾子樹清單 (BFS，含子資料夾)
         ' ① OOM BFS: 目前唯一的路徑，使用 Outlook Object Model 廣度優先搜尋
-        ' by AntiGravity, 2026/04/02: 導入 IProgress 支援
+        ' by Gemini, 2026/04/02: 導入 IProgress 支援
         ' --------------------------------------------------------------
         If _iLikeNoisy Then Dbg("開始", rootFolder.Name)
         Dim sw As New Stopwatch() : sw.Start()
@@ -350,7 +350,7 @@ Partial Class Form1
             Try
                 For Each subFolder As Outlook.Folder In current.Folders
                     ' 🔥 核心過濾: 正常若「沒勾選顯示全部」且「不是郵件資料夾」時就排除
-                    ' by AntiGravity, 2026/04/01: 明確短路邏輯
+                    ' by Gemini, 2026/04/01: 明確短路邏輯
                     If Not checkIncludeAllFolders.Checked Then
                         If Not IsMailFolder(subFolder) Then Continue For
                     End If
@@ -361,10 +361,10 @@ Partial Class Form1
                 Dbg("GetSubFolderList ① OOM 失敗", current.Name & " - " & ex.Message)
             End Try
 
-            ' by AntiGravity, 2026/04/05: 在大迴圈中增加中斷檢查，減少長時間阻塞
+            ' by Gemini, 2026/04/05: 在大迴圈中增加中斷檢查，減少長時間阻塞
             If _cancelRequested Then Exit While
 
-            ' by AntiGravity, 2026/04/02: 100ms 節流回報已發現的資料夾數
+            ' by Gemini, 2026/04/02: 100ms 節流回報已發現的資料夾數
             If progress IsNot Nothing AndAlso swThrottle.ElapsedMilliseconds >= 100 Then
                 progress.Report(New L3ProgressReport With {.CurrentCount = result.Count, .Message = $"正在展開資料夾結構: 已發現 {result.Count} 個資料夾..."})
                 swThrottle.Restart()
@@ -384,7 +384,7 @@ Partial Class Form1
     End Function
     Private Function GetSubFolderList_RDO(rootFolder As Redemption.RDOFolder, includeSubF As Boolean) As List(Of Redemption.RDOFolder)
         ' --------------------------------------------------------------
-        ' 2026/3/24 by AntiGravity: GetSubFolderList_RDO
+        ' 2026/3/24 by Gemini: GetSubFolderList_RDO
         ' 目的: 專門提供給 RDO 平行路徑使用，回傳 List(Of Redemption.RDOFolder)
         ' 說明: 因為 Redemption 是 free-threaded，可以用 Parallel.ForEach 安全平行展開子樹
         ' --------------------------------------------------------------
@@ -447,7 +447,7 @@ Partial Class Form1
             nodeList.Add(node)
             ' PST root folder 幾乎 100% 都有子資料夾，這個假設安全；
             ' 就算 PST 真的空了，展開時 LoadSubFolderToTreeView 清除 ":::" 後不加任何子節點，節點就會自動收起 "+" 號，行為正確
-            ' by AntiGravity, 2026/04/04: 移除每筆 Dbg("", root.Name)，改在結束時一次輸出節點總計（Issue 1 高頻去噪）
+            ' by Gemini, 2026/04/04: 移除每筆 Dbg("", root.Name)，改在結束時一次輸出節點總計（Issue 1 高頻去噪）
         Next
         tv.Nodes.AddRange(nodeList.ToArray()) ' 將所有組裝好的節點一次性添加到 tv.Nodes
         Dbg("結束", $"{tv.Name} 共 {nodeList.Count} 個 Store")
@@ -469,7 +469,7 @@ Partial Class Form1
                 Dim node As New TreeNode(folder.Name) With {.Tag = folder}
                 If GetCachedFolderCount(folder) > 0 Then node.Nodes.Add(":::")
                 nodeList.Add(node) ' 先加進List在記憶體中快速操作, 而不是直接加到Treeview.Nodes
-                ' by AntiGravity, 2026/04/04: 移除每筆 Dbg("", ...)，改在結束時一次輸出（Issue 1 高頻去噪）
+                ' by Gemini, 2026/04/04: 移除每筆 Dbg("", ...)，改在結束時一次輸出（Issue 1 高頻去噪）
             Next
             selectedNode.Nodes.AddRange(nodeList.ToArray()) ' 將所有節點一次性添加到 selectedNode.Nodes
         End If
@@ -478,7 +478,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ L2.5 快取存取點 (Cache Proxy Layer)"
-    ' 2026/03/27 by AntiGravity: 新增 L2.5 快取存取點 (Cache Proxy Layer)，保護 L3 不被頻繁呼叫
+    ' 2026/03/27 by Gemini: 新增 L2.5 快取存取點 (Cache Proxy Layer)，保護 L3 不被頻繁呼叫
     ' todo: 將快取存入SSD, 避免重開機後重新讀取
     Private Function GetCachedMailCount(folder As Outlook.Folder) As Integer
         Dim count As Integer, fPath As String = folder.FolderPath
@@ -517,7 +517,7 @@ Partial Class Form1
 
     End Function
     Private Async Function GetCachedFolderSizeAsync(folder As Outlook.Folder) As Task(Of Long)
-        ' 2026/3/29 by AntiGravity: L2.5 快取代理層 - 取得單一資料夾本層的大小 (含快取機制)
+        ' 2026/3/29 by Gemini: L2.5 快取代理層 - 取得單一資料夾本層的大小 (含快取機制)
         Dim size As Long, fPath As String = folder.FolderPath
         If _cacheFolderSize.TryGetValue(fPath, size) Then Return size
 
@@ -527,7 +527,7 @@ Partial Class Form1
 
     End Function
     Private Async Function GetCachedFolderSizeAllAsync(folder As Outlook.Folder) As Task(Of Long)
-        ' 2026/3/29 by AntiGravity: L2.5 快取代理層 - 取得整棵子樹的大小總計 (含快取機制)
+        ' 2026/3/29 by Gemini: L2.5 快取代理層 - 取得整棵子樹的大小總計 (含快取機制)
         Dim size As Long, fPath As String = folder.FolderPath
         If _cacheFolderSizeAll.TryGetValue(fPath, size) Then Return size
 
@@ -537,7 +537,7 @@ Partial Class Form1
 
     End Function
     Private Async Function GetCachedMailWithAttachment(folder As Outlook.Folder, progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of MailItemInfo))
-        ' by AntiGravity, 2026/04/05: L2.5 快取代理層 - Tab3 Phase 1 快取 - 取得單一資料夾本層含附件的郵件清單
+        ' by Gemini, 2026/04/05: L2.5 快取代理層 - Tab3 Phase 1 快取 - 取得單一資料夾本層含附件的郵件清單
         Dbg("開始", folder.Name)
 
         Dim key As String = folder.FolderPath
@@ -548,12 +548,12 @@ Partial Class Form1
 
         Dim targetMailList As List(Of MailItemInfo) = Await GetMailWithAttachment(folder, progress)
         _cachePhase1tab3(key) = New FolderCacheTab3 With {.mailWithAttachment = targetMailList, .ItemCountWhenCached = currentCount}
-        ' by AntiGravity, 2026/04/05: 這裡不使用 TryAdd/TryUpdate，因為我們不在意多執行幾次 GetMailWithAttachment 的成本，反而要確保最後的 cache entry 是正確的 (ItemCountWhenCached 與實際快取的 mail list 對應)，所以直接覆蓋式賦值
+        ' by Gemini, 2026/04/05: 這裡不使用 TryAdd/TryUpdate，因為我們不在意多執行幾次 GetMailWithAttachment 的成本，反而要確保最後的 cache entry 是正確的 (ItemCountWhenCached 與實際快取的 mail list 對應)，所以直接覆蓋式賦值
 
         Return targetMailList
     End Function
     Private Function GetCachedAttachFilename(mail As MailItemInfo) As List(Of String)
-        ' by AntiGravity, 2026/04/04: L2.5 快取代理層 - 取得附件檔名清單 (含 _cacheAttachFilename 機制)
+        ' by Gemini, 2026/04/04: L2.5 快取代理層 - 取得附件檔名清單 (含 _cacheAttachFilename 機制)
         Dim result As List(Of String) = Nothing
         If _cacheAttachFilename.TryGetValue(mail.EntryID, result) Then Return result
 
@@ -563,7 +563,7 @@ Partial Class Form1
 
     End Function
     Friend Async Function PreloadAttachmentCacheRDOAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task
-        ' by AntiGravity, 2026/04/05: L2.5 快取代理層 - 批次預熱附件檔名快取
+        ' by Gemini, 2026/04/05: L2.5 快取代理層 - 批次預熱附件檔名快取
         ' 利用 Redemption (RDO) Free-Threaded 安全的特性，在進入 L2 迴圈前平行提早把附件檔名讀進 _cacheAttachFilename。
         ' 完全不動原來的迴圈運作邏輯，以防呆的姿態大幅壓縮等待時間。
         If _rdo Is Nothing OrElse sourceList.Count = 0 Then Return
@@ -664,7 +664,7 @@ Partial Class Form1
         ' ① MAPI: PR_MESSAGE_SIZE_EXTENDED (0x0E080014, PT_I8) — 64-bit，無溢位風險
         Try
             Const PR_SIZE_EXTENDED As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080014"
-            ' by AntiGravity, 2026/03/29: 移除 TypeOf 判斷，CLng() 可自動處理 Long/Integer 轉型，若屬性不存在或回傳 Nothing/DBNull，CLng 會拋例外進入 Catch
+            ' by Gemini, 2026/03/29: 移除 TypeOf 判斷，CLng() 可自動處理 Long/Integer 轉型，若屬性不存在或回傳 Nothing/DBNull，CLng 會拋例外進入 Catch
             Return CLng(mail.PropertyAccessor.GetProperty(PR_SIZE_EXTENDED))
         Catch ex As System.Exception
             Dbg("GetMailSize ① PR_MESSAGE_SIZE_EXTENDED失敗", ex.Message)
@@ -673,7 +673,7 @@ Partial Class Form1
         ' ② MAPI: PR_MESSAGE_SIZE (0x0E080003, PT_LONG) — 32-bit，超大郵件理論上溢位
         Try
             Const PR_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
-            ' by AntiGravity, 2026/03/29: 同上，移除 TypeOf 判斷
+            ' by Gemini, 2026/03/29: 同上，移除 TypeOf 判斷
             Return CLng(mail.PropertyAccessor.GetProperty(PR_SIZE))
         Catch ex As System.Exception
             Dbg("GetMailSize ② PR_MESSAGE_SIZE失敗", ex.Message)
@@ -706,7 +706,7 @@ Partial Class Form1
             Try
                 rdoFolder = _rdo.GetFolderFromID(folder.EntryID, folder.StoreID)
                 Dim count As Integer = rdoFolder.Items.Count
-                ' by AntiGravity, 2026/04/04: 成功路徑靜默，不輸出 Dbg（Issue 1 高頻去噪）
+                ' by Gemini, 2026/04/04: 成功路徑靜默，不輸出 Dbg（Issue 1 高頻去噪）
                 Return count
             Catch ex As System.Exception
                 Dbg("錯誤路徑", $"GetMailCount ⓪ RDO: {folder.Name} | {ex.Message}")
@@ -718,7 +718,7 @@ Partial Class Form1
         Try
             Const PR_CONTENT_COUNT As String = "http://schemas.microsoft.com/mapi/proptag/0x36020003"
             Dim count As Integer = CInt(folder.PropertyAccessor.GetProperty(PR_CONTENT_COUNT))
-            ' by AntiGravity, 2026/04/04: 成功路徑靜默，不輸出 Dbg
+            ' by Gemini, 2026/04/04: 成功路徑靜默，不輸出 Dbg
             Return count
         Catch ex As System.Exception
             Dbg("錯誤路徑", $"GetMailCount ① MAPI: {folder.Name} | {ex.Message}")
@@ -729,7 +729,7 @@ Partial Class Form1
             Try
                 items = folder.Items
                 Dim count As Integer = items.Count
-                ' by AntiGravity, 2026/04/04: 成功路徑靜默，不輸出 Dbg
+                ' by Gemini, 2026/04/04: 成功路徑靜默，不輸出 Dbg
                 Return count
             Finally
                 TryMarshalRelease(items)
@@ -745,7 +745,7 @@ Partial Class Form1
     Private Async Function GetMailCountAll(rootFolder As Outlook.Folder, Optional progress As IProgress(Of L3ProgressReport) = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
         ' GetMailCountAll v3.5: 讀取某資料夾及其整棵子樹的郵件總數
-        ' by AntiGravity, 2026/04/02: 升級為 IProgress(Of L3ProgressReport) 並加入 100ms 節流回報
+        ' by Gemini, 2026/04/02: 升級為 IProgress(Of L3ProgressReport) 並加入 100ms 節流回報
         '
         ' v3.0 變更說明 (2026-03-22):
         '   合併原 GetMailCountAll + GetMailCountAllParallel 為單一函數，
@@ -814,7 +814,7 @@ Partial Class Form1
             End Try
         End If
 
-        ' 2026/3/24 by AntiGravity: ① 平行 BFS (RDO)
+        ' 2026/3/24 by Gemini: ① 平行 BFS (RDO)
         '   使用 GetSubFolderList_RDO 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add 快速加總
         '   Redemption (RDO) 是 free-threaded，在背景平行執行安全且極為高效
         If _rdo IsNot Nothing Then
@@ -836,7 +836,7 @@ Partial Class Form1
                         End Try
                         Dim done As Integer = Interlocked.Increment(processedCount)
 
-                        ' by AntiGravity, 2026/04/02: 更新為 IProgress 且加上簡易模數節流避免平行洗板
+                        ' by Gemini, 2026/04/02: 更新為 IProgress 且加上簡易模數節流避免平行洗板
                         If progress IsNot Nothing AndAlso done Mod 10 = 0 Then
                             progress.Report(New L3ProgressReport With {.CurrentCount = done, .TotalCount = targetFolderCount,
                                                                        .Message = $"正在平行統計: {done} / {targetFolderCount} 個資料夾..."})
@@ -859,7 +859,7 @@ Partial Class Form1
         Try
             Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True)
             Dim grandTotal As Long = 0
-            Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02: 100ms 節流閥
+            Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02: 100ms 節流閥
 
             For i As Integer = 0 To targetFolderList.Count - 1
                 If _cancelRequested Then
@@ -870,7 +870,7 @@ Partial Class Form1
                 ' GetMailCount 的所有 fallback 都失敗才會到這個 else，記錄但不中止整體加總
                 If count >= 0 Then grandTotal += CLng(count) Else Dbg("GetMailCountAll ② 略過失敗資料夾", f.Name)
 
-                ' by AntiGravity, 2026/04/02: 100ms 節流回報進度，且在此區塊不輸出 Dbg()
+                ' by Gemini, 2026/04/02: 100ms 節流回報進度，且在此區塊不輸出 Dbg()
                 If progress IsNot Nothing AndAlso swThrottle.ElapsedMilliseconds >= 100 Then
                     progress.Report(New L3ProgressReport With {.CurrentCount = i + 1, .TotalCount = targetFolderList.Count,
                                                                .Message = $"正在統計郵件數: {i + 1} / {targetFolderList.Count} 個資料夾..."})
@@ -938,7 +938,7 @@ Partial Class Form1
             Try
                 rdoFolder = _rdo.GetFolderFromID(folder.EntryID, folder.StoreID)
                 Dim count As Integer = rdoFolder.Folders.Count
-                ' by AntiGravity, 2026/04/04: 成功路徑靜默，不輸出 Dbg（Issue 1 高頻去噪）
+                ' by Gemini, 2026/04/04: 成功路徑靜默，不輸出 Dbg（Issue 1 高頻去噪）
                 Return count
             Catch ex As System.Exception
                 Dbg("錯誤路徑", $"GetFolderCount ⓪ RDO: {folder.Name} | {ex.Message}")
@@ -950,7 +950,7 @@ Partial Class Form1
         ' 2026/3/20, 奇怪PR_FOLDER_CHILD_COUNT 沒有一次成功過??? 乾脆先拿掉這個try, 省得一直fallback也是浪費開銷
         Try
             Dim count As Integer = folder.Folders.Count
-            ' by AntiGravity, 2026/04/04: 成功路徑靜默，不輸出 Dbg
+            ' by Gemini, 2026/04/04: 成功路徑靜默，不輸出 Dbg
             Return count
         Catch ex As System.Exception
             Dbg("錯誤路徑", $"GetFolderCount ① OOM: {folder.Name} | {ex.Message}")
@@ -962,9 +962,9 @@ Partial Class Form1
     Private Async Function GetFolderCountAll(rootFolder As Outlook.Folder, Optional progress As IProgress(Of L3ProgressReport) = Nothing) As Task(Of Integer)
         ' --------------------------------------------------------------
         ' GetFolderCountAll v1.5: 讀取某資料夾整棵子樹的資料夾總數 (不含 rootFolder 自身)
-        ' by AntiGravity, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
+        ' by Gemini, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
         '
-        ' 2026/3/24 by AntiGravity: Fallback 鏈 (由快到慢):
+        ' 2026/3/24 by Gemini: Fallback 鏈 (由快到慢):
         '   ⓪ Redemption + Parallel.ForEach (最快): RDO 是 free-threaded，平行展開子樹
         '   ① Redemption + BFS 循序累加: RDO 循序，平行失敗時的安全路徑
         '   ② OOM + BFS 循序: 無 Redemption 時，走 OOM COM 循序處理
@@ -982,10 +982,10 @@ Partial Class Form1
         ' --------------------------------------------------------------
         Dbg("開始", rootFolder.Name)
 
-        ' by AntiGravity, 2026/04/02: 預跑一次顯示準備中
+        ' by Gemini, 2026/04/02: 預跑一次顯示準備中
         progress?.Report(New L3ProgressReport With {.Message = "正在展開資料夾結構...", .IsIndeterminate = True})
 
-        ' 2026/3/24 by AntiGravity: ⓪ Redemption + 平行處理 (最快路徑)
+        ' 2026/3/24 by Gemini: ⓪ Redemption + 平行處理 (最快路徑)
         '   使用 GetSubFolderList_RDO 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add(rdoF.Folders.Count) 快速加總
         If _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
@@ -995,7 +995,7 @@ Partial Class Form1
                 Dim targetFolderCount As Integer = rdoFolderList.Count
                 Dim totalCount As Integer = 0
                 Dim processedCount As Integer = 0
-                Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02
+                Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
                 Parallel.ForEach(rdoFolderList,
                     Sub(rdoF As Redemption.RDOFolder)
                         If _cancelRequested Then Return
@@ -1007,7 +1007,7 @@ Partial Class Form1
                         End Try
 
                         Dim done As Integer = Interlocked.Increment(processedCount)
-                        ' by AntiGravity, 2026/04/02: 更新為 IProgress 且加上 100ms 節流，取代原有的 Mod 10
+                        ' by Gemini, 2026/04/02: 更新為 IProgress 且加上 100ms 節流，取代原有的 Mod 10
                         If progress IsNot Nothing AndAlso swThrottle.ElapsedMilliseconds >= 100 Then
                             progress.Report(New L3ProgressReport With {.CurrentCount = done, .TotalCount = targetFolderCount,
                                                                        .Message = $"正在統計資料夾樹: {done} / {targetFolderCount}..."})
@@ -1026,11 +1026,11 @@ Partial Class Form1
             End Try
         End If
 
-        ' 2026/3/24 by AntiGravity: ② OOM + BFS 循序 (無 Redemption 時的最後手段)
+        ' 2026/3/24 by Gemini: ② OOM + BFS 循序 (無 Redemption 時的最後手段)
         '   必須循序處理 OOM COM 物件以避免 STA 違規
         Try
             Dim allFolders As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True, progress:=progress)
-            ' by AntiGravity, 2026/04/02: BFS 展開後回傳數量
+            ' by Gemini, 2026/04/02: BFS 展開後回傳數量
             Dim total = allFolders.Count - 1
             progress?.Report(New L3ProgressReport With {
                 .CurrentCount = total,
@@ -1050,8 +1050,8 @@ Partial Class Form1
     Private Async Function GetFolderSize(folder As Outlook.Folder, Optional progress As IProgress(Of L3ProgressReport) = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
         ' GetFolderSize v1.5: 讀取單一資料夾本層大小 (bytes)
-        ' by AntiGravity, 2026/04/02: 加入 IProgress 支援以回報分批讀取進度 (100ms 節流)
-        ' 2026/3/24 by AntiGravity: Fallback 鏈重構
+        ' by Gemini, 2026/04/02: 加入 IProgress 支援以回報分批讀取進度 (100ms 節流)
+        ' 2026/3/24 by Gemini: Fallback 鏈重構
         '   ⓪ Redemption : rdoFolder.Fields(PR_MESSAGE_SIZE_EXTENDED) (部分 Exchange 支援，極快)
         '   ① OOM  : folder.GetTable(PR_MESSAGE_SIZE_EXTENDED) + GetArray(1000) (最快安全招式)
         '   ② OOM  : folder.GetTable(PR_MESSAGE_SIZE_EXTENDED) + GetNextRow() (備案)
@@ -1089,7 +1089,7 @@ Partial Class Form1
             table.Columns.RemoveAll()
             table.Columns.Add(PR_SIZE_EX_STR)
             Dim totalSize As Long = 0
-            Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02
+            Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
 
             Do While Not table.EndOfTable
                 Dim arr As Object = table.GetArray(1000)
@@ -1100,7 +1100,7 @@ Partial Class Form1
                     If sz IsNot Nothing AndAlso Not IsDBNull(sz) Then totalSize += CLng(sz)
                 Next
 
-                ' by AntiGravity, 2026/04/02: 單一資料夾內部進度回報 (100ms 節流)
+                ' by Gemini, 2026/04/02: 單一資料夾內部進度回報 (100ms 節流)
                 If progress IsNot Nothing AndAlso swThrottle.ElapsedMilliseconds >= 100 Then
                     progress.Report(New L3ProgressReport With {.Message = $"正在計算 {folder.Name} 大小: {totalSize / 1024 / 1024:0.0} MB..."})
                     swThrottle.Restart()
@@ -1149,9 +1149,9 @@ Partial Class Form1
     Private Async Function GetFolderSizeAll(rootFolder As Outlook.Folder, Optional progress As IProgress(Of L3ProgressReport) = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
         ' GetFolderSizeAll v1.5: 讀取某資料夾及整棵子樹的大小總計 (bytes)
-        ' by AntiGravity, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
+        ' by Gemini, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
         '
-        ' 2026/3/24 by AntiGravity: 落實新的 Fallback 鏈設計，並修正平行處理的 STA 問題
+        ' 2026/3/24 by Gemini: 落實新的 Fallback 鏈設計，並修正平行處理的 STA 問題
         '   ⓪ Redemption 平行路徑 (最快):
         '      利用 GetSubFolderList_RDO 一次把該子樹下所有 RDOFolder 拿出來，
         '      放到 Parallel.ForEach 中，各別讀取 MAPI 屬性 PR_MESSAGE_SIZE_EXTENDED。
@@ -1166,7 +1166,7 @@ Partial Class Form1
         '   ② 兩層都失敗: 回傳 -1，交給上一層流程處理。
         ' --------------------------------------------------------------
         Dbg("開始", rootFolder.Name)
-        ' 2026/3/24 by AntiGravity: ⓪ Redemption 平行累加 PR_MESSAGE_SIZE_EXTENDED
+        ' 2026/3/24 by Gemini: ⓪ Redemption 平行累加 PR_MESSAGE_SIZE_EXTENDED
         If _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
             Try
@@ -1207,19 +1207,19 @@ Partial Class Form1
             End Try
         End If
 
-        ' 2026/3/24 by AntiGravity: ① OOM 循序 BFS 累加 (避免 STA 錯誤的保險路徑)
+        ' 2026/3/24 by Gemini: ① OOM 循序 BFS 累加 (避免 STA 錯誤的保險路徑)
         ' 因為 OOM 的 GetTable() 必須在 UI Thread，我們必須循序 Await 每一層
         Try
             Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True)
             Dim grandTotal As Long = 0
-            Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02
+            Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
 
             For i As Integer = 0 To targetFolderList.Count - 1
                 If _cancelRequested Then
                     Dbg("GetFolderSizeAll ① 被取消", $"已處理 {i}/{targetFolderList.Count}") : Return -1
                 End If
                 Dim f As Outlook.Folder = targetFolderList(i)
-                ' by AntiGravity, 2026/04/02: 傳遞 progress 進去以獲得更細緻的(郵件級別)進度回報
+                ' by Gemini, 2026/04/02: 傳遞 progress 進去以獲得更細緻的(郵件級別)進度回報
                 Dim sz As Long = Await GetFolderSize(f, progress)
 
                 If sz >= 0 Then
@@ -1228,7 +1228,7 @@ Partial Class Form1
                     Dbg("GetFolderSizeAll ① 略過了大小計算失敗的資料夾", f.Name)
                 End If
 
-                ' by AntiGravity, 2026/04/02: 100ms 節流回報資料夾級別進度
+                ' by Gemini, 2026/04/02: 100ms 節流回報資料夾級別進度
                 If progress IsNot Nothing AndAlso swThrottle.ElapsedMilliseconds >= 100 Then
                     progress.Report(New L3ProgressReport With {.CurrentCount = i + 1, .TotalCount = targetFolderList.Count,
                                                                .Message = $"正在計算大小: {i + 1} / {targetFolderList.Count} ({f.Name})..."})
@@ -1305,7 +1305,7 @@ Partial Class Form1
         Return result
     End Function
     Private Function GetAttachFilename(mail As MailItemInfo) As List(Of String)
-        ' by AntiGravity, 2026/04/04: 取得郵件的附件檔名清單 (純 L3 邏輯，不做快取)
+        ' by Gemini, 2026/04/04: 取得郵件的附件檔名清單 (純 L3 邏輯，不做快取)
         Dim result As New List(Of String)()
 
         ' ⓪ Redemption 優先: 繞過 OOM 開信的記憶體開銷，直接透過 MAPI Table 抓取檔名
@@ -1357,7 +1357,7 @@ Partial Class Form1
         Dim fPath As String = folder.FolderPath
         Dim isMail As Boolean
         If _cacheIsMailFolder.TryGetValue(fPath, isMail) Then Return isMail
-        ' by AntiGravity, 2026/04/04: 移除 Dbg("開始")，改為只在非郵件資料夾時記錄（Issue 1 高頻去噪）
+        ' by Gemini, 2026/04/04: 移除 Dbg("開始")，改為只在非郵件資料夾時記錄（Issue 1 高頻去噪）
         Static allowedTypes As Outlook.OlItemType() = {Outlook.OlItemType.olMailItem, Outlook.OlItemType.olPostItem}
         Try
             Dim itemType As Outlook.OlItemType = folder.DefaultItemType

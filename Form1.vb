@@ -33,18 +33,18 @@ Partial Class Form1
 #Region "■ 01 全域宣告"
     <System.Diagnostics.Conditional("DEBUG")>
     Private Sub Dbg(Optional msg As String = "", Optional detail As String = "")
-        ' 2026/03/31 by AntiGravity: 改用 DebugForm 統一提供的 GetCallerName，此版本支援解析 Async 非同步方法名稱
+        ' 2026/03/31 by Gemini: 改用 DebugForm 統一提供的 GetCallerName，此版本支援解析 Async 非同步方法名稱
         Dim realCaller As String = DebugForm.GetCallerName()
         If _isDebugMode Then DebugForm.AddMessage3(msg, detail, realCaller)
 
     End Sub
 
     'Private _isFirstInit As Boolean = True          ' 第一次啟動程式
-    ' by AntiGravity, 2026/04/01: 延遲載入 UI 的狀態旗標
+    ' by Gemini, 2026/04/01: 延遲載入 UI 的狀態旗標
     ' Index   0: 取代原 _isFirstInit，標記 Form 與 Tab1 是否處於「首次啟動/首次選定」階段 (True=首次啟動中)
     ' Index 1~5: 對應 Tab1~Tab5 的 UI 是否已完成掛載 (True=已完成)
     Private _isTabInitialized(5) As Boolean         ' 記錄每個 Tab 的 UI 是否已經初始化完成, (0)是FormLoad的第一次啟動, (1)~(5)分別對應 Tab1~Tab5
-    Private _isUserBusy As Boolean = False          ' ✅ 2026/04/01 by AntiGravity: 使用者操作忙碌旗標，用於暫緩背景預載程序
+    Private _isUserBusy As Boolean = False          ' ✅ 2026/04/01 by Gemini: 使用者操作忙碌旗標，用於暫緩背景預載程序
     Private _isDebugMode As Boolean                 ' 是否為 Debug 模式，根據 VS 的編譯組態自動設定，是否顯示 DebugForm 以及是否啟用內部調試訊息
     Private _iLikeNoisy As Boolean = False          ' 是否啟用過濾debug message 噪音的功能，預設為 False 不顯示高頻率的迴圈訊息，想要詳細訊息轟炸就切成 True
 
@@ -52,7 +52,7 @@ Partial Class Form1
     'Private _intTotalMailCount As Integer          ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
     'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
     Private _cancelRequested As Boolean = False     ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查
-    ' Private _isTab3_Stop As Boolean                 ' 2026/04/05 by AntiGravity: 已併入全域 _cancelRequested，不再單獨使用專屬旗標以簡化邏輯內容流程處理機制
+    ' Private _isTab3_Stop As Boolean                 ' 2026/04/05 by Gemini: 已併入全域 _cancelRequested，不再單獨使用專屬旗標以簡化邏輯內容流程處理機制
     ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
 
     ' 可複選Treeview 自訂控制項 及 ContextMenu 成員變數，只初始化一次，不在每次右鍵時重新建立
@@ -66,7 +66,7 @@ Partial Class Form1
     Private rbFuzzyMatch As New RadioButton()   ' tab5 用到的radio button
     Private WithEvents ListView5 As New ListView()
 
-    ' [新增ProgressBar歷史紀錄 2026/4/2, by AntiGravity]
+    ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
     Private WithEvents HistoryListBox As ListBox
     Private _historyHoverIndex As Integer = -1
@@ -86,7 +86,7 @@ Partial Class Form1
         _isDebugMode = True
 #Else
         _isDebugMode = False
-#End If ' by AntiGravity, 2026/04/01: 自動依據 VS 的編譯組態判斷是否為 Debug 模式
+#End If ' by Gemini, 2026/04/01: 自動依據 VS 的編譯組態判斷是否為 Debug 模式
 
         Dbg("開始") ' debugForm 開始計時
         Dim stopwatch As New Stopwatch() : stopwatch.Start()
@@ -94,9 +94,9 @@ Partial Class Form1
         _isTabInitialized(0) = True ' 預設為 True，代表正在進行第一次啟動
         Me.KeyPreview = True        ' ✅ 讓 Form 優先攔截 ESC，否則 ESC 會先被 TreeView/ListBox 等子控制項消耗
 
-        If _isDebugMode Then    ' by AntiGravity, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
+        If _isDebugMode Then    ' by Gemini, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
             CheckDebug.Visible = True
-            ' ✅ 2026/03/30 by AntiGravity: 改用 BeginInvoke 延遲啟動，避免 Load 期間同步觸發事件造成 UI 卡頓或 Handle 競爭
+            ' ✅ 2026/03/30 by Gemini: 改用 BeginInvoke 延遲啟動，避免 Load 期間同步觸發事件造成 UI 卡頓或 Handle 競爭
             ' 移除原本導致Exception 的Task.Run 呼叫
             Me.BeginInvoke(Sub() CheckDebug.Checked = True)
             ' Memo: 這裡設成True 就會預設開啟 DebugForm，False 就是預設不開啟，設計階段方便debug用，正式版自動改成False
@@ -105,24 +105,28 @@ Partial Class Form1
         InitOutlookNamespace()
         'InitRdoSession()
         InitLookAndFeel()       ' 設計程式外觀
-        InitProgressBarEvents() ' 2026/04/02 by AntiGravity: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
+        InitProgressBarEvents() ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
 
-        ' 視窗縮放時同步 DebugForm — 2026/3/26 by AntiGravity
+        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
         ' 原本的 ListView1 寬度調整邏輯已移至 HandleListViewResize 中，由 ListView 自行處理 Resize 事件
         ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
-        ' by AntiGravity, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
+        ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
         AddHandler Me.Resize, Sub() SyncDebugFormPosition()
         AddHandler Me.Move, Sub() SyncDebugFormPosition()
 
         Me.BringToFront()
         Me.Show()               ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
 
-        '' 2026/04/06 by AntiGravity:
-        'InitDatabase()          ' by AntiGravity, 2026/04/06: 初始化 SQLite 快取資料庫
+        ' 2026/04/06 by Gemini:
+        InitDatabase()          ' by Gemini, 2026/04/06: 初始化 SQLite 快取資料庫
         'Await LoadCachesFromSQLiteAsync()
-        '' 掛載 Setting 頁面的快取按鈕事件, 這裡使用 AddHandler 動態掛載，確保按鈕邏輯正確連結到 SQLite 處理函數
-        'AddHandler SaveCache.Click, Async Sub(s1, e1) Await SaveCachesToSQLiteAsync()   ' 1. SaveCache 按鈕點擊事件 (存入資料庫)
-        'AddHandler LoadCache.Click, Async Sub(s1, e1) Await LoadCachesFromSQLiteAsync() ' 2. LoadCache 按鈕點擊事件 (從資料庫讀回)
+        ' 掛載 Setting 頁面的快取按鈕事件, 這裡使用 AddHandler 動態掛載，確保按鈕邏輯正確連結到 SQLite 處理函數
+        AddHandler SaveCache.Click, Async Sub(s1, e1) Await SaveCachesToSQLiteAsync()
+        AddHandler LoadCache.Click, Async Sub(s1, e1)
+                                        Await LoadCachesFromSQLiteAsync()
+                                        Dim st = GetDbStats()
+                                        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / mail_basic:{st.mb} 筆 / mail_attachments:{st.at} 筆 / {st.kb} KB"
+                                    End Sub
 
         ' 2024/5/17, PST檔太多, 啟動速度愈來愈差, 全部重寫. 依照20年前的做法動態載入:
         ' 啟動時只載入第一層表皮, 若下層有subFolders=True 則暫塞一個假的":::" 讓它能顯示"+"加號表示還有子資料夾就好
@@ -142,7 +146,7 @@ Partial Class Form1
     Private Async Sub Form1_Shown(sender As Object, e As EventArgs) Handles Me.Shown
         Dbg("開始")
 
-        ' by AntiGravity, 2026/04/01: 利用背景躲藏時間，預先載入其他 Tab 的 UI 與目錄樹，實現「切換瞬間無感」的流暢體驗
+        ' by Gemini, 2026/04/01: 利用背景躲藏時間，預先載入其他 Tab 的 UI 與目錄樹，實現「切換瞬間無感」的流暢體驗
         ' 讓第一頁先穩穩地顯示出來，不要與使用者剛啟動後的第一波對 TreeView1 的操作搶資源
 
         ' Tab1 順利載入後，才開始載入 Tab2~Tab5 的 UI 與資料，避免一開始就全部載入造成卡頓
@@ -151,7 +155,7 @@ Partial Class Form1
         Dim delaySame As Integer = 500  ' 每個 Tab 之間的預載延遲，單位毫秒 (ms)，可以根據需要調整
         Dim delayDepends() As Integer = {500, 1000, 2000, 3000, 4000, 5000}
 
-        ' by AntiGravity, 2026/04/03: 增加載入各 Tab 之間的視覺區隔
+        ' by Gemini, 2026/04/03: 增加載入各 Tab 之間的視覺區隔
         Await TryToRelaxFor(delayDepends(0))
         If Not _isTabInitialized(2) Then
             InitTab2UI() : _isTabInitialized(2) = True
@@ -191,7 +195,7 @@ Partial Class Form1
         If e.KeyCode = Keys.Escape Then
             ' Tab1: ComputeFolderStatsAsync 在 Yield 點檢查 _cancelRequested → 回空 List
             ' Tab2: ComputeYearCounts  在 For Each 頭部檢查 → Exit For 回傳已算部分
-            ' Tab3: 統一使用全域 _cancelRequested 旗標 (by AntiGravity, 2026/04/05)
+            ' Tab3: 統一使用全域 _cancelRequested 旗標 (by Gemini, 2026/04/05)
             _cancelRequested = True
             Button3.Enabled = True
 
@@ -202,7 +206,9 @@ Partial Class Form1
 
     End Sub
     Private Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
+
         '_cacheSnifferCts.Cancel()   ' ✅ 2026-03-16 B4: 通知 CacheSniffer 停止，避免程式關閉後 COM 呼叫繼續進行
+        CloseDatabase()
 
         ' 釋放所有的 COM 物件占用資源
         If _pstStoreList IsNot Nothing Then
@@ -251,11 +257,11 @@ Partial Class Form1
         TabControl1.Padding = New Point(12, 8)
 
         ' ── 容器化佈局與動態控制項掛載 ──
-        ' by AntiGravity, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
+        ' by Gemini, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
         InitTab1UI()
         _isTabInitialized(1) = True
 
-        ' 2026/3/27 by AntiGravity: 修復 StatusStrip1 被 TabControl1 遮擋的問題
+        ' 2026/3/27 by Gemini: 修復 StatusStrip1 被 TabControl1 遮擋的問題
         StatusStrip1.SendToBack()
         TabControl1.BringToFront()
 
@@ -265,7 +271,7 @@ Partial Class Form1
     End Sub
     Private Sub InitTreeView(tv As TreeView)
         ' ---------------------------------------------------------------------------------------------------------
-        ' ── 共用 Treeview 外觀設定 (by AntiGravity, 2026/04/01: 重構成接受單一參數，避免重複造輪子) ──
+        ' ── 共用 Treeview 外觀設定 (by Gemini, 2026/04/01: 重構成接受單一參數，避免重複造輪子) ──
         ' ---------------------------------------------------------------------------------------------------------
         tv.Font = New Font(_fontDefault, _fontRegular)
         tv.BackColor = Color.White
@@ -284,7 +290,7 @@ Partial Class Form1
     End Sub
     Private Sub InitListView(lv As ListView)
         ' ---------------------------------------------------------------------------------------------------------
-        ' ── 共用 Listview 外觀設定 (by AntiGravity, 2026/04/01: 重構成接受單一參數，避免重複造輪子) ──
+        ' ── 共用 Listview 外觀設定 (by Gemini, 2026/04/01: 重構成接受單一參數，避免重複造輪子) ──
         ' ---------------------------------------------------------------------------------------------------------
         lv.Font = New Font(_fontDefault, _fontRegular)
         lv.GridLines = False
@@ -302,7 +308,7 @@ Partial Class Form1
         AddHandler lv.MouseLeave, AddressOf HandleListViewMouseHover
         AddHandler lv.GotFocus, AddressOf HandleListViewGotFocus
         AddHandler lv.KeyPress, AddressOf HandleListViewKeyPress
-        AddHandler lv.Resize, AddressOf HandleListViewResize  ' 2026/04/01 by AntiGravity: 加入共用自動縮放事件
+        AddHandler lv.Resize, AddressOf HandleListViewResize  ' 2026/04/01 by Gemini: 加入共用自動縮放事件
 
     End Sub
     Private Sub InitSplitContainer(scnr As SplitContainer)
@@ -314,10 +320,10 @@ Partial Class Form1
 
     End Sub
     Private Sub InitProgressBarEvents()
-        ' ── ProgressBar 歷史紀錄 (by AntiGravity, 2026/04/02) ──
+        ' ── ProgressBar 歷史紀錄 (by Gemini, 2026/04/02) ──
         ''' <summary>
         ''' 集中初始化 ProgressBar1 與 ProgressBar2 的互動事件 (TextChanged, Click, Hover)
-        ''' 2026/04/02 by AntiGravity
+        ''' 2026/04/02 by Gemini
         ''' </summary>
 
         ' 1. 文字變更紀錄
@@ -353,7 +359,7 @@ Partial Class Form1
         InitListView(ListView1)
         InitSplitContainer(SplitContainer1)
 
-        ' by AntiGravity, 2026/04/03: 增加欄位配置邏輯空白
+        ' by Gemini, 2026/04/03: 增加欄位配置邏輯空白
         ListView1.Columns.Clear()
         Dim headerNames As String() = {"資料夾名稱", "郵件數量", "資料夾數量", "郵件總計", "資料夾大小"}
         For Each n In headerNames
@@ -376,7 +382,7 @@ Partial Class Form1
 
     End Sub
     Private Sub InitTab2UI()
-        ' ── Tab2 (日期統計) 佈局重構 (2026/3/27 by AntiGravity) ──
+        ' ── Tab2 (日期統計) 佈局重構 (2026/3/27 by Gemini) ──
         Dbg("開始")
 
         InitTreeView(SimTree2)
@@ -402,10 +408,10 @@ Partial Class Form1
         ListView2.Dock = DockStyle.Top
         Chart2.Dock = DockStyle.Fill
 
-        SplitContainer2.Panel1.Controls.Add(SimTree2)   ' 2026/3/27 by AntiGravity: 只有 SimTree2 是動態建立且需要在此掛載到 SplitContainer2
+        SplitContainer2.Panel1.Controls.Add(SimTree2)   ' 2026/3/27 by Gemini: 只有 SimTree2 是動態建立且需要在此掛載到 SplitContainer2
         SimTree2.BringToFront()                         ' 確保 SimTree2 顯示在 TreeView2 上層 (避免被遮擋)
 
-        ' 💡 關鍵 Dock 順序 (by AntiGravity, 2026/03/28 修正 Z-order 以符合預期佈局)：
+        ' 💡 關鍵 Dock 順序 (by Gemini, 2026/03/28 修正 Z-order 以符合預期佈局)：
         ' 在 WinForms 中，Z-order 在最底層 (SendToBack) 的控制項會最先進行 Dock (搶佔邊緣)。
         Chart2.BringToFront()           ' 3. 圖表移至最前方 (最後才進行 Dock=Fill，填滿剩餘空間)
         pnlCheckbox_tab2.SendToBack()   ' 2. 面板移至最後方
@@ -450,7 +456,7 @@ Partial Class Form1
 
         ' 將原本 Panel2 中的控制項移入新增的 pnlOptions_tab3
         ' 這些控制項原本的 Location 已經適合在 Top Panel 中運作
-        pnlOptions_tab3.SendToBack() ' 2026/3/27 by AntiGravity: 正確設定 Dock 計算順序
+        pnlOptions_tab3.SendToBack() ' 2026/3/27 by Gemini: 正確設定 Dock 計算順序
         pnlOptions_tab3.Controls.Add(GroupBox1)
         pnlOptions_tab3.Controls.Add(GroupBox2)
         pnlOptions_tab3.Controls.Add(GroupBox3)
@@ -458,7 +464,7 @@ Partial Class Form1
         pnlOptions_tab3.Controls.Add(CheckSubFolder3)
         SplitContainer3.Panel2.Controls.Add(pnlOptions_tab3)
 
-        ' 2026/04/05 by AntiGravity: 優化顯示邏輯「純淨版」
+        ' 2026/04/05 by Gemini: 優化顯示邏輯「純淨版」
         ' 改用面板自身的 Resize 事件與 Lambda 運算，不需類別變數。
         ' 這樣無論是調整視窗還是隱藏側邊欄，GroupBox3 都會依據「右側實際可用空間 (820px)」決定顯現與否。
         AddHandler pnlOptions_tab3.Resize, Sub() GroupBox3.Visible = pnlOptions_tab3.Width >= 820
@@ -472,7 +478,7 @@ Partial Class Form1
         Button3.BringToFront()
         CheckSubFolder3.BringToFront()
 
-        ' ── 2026/03/28 by AntiGravity: 對齊邏輯優化 ──
+        ' ── 2026/03/28 by Gemini: 對齊邏輯優化 ──
         CheckSubFolder3.CheckAlign = ContentAlignment.MiddleLeft
         CheckSubFolder3.TextAlign = ContentAlignment.MiddleLeft
         CheckSubFolder3.AutoSize = True                                                 ' 1. 開啟 AutoSize 解決勾選框與文字「離得太遠」的問題 (寬度會自動縮短到剛好)
@@ -481,7 +487,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right                 ' 4. 最後設定 Anchor，讓它在之後的視窗縮放中保持與 Button3 的右側對齊
 
         ' ------------------------------------------
-        ' ── 2026/03/28 by AntiGravity: 集中掛載 Tab3 專屬互動邏輯 (Lambda 重構) ──
+        ' ── 2026/03/28 by Gemini: 集中掛載 Tab3 專屬互動邏輯 (Lambda 重構) ──
         AddHandler TextBox3.KeyDown, Sub(s, ev)
                                          If ev.KeyCode = Keys.Enter Then
                                              Button3.PerformClick() : TextBox3.SelectAll()
@@ -500,7 +506,7 @@ Partial Class Form1
                                                      AutoResizeListViewColumns(ListView3) ' 加入自動縮放，依勾選狀態動態隱藏/顯示欄位
                                                  End Sub
 
-        ' 2026/04/05 by AntiGravity: 優化數值微調邏輯，根據單位 (KB/MB/GB) 與當前數值動態調整增幅
+        ' 2026/04/05 by Gemini: 優化數值微調邏輯，根據單位 (KB/MB/GB) 與當前數值動態調整增幅
         ' 並加入長按加速 (Accelerations) 提升大範圍調整效率
         For Each num In {NumberMin, NumberMax}
             num.Accelerations.Clear()
@@ -538,7 +544,7 @@ Partial Class Form1
         pnlOptions_tab4.Controls.Add(Button4)
         SplitContainer4.Panel2.Controls.Add(pnlOptions_tab4)
 
-        pnlOptions_tab4.SendToBack()        ' 2026/3/27 by AntiGravity: 正確設定 Dock 計算順序
+        pnlOptions_tab4.SendToBack()        ' 2026/3/27 by Gemini: 正確設定 Dock 計算順序
 
         ' ── ListView4: 系列郵件欄位定義 ──
         With ListView4
@@ -590,7 +596,7 @@ Partial Class Form1
         TabPage5.Controls.Add(ListView5)    ' 先加 ListView，讓 Dock = Fill 佔滿底部
         TabPage5.Controls.Add(pnlOptions5)  ' 後加 Panel，Dock = Top 會佔據上方
 
-        ' 2026/3/27 by AntiGravity: 正確設定 Dock 計算順序
+        ' 2026/3/27 by Gemini: 正確設定 Dock 計算順序
         pnlOptions5.SendToBack()
         ListView5.BringToFront()
         Dbg("結束")
@@ -656,7 +662,7 @@ Partial Class Form1
         ''' <summary>
         ''' 智慧等待輔助函式
         ''' 先睡眠預定時間，若使用者正在忙碌(例如正在 AfterSelect 統計中)，則每 1000ms 檢查一次直到閒置。
-        ''' 2026/04/01 by AntiGravity
+        ''' 2026/04/01 by Gemini
         ''' </summary>
 
         Await Task.Delay(baseDelayMs)   ' 1. 先執行基礎延遲
@@ -670,7 +676,7 @@ Partial Class Form1
         ''' <summary>
         ''' 同步 Debug 視窗與主視窗的位置與大小，並將其右側貼齊螢幕邊緣
         ''' 使用 SetWindowPos 避免多個屬性分別設定導致的閃爍
-        ''' 2026/3/26 by AntiGravity
+        ''' 2026/3/26 by Gemini
         ''' </summary>
 
         If DebugForm IsNot Nothing AndAlso (DebugForm.Visible OrElse CheckDebug.Checked) Then
@@ -683,7 +689,7 @@ Partial Class Form1
             Dim newWidth = screenRight - newLeft
             If newWidth < 100 Then newWidth = DebugForm.Width ' 保底寬度
 
-            ' 2026/3/28 by AntiGravity: 簡化重繪策略 — 不干預 Windows 的原生重繪機制，
+            ' 2026/3/28 by Gemini: 簡化重繪策略 — 不干預 Windows 的原生重繪機制，
             ' 讓 SetWindowPos 自然觸發 WM_PAINT，確保佈局即時生效 (供 DebugForm_Load 的 Delay 計時用)
             SetWindowPos(DebugForm.Handle, IntPtr.Zero, newLeft, newTop, newWidth, newHeight, SWP_NOZORDER Or SWP_NOACTIVATE)
         End If
@@ -692,7 +698,7 @@ Partial Class Form1
     Private Function SafeGet(Of T)(row As Outlook.Row, column As String, defaultValue As T) As T
         ''' <summary>
         ''' 安全地從 Outlook.Row 讀取欄位，自動處理 Nothing / DBNull / 例外
-        ''' 2026/04/01 by AntiGravity
+        ''' 2026/04/01 by Gemini
         ''' </summary>
         Try
             Dim value = row(column)
@@ -707,7 +713,7 @@ Partial Class Form1
     Private Function SafeGet(Of T)(data(,) As Object, row As Integer, col As Integer, defaultValue As T) As T
         ''' <summary>
         ''' SafeGet 的二維陣列（GetArray）Overload 版
-        ''' 2026/04/01 by AntiGravity
+        ''' 2026/04/01 by Gemini
         ''' </summary>
         Try
             Dim value = data(row, col)
@@ -728,7 +734,7 @@ Partial Class Form1
         _isUserBusy = True
         Dbg("開始")
 
-        Try ' by AntiGravity, 2026/04/01: 根據選定的分頁動態載入 UI 與資料 (Lazy Load UI)
+        Try ' by Gemini, 2026/04/01: 根據選定的分頁動態載入 UI 與資料 (Lazy Load UI)
             ProgressBar1.Text = "" : ProgressBar2.Text = ""
             Dim selectedTab As TabPage = CType(sender, TabControl).SelectedTab
             Dim tabIndex As Integer = TabControl1.SelectedIndex + 1 ' 產生 1, 2, 3, 4, 5 (Tab1~5)
@@ -775,7 +781,7 @@ Partial Class Form1
 
     End Sub
     Private Sub CheckShowAllFolders_CheckedChanged(sender As Object, e As EventArgs) Handles checkIncludeAllFolders.CheckedChanged
-        ' by AntiGravity, 2026/03/30: 當切換顯示所有資料夾時，清空快取並標記所有 TreeView 為無效 (Nodes.Clear)
+        ' by Gemini, 2026/03/30: 當切換顯示所有資料夾時，清空快取並標記所有 TreeView 為無效 (Nodes.Clear)
         ' 分頁在切換時，由 SelectedIndexChanged 自動按新過濾條件重新載入, 不需要在這裡重複載入，避免不必要的 COM 呼叫和 UI 重繪
         _cacheFolderTree.Clear()
         Dbg("已切換顯示所有資料夾 (_cacheFolderTree 快取已清空)")
@@ -806,15 +812,15 @@ Partial Class Form1
         ' Tab3 附件搜尋快取 (String key，安全直接清除)
         _cachePhase1tab3.Clear()       ' 第一階段搜尋結果快取 (資料夾展開用)
 
-        ' 以下快取的 Key 已改為 String，.Clear() 安全且直接 (by AntiGravity, 2026/03/27 修正快取鍵值型別)
-        _cacheMailCount.Clear()         ' 直屬郵件數量快取 (by AntiGravity, 2026/03/27 新增)
+        ' 以下快取的 Key 已改為 String，.Clear() 安全且直接 (by Gemini, 2026/03/27 修正快取鍵值型別)
+        _cacheMailCount.Clear()         ' 直屬郵件數量快取 (by Gemini, 2026/03/27 新增)
         _cacheMailCountAll.Clear()      ' 子資料夾總郵件數量快取
-        _cacheFolderCount.Clear()       ' 直屬子資料夾快取 (by AntiGravity, 2026/03/27 新增)
+        _cacheFolderCount.Clear()       ' 直屬子資料夾快取 (by Gemini, 2026/03/27 新增)
         _cacheFolderCountAll.Clear()    ' 子資料夾總數量快取
         _cacheFolderSize.Clear()        ' 直屬資料夾大小快取
         _cacheFolderSizeAll.Clear()     ' 子資料夾總大小快取
         _cacheFolderTree.Clear()        ' 資料夾樹狀快取
-        _cacheSubFolderList.Clear()     ' by AntiGravity: 平坦化展開結果快取
+        _cacheSubFolderList.Clear()     ' by Gemini: 平坦化展開結果快取
         _cacheIsMailFolder.Clear()      ' 資料夾類型快取
         _cacheAttachFilename.Clear()    ' 附件名稱快取
 
@@ -895,7 +901,7 @@ Partial Class Form1
     Private Sub HandleTreeViewMouseHover(sender As Object, e As EventArgs)
         ' ---------------------------------------------------------------
         ' 共用 TreeView / SimTree MouseHover 處理 (MouseMove + MouseLeave)
-        ' by AntiGravity, 2026/04/03 整合優化，提升 SimTree 離開控制項時的視覺穩定性
+        ' by Gemini, 2026/04/03 整合優化，提升 SimTree 離開控制項時的視覺穩定性
         '
         ' [2026-03-17 原始規劃保留]: 兩段結構對稱，各用一個布林封裝 SimTree 例外
         ' 還原規則:
@@ -938,7 +944,7 @@ Partial Class Form1
 
     End Sub
     Private Sub HandleListViewMouseHover(sender As Object, e As EventArgs)
-        ' by AntiGravity, 2026/04/03: 整合 MouseMove 與 MouseLeave 為單一維護點
+        ' by Gemini, 2026/04/03: 整合 MouseMove 與 MouseLeave 為單一維護點
         Dim listView As ListView = TryCast(sender, ListView)
         If listView Is Nothing Then Return
 
@@ -958,14 +964,14 @@ Partial Class Form1
 
     End Sub
     Private Sub HandleListViewGotFocus(sender As Object, e As EventArgs)
-        ' 2026/03/28 by AntiGravity: 集中處理 ListView 獲得焦點時自動選取第一項的邏輯
+        ' 2026/03/28 by Gemini: 集中處理 ListView 獲得焦點時自動選取第一項的邏輯
         Dim lv = DirectCast(sender, ListView)
         If lv.SelectedItems.Count = 0 AndAlso lv.Items.Count > 0 Then lv.Items(0).Selected = True
 
     End Sub
     Private Sub HandleListViewResize(sender As Object, e As EventArgs)
         ''' <summary>
-        ''' 處理所有 ListView 的 Resize 共用事件 (2026/04/01 by AntiGravity)
+        ''' 處理所有 ListView 的 Resize 共用事件 (2026/04/01 by Gemini)
         ''' </summary>
         Dim lv As ListView = TryCast(sender, ListView)
         If lv IsNot Nothing Then AutoResizeListViewColumns(lv)
@@ -981,7 +987,7 @@ Partial Class Form1
         ''' 解決 SplitContainer 預設會顯示焦點虛線框的問題，僅保留 MouseMove 改變游標的功能。
         ''' 不影響內部控制項的操作。
         ''' </remarks>
-        ''' 共用的側邊欄切換事件 (2026/03/28 by AntiGravity 改良：偵測雙擊分隔線縮放)
+        ''' 共用的側邊欄切換事件 (2026/03/28 by Gemini 改良：偵測雙擊分隔線縮放)
         ' 只針對滑鼠左鍵，且連按二下 (Double Click) 觸發
         If e.Button = MouseButtons.Left AndAlso e.Clicks = 2 Then
             Dim sc = TryCast(sender, SplitContainer)
@@ -990,19 +996,19 @@ Partial Class Form1
             If sc.SplitterDistance > 20 Then
                 sc.Tag = sc.SplitterDistance        ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
                 sc.SplitterDistance = 10            ' 縮合至 10px 觸控區
-                Dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+                Dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)") ' by Gemini, 2026/04/04: Issue 4 格式標準化
             Else
                 ' 💡 恢復寬度，若無紀錄則預設為 250px
                 Dim prevDist As Integer = If(TypeOf sc.Tag Is Integer, DirectCast(sc.Tag, Integer), 250)
                 If prevDist < 50 Then prevDist = 250    ' 防止恢復值過小
                 sc.SplitterDistance = prevDist
-                Dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+                Dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px") ' by Gemini, 2026/04/04: Issue 4 格式標準化
             End If
         End If
 
     End Sub
     Private Sub HandleTreeViewKeyPress(sender As Object, e As KeyPressEventArgs)
-        ' by AntiGravity, 2026/04/04: Issue 2 移除 Dbg("開始")—高頻按鍵事件，不需要追蹤
+        ' by Gemini, 2026/04/04: Issue 2 移除 Dbg("開始")—高頻按鍵事件，不需要追蹤
 
         ' 在這裡處理所有TreeView KeyPress 事件的程式碼
         If TypeOf sender Is TreeView Then
@@ -1061,7 +1067,7 @@ Partial Class Form1
                     If item IsNot Nothing Then item.Selected = True : item.Focused = True : lv.Focus()
                 End If
 
-            ElseIf e.KeyChar = ChrW(1) Then ' Ctrl-A 全選 listview1 所有項目 — 2026/3/26 by AntiGravity
+            ElseIf e.KeyChar = ChrW(1) Then ' Ctrl-A 全選 listview1 所有項目 — 2026/3/26 by Gemini
                 lv.BeginUpdate()
                 For Each item As ListViewItem In lv.Items
                     item.Selected = True
@@ -1124,7 +1130,7 @@ Partial Class Form1
 #End Region
 #Region "  └ 其他輔助事件"
     Private Async Sub ExpandTreeToDefaultInbox(tv As TreeView)
-        ' by AntiGravity, 2026/04/06: 使用Guard Clauses重構，減少巢狀層數並確保 EndUpdate 執行安全性
+        ' by Gemini, 2026/04/06: 使用Guard Clauses重構，減少巢狀層數並確保 EndUpdate 執行安全性
         Dbg("開始", tv.Name)
 
         ' 1. 第一層Guard Clauses：沒節點直接走人
@@ -1166,7 +1172,7 @@ Partial Class Form1
                 Dbg("結束", $"{tv.Name}: 已成功選取預設收件匣")
                 Return
             Next
-            Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾") ' by AntiGravity, 2026/04/04: Issue 3
+            Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾") ' by Gemini, 2026/04/04: Issue 3
         Finally
             ' 💡 確保無論中途 Return 或發生 Exception，UI 都不會卡在 BeginUpdate
             tv.EndUpdate()
@@ -1176,7 +1182,7 @@ Partial Class Form1
     End Sub
     Private Function GetActiveTreeView() As TreeView
         ''' <summary>
-        ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 TreeView/SimTree, by AntiGravity, 2026/03/30
+        ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 TreeView/SimTree, by Gemini, 2026/03/30
         ''' </summary>
         ' 在需要觸發 AfterSelect 或其他操作時，能夠根據目前選中的 Tab 頁面，準確地獲取對應的 TreeView 控制項
         Select Case TabControl1.SelectedIndex
@@ -1204,7 +1210,7 @@ Partial Class Form1
     Private Sub TriggerAfterSelect(tv As TreeView)
         ''' <summary>
         ''' 定向觸發活動控制項的數據刷新 (AfterSelect)
-        ''' 僅作為補強機制，確保右側統計數據在特殊情況下能被手動刷新, by AntiGravity, 2026/03/30
+        ''' 僅作為補強機制，確保右側統計數據在特殊情況下能被手動刷新, by Gemini, 2026/03/30
         ''' </summary>
 
         ' 確保有選定節點才執行統計，否則統計函數會報錯
@@ -1224,7 +1230,7 @@ Partial Class Form1
     Private Sub AutoResizeListViewColumns(lv As ListView)
         ''' <summary>
         ''' 定義各個 ListView 縮放時的欄位寬度比例
-        ''' 2026/04/01 by AntiGravity
+        ''' 2026/04/01 by Gemini
         ''' </summary>
         If lv.Columns.Count = 0 OrElse lv.Width <= 0 Then Return
 
@@ -1243,7 +1249,7 @@ Partial Class Form1
                 lv.Columns(0).Width = Math.Max(120, CInt(w * 0.3)) ' 第一欄(年度/月份)至少保底 120px
                 lv.Columns(1).Width = Math.Max(100, CInt(w * 0.2)) ' 第二欄(郵件數量)至少保底 100px
                 lv.Columns(2).Width = Math.Max(0, w - lv.Columns(0).Width - lv.Columns(1).Width - 5)  ' 第三欄吸收所有剩餘空間
-                ' 2026/04/03 by AntiGravity: 將無用的第三欄作為彈性緩衝區。當視窗縮小時，優先壓縮第三欄位，確保前兩欄至少有基本的顯示空間而不會擠在一起。
+                ' 2026/04/03 by Gemini: 將無用的第三欄作為彈性緩衝區。當視窗縮小時，優先壓縮第三欄位，確保前兩欄至少有基本的顯示空間而不會擠在一起。
             End If
 
         ElseIf lv Is ListView3 Then ' Tab3: 郵件主旨 / 郵件大小 / 收到日期 / 寄件者 / 附件個數 / EntryID
@@ -1252,7 +1258,7 @@ Partial Class Form1
                 lv.Columns(2).Width = CInt(w * 0.2)     ' 收到日期
                 lv.Columns(3).Width = CInt(w * 0.15)    ' 寄件者
                 lv.Columns(5).Width = CInt(w * 0.03)    ' EntryID (隱藏?)
-                lv.Columns(4).Width = If(CheckAttCount.Checked, CInt(w * 0.1), 0.03)   ' 2026/04/01 by AntiGravity: 根據勾選狀態 動態顯示/隱藏 附件個數欄位
+                lv.Columns(4).Width = If(CheckAttCount.Checked, CInt(w * 0.1), 0.03)   ' 2026/04/01 by Gemini: 根據勾選狀態 動態顯示/隱藏 附件個數欄位
                 lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5
             End If
 
@@ -1282,7 +1288,7 @@ Partial Class Form1
     End Sub
     Private Sub UpdateNumericIncrement(num As NumericUpDown, unitCombobox As ComboBox)
         ''' <summary>
-        ''' 根據當前選擇的單位與數值，動態更新 NumericUpDown 的增減幅度 (2026/04/05 by AntiGravity)
+        ''' 根據當前選擇的單位與數值，動態更新 NumericUpDown 的增減幅度 (2026/04/05 by Gemini)
         ''' </summary>
 
         If num Is Nothing OrElse unitCombobox Is Nothing Then Return
@@ -1375,7 +1381,7 @@ Partial Class Form1
         Dim targetWidth = maxWidth + 40
         Dim targetHeight = (HistoryListBox.ItemHeight * numItemsToShow) + 2
 
-        ' by AntiGravity, 2026/04/02: 先解除前一次的限制，確保這次能夠正常縮小
+        ' by Gemini, 2026/04/02: 先解除前一次的限制，確保這次能夠正常縮小
         HistoryListBox.MinimumSize = Size.Empty
 
         ' 鐵血手段鎖死所有容器尺寸，解決被壓縮成 20px 的 Bug
@@ -1396,7 +1402,7 @@ Partial Class Form1
         End If
 
         Dim popupX As Integer = clickedLabel.Bounds.Left                    ' 將 Popup 精準顯示在 被點擊的 Label 正上方
-        Dim maxRight As Integer = Screen.FromControl(Me).WorkingArea.Right  ' by AntiGravity, 2026/04/02: 防止 Popup 彈出時超過螢幕右緣被系統強制擠壓變形
+        Dim maxRight As Integer = Screen.FromControl(Me).WorkingArea.Right  ' by Gemini, 2026/04/02: 防止 Popup 彈出時超過螢幕右緣被系統強制擠壓變形
 
         ' 若超過螢幕右緣，則將彈出位置往左平移，保留 5px 邊距
         Dim statusScreenPt = StatusStrip1.PointToScreen(New Point(popupX, 0))
@@ -1413,7 +1419,7 @@ Partial Class Form1
 
 #End Region
     Public Class ThemeColors
-        ' by AntiGravity, 2026/04/01: 統一管理專案色彩, 方便日後切換深色/淺色主題
+        ' by Gemini, 2026/04/01: 統一管理專案色彩, 方便日後切換深色/淺色主題
         ''' <summary>主要視窗或Panel背景色 (#F2F2F2)</summary>
         Public Shared ReadOnly Gray95 As Color = Color.FromArgb(242, 242, 242)
         ''' <summary>滑鼠懸停(Hover)的背景色 (#E5E5E5)</summary>

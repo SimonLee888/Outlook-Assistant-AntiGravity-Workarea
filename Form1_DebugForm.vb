@@ -31,7 +31,7 @@ Public Class DebugForm
     Private Shared Function SendMessage(hWnd As IntPtr, msg As Integer, wParam As IntPtr, lParam As IntPtr) As IntPtr
 
     End Function
-    Private Const WM_SETREDRAW As Integer = &HB  ' 2026/3/26 by AntiGravity
+    Private Const WM_SETREDRAW As Integer = &HB  ' 2026/3/26 by Gemini
 #End Region
 
 #Region "■ 02 成員變數"
@@ -41,17 +41,17 @@ Public Class DebugForm
     Private WithEvents QueueTimer As New System.Windows.Forms.Timer() With {.Interval = 100} ' 每 100ms 清空一次message queue
     Private _lastRecalcWidth As Integer = 0
     Private _searchPattern As String = ""
-    Private _lastHighlightedPair As ListViewItem    ' by AntiGravity, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
-    Private Class DebugItemTag          ' 2026/3/28 by AntiGravity: 定義快取結構，加速 OwnerDraw 繪製
+    Private _lastHighlightedPair As ListViewItem    ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
+    Private Class DebugItemTag          ' 2026/3/28 by Gemini: 定義快取結構，加速 OwnerDraw 繪製
         Public textFullRow As String    ' 預先合併好的整行小寫文字 (用於搜尋)
         Public isHit As Boolean         ' 是否命中目前搜尋關鍵字
-        Public timeStamp As Date        ' 2026/3/28 by AntiGravity: 原始時間戳記 (供雙擊重算時間差，免去 TryParse 反解)
+        Public timeStamp As Date        ' 2026/3/28 by Gemini: 原始時間戳記 (供雙擊重算時間差，免去 TryParse 反解)
     End Class
 #End Region
 
 #Region "■ 03 表單生命週期"
     Private Sub DebugForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        ' 2026/04/01 by AntiGravity: 恢復 ListView 內建雙緩衝設置
+        ' 2026/04/01 by Gemini: 恢復 ListView 內建雙緩衝設置
         ' 先前為了排查 2000px 高度 Bug 暫時移除，現已確認該 Bug 兇手為 ClientSizeChanged 內的 BeginUpdate。
         ' 恢復此設定可徹底避免 AddMessage3 (Timer 批次新增) 時產生的背景擦除閃爍。
         Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
@@ -63,18 +63,18 @@ Public Class DebugForm
     End Sub
     Private Sub DebugForm_Shown(sender As Object, e As EventArgs) Handles Me.Shown
         ' ==============================================================
-        ' by AntiGravity, 2026/04/01: 將重型 UI 佈局校算移到 Shown 事件
+        ' by Gemini, 2026/04/01: 將重型 UI 佈局校算移到 Shown 事件
         ' 目的: 讓 Form1 觸發開啟除錯視窗後能立即返回，不等待 UI 佈局渲染，優化啟動延遲感
         ' ==============================================================
         ' todo: 重構簡化formload? InitSearchPanel() : InitListView() : InitLayout()
 
         ' 1. 將搜尋列移至頂部 (比照 Tab5)，並設定固定高度
-        ' 2026/3/27 by AntiGravity: ── 佈局一致化優化 (穩定 Dock 佈局) ──
+        ' 2026/3/27 by Gemini: ── 佈局一致化優化 (穩定 Dock 佈局) ──
         pnlSearch.Dock = DockStyle.Top : pnlSearch.Height = 45
         pnlSearch.BackColor = Form1.ThemeColors.Gray95
 
         ' 2. 設定搜尋文字框與邏輯切換開關的對齊與錨定
-        ' 2026/3/28 by AntiGravity: 重寫佈局 — 先固定右側 CheckBox，再讓 TextBox 填滿剩餘空間
+        ' 2026/3/28 by Gemini: 重寫佈局 — 先固定右側 CheckBox，再讓 TextBox 填滿剩餘空間
         Dim targetTop As Integer = (pnlSearch.ClientSize.Height - txtDebug.Height) \ 2
 
         ' 3. 設定右側: checkAndOr (AND/OR 切換) ──
@@ -92,13 +92,13 @@ Public Class DebugForm
         AnchorStyles.Left Or AnchorStyles.Right     ' 隨表單放大自動展寬
 
         ' 5. 設定列表填滿剩餘空間
-        lvwDebug.Anchor = AnchorStyles.None ' 2026/3/27 by AntiGravity: 清除 Anchor 避免與 Dock 衝突
+        lvwDebug.Anchor = AnchorStyles.None ' 2026/3/27 by Gemini: 清除 Anchor 避免與 Dock 衝突
         lvwDebug.Dock = DockStyle.Fill
         lvwDebug.OwnerDraw = True           ' 準備允許自訂重繪搜尋字串高亮
         lvwDebug.MultiSelect = True         ' 2026-03-23: 啟用多選才能讓 Ctrl+C KeyDown 複製多行, ✅ 覆寫 Designer 的 MultiSelect=False，支援 Ctrl+C 多選複製
 
         ' 6. 設定正確的Z-Order填充順序
-        ' 2026/3/27 by AntiGravity: 正確的 Dock Z-Order 邏輯
+        ' 2026/3/27 by Gemini: 正確的 Dock Z-Order 邏輯
         lvwDebug.BringToFront()     ' WinForms 中，Dock=Top 的面板必須在 Controls 最尾端 (SendToBack) 才會最先取得空間。
         pnlSearch.SendToBack()      ' Dock=Fill 的控制項必須在 Controls 最前端 (BringToFront) 才會填滿剩餘空間。
         ' simon: 使用視覺設計表單物件30年, 我到今天才知道它們的 Z-Order 前後順序會影響 Dock 的填充邏輯?!
@@ -109,18 +109,18 @@ Public Class DebugForm
             .Add("Debug Message", 400, HorizontalAlignment.Left) ' 寬度會在 Load 時被 RecalcColumnWidths 調整，這裡先給個預設值
             .Add("Timestamp", 115, HorizontalAlignment.Center)
             .Add("Time Span", 85, HorizontalAlignment.Right)
-            '.Insert(0, New ColumnHeader() With {.Text = "Debug Message", .Width = -2,    ' 2026/3/28 by AntiGravity: Width=-2 讓第一欄自動填滿剩餘空間，避免寫死寬度在 Load 時擠掉右側欄位
+            '.Insert(0, New ColumnHeader() With {.Text = "Debug Message", .Width = -2,    ' 2026/3/28 by Gemini: Width=-2 讓第一欄自動填滿剩餘空間，避免寫死寬度在 Load 時擠掉右側欄位
             '                                    .TextAlign = HorizontalAlignment.Left})
         End With
 
-        RecalcColumnWidths(Nothing, Nothing)    ' 2026/3/30 by AntiGravity: 在 Load 時手動觸發強制調整一次，確保初始顯示正確 (特別是第一欄填滿剩餘空間)
+        RecalcColumnWidths(Nothing, Nothing)    ' 2026/3/30 by Gemini: 在 Load 時手動觸發強制調整一次，確保初始顯示正確 (特別是第一欄填滿剩餘空間)
 
         AddHandler lvwDebug.ItemSelectionChanged, AddressOf lvwDebug_ItemSelectionChanged
         AddHandler lvwDebug.ClientSizeChanged, AddressOf RecalcColumnWidths
 
-        ' 2026/3/28 by AntiGravity: 監聽 lvwDebug 本身的 ClientSizeChanged 事件，
+        ' 2026/3/28 by Gemini: 監聽 lvwDebug 本身的 ClientSizeChanged 事件，
         ' 無論何時 ListView 可用空間改變 (Dock 佈局結算、表單 Resize、SyncDebugFormPosition)，都自動重算欄寬, 不再需要猜延遲值或一次性 Timer
-        ' by AntiGravity, 2026/03/29: 右鍵管理選單 (只建立一次，不重複 AddHandler)
+        ' by Gemini, 2026/03/29: 右鍵管理選單 (只建立一次，不重複 AddHandler)
         Dim ctx As New ContextMenuStrip()
         ctx.Items.Add("計算選取耗時", Nothing, AddressOf CalculateSelectedTimeSpan)
         ctx.Items.Add("刪除選取項目", Nothing, AddressOf DeleteSelectedItems)
@@ -132,7 +132,7 @@ Public Class DebugForm
         Form1.CheckDebug.Checked = False
     End Sub
     Private Sub RecalcColumnWidths(sender As Object, e As EventArgs)
-        ' 2026/04/01 by AntiGravity: 修正 ListView 項目在卷軸消失時跟著消失的致命 Bug
+        ' 2026/04/01 by Gemini: 修正 ListView 項目在卷軸消失時跟著消失的致命 Bug
 
         ' 1. 加入門檻判定 (Threshold): 寬度變動極小時不觸發重設，避免拖動尺寸時的頻繁重發 (Throttle)
         If lvwDebug.Columns.Count < 2 Then Return
@@ -178,7 +178,7 @@ Public Class DebugForm
         Static lineCount As Integer
         Dim newLine As Integer = System.Threading.Interlocked.Increment(lineCount)
 
-        ' 2026/03/31 by AntiGravity: 優化顯示格式，若第二個參數為空則不顯示括號
+        ' 2026/03/31 by Gemini: 優化顯示格式，若第二個參數為空則不顯示括號
         Dim msgContent As String = $"{newLine.ToString("00")} {strA} {callingMethod}"
         If Not String.IsNullOrEmpty(strB) Then msgContent &= $" ({strB})"
 
@@ -186,19 +186,19 @@ Public Class DebugForm
         newItem.SubItems.Add(timeNow.ToString("HH:mm:ss.ff"))
         newItem.SubItems.Add(If(newLine > 1, timeSpan.TotalMilliseconds.ToString("#,##0.00"), "-")) ' 第一列剛啟動, 沒有耗時就不填
 
-        ' 2026/3/28 by AntiGravity: 預先計算快取資訊存入tag備用
+        ' 2026/3/28 by Gemini: 預先計算快取資訊存入tag備用
         Dim tag As New DebugItemTag()
         tag.textFullRow = (newItem.Text & " " & newItem.SubItems(1).Text & " " & newItem.SubItems(2).Text).ToLower()
         tag.isHit = CheckIsHitInternal(tag.textFullRow) ' 新訊息加入瞬間也要先比對是否已符合搜尋字串
-        tag.timeStamp = timeNow                         ' 2026/3/28 by AntiGravity: 保留原始精度供日後計算
+        tag.timeStamp = timeNow                         ' 2026/3/28 by Gemini: 保留原始精度供日後計算
         newItem.Tag = tag
 
-        ' by AntiGravity, 2026/04/03: 區隔邏輯與 Enqueue
-        _msgQueue.Enqueue(newItem)                      ' 2026-03-25 by AntiGravity: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
+        ' by Gemini, 2026/04/03: 區隔邏輯與 Enqueue
+        _msgQueue.Enqueue(newItem)                      ' 2026-03-25 by Gemini: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
 
     End Sub
     Private Sub Timer_Tick(sender As Object, e As EventArgs) Handles QueueTimer.Tick
-        ' 2026-03-25 by AntiGravity: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
+        ' 2026-03-25 by Gemini: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
         If _msgQueue.IsEmpty Then Return
 
         Dim itemsToAdd As New List(Of ListViewItem)()
@@ -206,7 +206,7 @@ Public Class DebugForm
         While _msgQueue.TryDequeue(item) : itemsToAdd.Add(item) : End While
 
         If itemsToAdd.Count > 0 Then
-            ' 2026/03/31 by AntiGravity: 自動為「結束」行預算總耗時
+            ' 2026/03/31 by Gemini: 自動為「結束」行預算總耗時
             For Each lvi In itemsToAdd
                 If lvi.Text.Contains("結束") Then
                     Dim pair As ListViewItem = FindSimilarPair(lvi)
@@ -227,7 +227,7 @@ Public Class DebugForm
                 .Items.AddRange(itemsToAdd.ToArray())
                 .EndUpdate()
 
-                ' 💡 2026/04/01 by AntiGravity:
+                ' 💡 2026/04/01 by Gemini:
                 ' EnsureVisible 必須在 EndUpdate 之後呼叫，避免在暫停繪製期間滾動引發的瞬間畫面撕裂與閃爍
                 .Items(.Items.Count - 1).EnsureVisible()
             End With
@@ -254,11 +254,11 @@ Public Class DebugForm
 
     End Function
     ''' <summary>
-    ''' 2026/03/31 by AntiGravity: 集中化追蹤呼叫者名稱，支援 Async 非同步方法解析與編譯器生成的狀態機器名稱還原
+    ''' 2026/03/31 by Gemini: 集中化追蹤呼叫者名稱，支援 Async 非同步方法解析與編譯器生成的狀態機器名稱還原
     ''' </summary>
     ''' <param name="skipLevels">跳過的堆疊層次 (自 GetCallerName 的呼叫層算起)</param>
     Public Shared Function GetCallerName(Optional skipLevels As Integer = 2) As String
-        ' 2026/03/31 by AntiGravity: 依照先前計畫重構，
+        ' 2026/03/31 by Gemini: 依照先前計畫重構，
 
         ' 使用 st.FrameCount 遍歷以確保在複雜非同步環境下仍能抓到正確層級
         Dim st As New StackTrace(skipLevels, False)
@@ -301,14 +301,14 @@ Public Class DebugForm
 #Region "■ 05 ListView 操作事件"
     Private Sub lvwDebug_ItemSelectionChanged(sender As Object, e As ListViewItemSelectionChangedEventArgs) Handles lvwDebug.ItemSelectionChanged
 
-        ' by AntiGravity, 2026/04/01: 解決點選配對項目時的閃爍問題 (Flickering)
+        ' by Gemini, 2026/04/01: 解決點選配對項目時的閃爍問題 (Flickering)
         ' 不直接修改 ListViewItem.BackColor 屬性，改為記錄目標並用 Invalidate() 局部重繪。
         If Not e.IsSelected Then Return
 
-        ' by AntiGravity, 2026/03/29: 選取變更時自動標記配對的「開始/結束」行
+        ' by Gemini, 2026/03/29: 選取變更時自動標記配對的「開始/結束」行
         ' 效能優化: 使用 _lastHighlightedPair 做 O(1) 顏色還原，取代原本的 For Each 全域清除
         '           原本 Shift 多選 100 筆時會觸發 100 次事件 × N 筆 = O(N²) 重繪，改為 O(1)
-        ' 2026/04/01 by AntiGravity: 效能閥值管理, 防止 Shift 多選上千筆時產生 O(N²) 的效能雪崩 (延遲)
+        ' 2026/04/01 by Gemini: 效能閥值管理, 防止 Shift 多選上千筆時產生 O(N²) 的效能雪崩 (延遲)
         ' 當使用者框選多筆資料時，配對高光沒有意義，直接清除高光並 Return 離開，省下幾百萬次的字串比對
         If lvwDebug.SelectedIndices.Count > 1 Then
             If _lastHighlightedPair IsNot Nothing Then
@@ -341,7 +341,7 @@ Public Class DebugForm
         Dim selectedItem As ListViewItem = sender.GetItemAt(e.X, e.Y)
         If selectedItem Is Nothing Then Return
 
-        ' by AntiGravity, 2026/04/05: ── 標記功能 ──
+        ' by Gemini, 2026/04/05: ── 標記功能 ──
         ' 直接切換項目底色：橘色 ↔ 白色
         ' DrawSubItem 本來就讀 e.Item.BackColor 來畫底色，這裡直接改它最簡單
         ' (低頻雙擊操作，不會有閃爍問題)
@@ -357,15 +357,15 @@ Public Class DebugForm
         Dim fullText As String = String.Join(vbTab, selectedItem.SubItems.Cast(Of ListViewItem.ListViewSubItem)().Select(Function(s) s.Text))
         Clipboard.SetText(fullText)
 
-        ' ✅ 重算時間差: 優先找配對的 Begin/End，其次嘗試與前一行比較 (by AntiGravity, 2026/03/31)
-        ' 2026/3/28 by AntiGravity: 直接從 DebugItemTag.timeStamp 讀取原始時間，免去 TryParse 反解與精度損失
+        ' ✅ 重算時間差: 優先找配對的 Begin/End，其次嘗試與前一行比較 (by Gemini, 2026/03/31)
+        ' 2026/3/28 by Gemini: 直接從 DebugItemTag.timeStamp 讀取原始時間，免去 TryParse 反解與精度損失
         Dim tagCurrent = TryCast(selectedItem.Tag, DebugItemTag)
         If tagCurrent Is Nothing Then Return
         Dim t_anchor As Date
         Dim anchorFound As Boolean = False
 
         ' 1. 優先嘗試尋找配對 (只限於對「結束」行尋找回頭的「開始」)
-        ' by AntiGravity, 2026/03/31: 點擊「開始」應維持與前一行的間隔，只有點擊「結束」才計算程序總耗時
+        ' by Gemini, 2026/03/31: 點擊「開始」應維持與前一行的間隔，只有點擊「結束」才計算程序總耗時
         If selectedItem.Text.Contains("結束") Then
             Dim pairItem As ListViewItem = FindSimilarPair(selectedItem)
             If pairItem IsNot Nothing Then
@@ -413,24 +413,24 @@ Public Class DebugForm
         e.DrawDefault = True
     End Sub
     Private Sub lvwDebug_DrawItem(sender As Object, e As DrawListViewItemEventArgs) Handles lvwDebug.DrawItem
-        ' 2026/03/31 by AntiGravity: 在 OwnerDraw=True 時若設為 True 會覆蓋掉 SubItem 的高亮，必須設為 False
+        ' 2026/03/31 by Gemini: 在 OwnerDraw=True 時若設為 True 會覆蓋掉 SubItem 的高亮，必須設為 False
         e.DrawDefault = False
 
     End Sub
     Private Sub lvwDebug_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs) Handles lvwDebug.DrawSubItem
         ' =======================================================
         ' 完全自訂繪製，確保文字在有/無搜尋條件時位置絕對不跳動
-        ' 2026/3/27 by AntiGravity (simon: 幹這些東西沒有用過好難)
+        ' 2026/3/27 by Gemini (simon: 幹這些東西沒有用過好難)
         ' =======================================================
         e.DrawDefault = False
-        ' ✅ 2026/03/31 by AntiGravity: 強制設定 Clip 區域。在極寬視窗 (>2000px) 且無捲軸時，
+        ' ✅ 2026/03/31 by Gemini: 強制設定 Clip 區域。在極寬視窗 (>2000px) 且無捲軸時，
         ' GDI+ 可能因內部座標計算偏移而遺失繪圖，顯式 SetClip 可解決此問題。
         e.Graphics.SetClip(e.Bounds)
 
         ' Step 1. Background
         Dim backColor As Color = e.Item.BackColor
         Dim foreColor As Color = e.Item.ForeColor
-        ' 2026/04/01 by AntiGravity: 取代原本動態修改 Item.BackColor 的做法，改在渲染時直上高光
+        ' 2026/04/01 by Gemini: 取代原本動態修改 Item.BackColor 的做法，改在渲染時直上高光
         ' (標記項目的橘色底色已直接存在 item.BackColor，自然被上面這行讀到，不需要額外判斷)
         If _lastHighlightedPair IsNot Nothing AndAlso e.Item Is _lastHighlightedPair Then
             backColor = Color.Cyan   ' 配對「開始/結束」行的高亮（此為渲染時注入，不污染 BackColor 屬性）
@@ -448,14 +448,14 @@ Public Class DebugForm
         Dim align As HorizontalAlignment = lvwDebug.Columns(e.ColumnIndex).TextAlign
         Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.PreserveGraphicsClipping Or
                                        TextFormatFlags.NoPrefix Or TextFormatFlags.NoPadding
-        ' 2026/3/27 by AntiGravity: 必須強制使用 NoPadding 才能跟 MeasureText(NoPadding) 的手動座標完全對齊
+        ' 2026/3/27 by Gemini: 必須強制使用 NoPadding 才能跟 MeasureText(NoPadding) 的手動座標完全對齊
         ' Text bounds (一致的 6px 留白，模擬預設繪製但不產生跳躍)
         Dim textRect As Rectangle = e.Bounds : textRect.Inflate(-6, 0)
         Dim searchText As String = txtDebug.Text.Trim()
         Dim tag = TryCast(e.Item.Tag, DebugItemTag)
         Dim isHitCell As Boolean = False
         Dim matches As System.Text.RegularExpressions.MatchCollection = Nothing
-        ' 2026/3/28 by AntiGravity: 讀取快取狀態與預先定義好的 Regex 模式，達成 O(1) 繪製準備
+        ' 2026/3/28 by Gemini: 讀取快取狀態與預先定義好的 Regex 模式，達成 O(1) 繪製準備
         If tag IsNot Nothing AndAlso tag.isHit AndAlso Not String.IsNullOrEmpty(_searchPattern) Then
             matches = System.Text.RegularExpressions.Regex.Matches(itemText, _searchPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase)
             If matches IsNot Nothing AndAlso matches.Count > 0 Then isHitCell = True
@@ -517,20 +517,20 @@ Public Class DebugForm
 #Region "■ 06 其他UI操作事件"
     Private Sub txtDebug_TextChanged(sender As Object, e As EventArgs) Handles txtDebug.TextChanged
         ' 搜尋字串變更: 重繪 ListView
-        UpdateSearchCaption() ' by AntiGravity, 2026/03/31: 同步更新視窗標題
-        RefreshSearchCache()  ' 2026/3/28 by AntiGravity: 批次更新快取
+        UpdateSearchCaption() ' by Gemini, 2026/03/31: 同步更新視窗標題
+        RefreshSearchCache()  ' 2026/3/28 by Gemini: 批次更新快取
         lvwDebug.Refresh()
 
     End Sub
     Private Sub chkSearchLogic_CheckedChanged(sender As Object, e As EventArgs) Handles checkAndOr.CheckedChanged
         checkAndOr.Text = If(checkAndOr.Checked, "AND", "OR")
-        UpdateSearchCaption() ' by AntiGravity, 2026/03/31: 切換模式時同步更新視窗標題
-        RefreshSearchCache()  ' 2026/3/28 by AntiGravity: 批次更新快取
+        UpdateSearchCaption() ' by Gemini, 2026/03/31: 切換模式時同步更新視窗標題
+        RefreshSearchCache()  ' 2026/3/28 by Gemini: 批次更新快取
         lvwDebug.Refresh()
 
     End Sub
     ''' <summary>
-    ''' 2026/03/31 by AntiGravity: 集中標題管理邏輯，解決文字清空未回復、及 logic 切換未同步問題
+    ''' 2026/03/31 by Gemini: 集中標題管理邏輯，解決文字清空未回復、及 logic 切換未同步問題
     ''' </summary>
     Private Sub UpdateSearchCaption()
         If String.IsNullOrWhiteSpace(txtDebug.Text) Then
@@ -545,7 +545,7 @@ Public Class DebugForm
 
 #Region "■ 07 輔助函數"
     Private Sub CalculateSelectedTimeSpan(sender As Object, e As EventArgs)
-        ' by AntiGravity, 2026/03/29: 加總選取項目各自的耗時間隔 (使用 .Tag.timeStamp)
+        ' by Gemini, 2026/03/29: 加總選取項目各自的耗時間隔 (使用 .Tag.timeStamp)
         ' 每個項目的耗時 = 該項目的 timeStamp - ListView 中前一項的 timeStamp
         If lvwDebug.SelectedItems.Count = 0 Then
             MessageBox.Show("請至少選取 1 個項目") : Return
@@ -565,7 +565,7 @@ Public Class DebugForm
 
     End Sub
     Private Sub DeleteSelectedItems(sender As Object, e As EventArgs)
-        ' by AntiGravity, 2026/03/29: 刪除選取項目，剩餘項目自動往上遞補，行號序號保留不變
+        ' by Gemini, 2026/03/29: 刪除選取項目，剩餘項目自動往上遞補，行號序號保留不變
         ' debug: 大量刪除時崩潰
         lvwDebug.BeginUpdate()
         For Each item As ListViewItem In lvwDebug.SelectedItems
@@ -575,8 +575,8 @@ Public Class DebugForm
 
     End Sub
     Private Sub RefreshSearchCache()
-        ''' 2026/3/28 by AntiGravity: 根據目前關鍵字更新所有項目的 isHit 狀態，並預先產生 Regex 高亮模式
-        ' by AntiGravity, 2026/04/03: 增加邏輯區隔空白
+        ''' 2026/3/28 by Gemini: 根據目前關鍵字更新所有項目的 isHit 狀態，並預先產生 Regex 高亮模式
+        ' by Gemini, 2026/04/03: 增加邏輯區隔空白
         If lvwDebug.Items.Count = 0 Then Return
 
         ' 預先產生 Regex 模式，徹底移除 DrawSubItem 中的 LINQ 與字串運算
@@ -611,7 +611,7 @@ Public Class DebugForm
 
     End Function
     Private Function CheckIsHitInternal(fullText As String, Optional preParsedKeywords As List(Of String) = Nothing) As Boolean
-        ''' 2026/3/28 by AntiGravity: 內部判斷邏輯，可傳入預解析關鍵字以加速批次處理
+        ''' 2026/3/28 by Gemini: 內部判斷邏輯，可傳入預解析關鍵字以加速批次處理
         Dim keywords = If(preParsedKeywords, ParseSearchKeywords(txtDebug.Text.Trim()))
         If keywords.Count = 0 Then Return False
         Return If(checkAndOr.Checked,
@@ -620,7 +620,7 @@ Public Class DebugForm
 
     End Function
     Private Function FindSimilarPair(selectedItem As ListViewItem) As ListViewItem
-        ' by AntiGravity, 2026/03/29: 巢狀雙向配對搜尋 (Stack 計數器演算法)
+        ' by Gemini, 2026/03/29: 巢狀雙向配對搜尋 (Stack 計數器演算法)
         '   點選「開始」→ 向下找配對的「結束」
         '   點選「結束」→ 向上找配對的「開始」
         '   遇到同名的巢狀呼叫時，使用 depth 計數器確保配對到正確的層級
@@ -671,7 +671,7 @@ Public Class DebugForm
 
     End Function
     Private Function RemoveBeginEnd(content As String) As String
-        ' 2026/03/31 by AntiGravity: 強化提取比對核心 (Key) 的邏輯
+        ' 2026/03/31 by Gemini: 強化提取比對核心 (Key) 的邏輯
         ' 1. 移除行號前綴 (第一個空格前)
         Dim idx As Integer = content.IndexOf(" "c)
         Dim result As String = If(idx >= 0, content.Substring(idx + 1), content)

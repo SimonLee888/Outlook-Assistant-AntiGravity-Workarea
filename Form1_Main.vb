@@ -121,7 +121,7 @@ Partial Class Form1
     '           cache: 0.01s (應當與 v1 相同)
     '
     '   v5 (本版)
-    '           2026/04/04 by AntiGravity: 大幅重構 ComputeFolderStatsAsync，
+    '           2026/04/04 by Gemini: 大幅重構 ComputeFolderStatsAsync，
     '           依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。
     '
     ' ── 為什麼 v4 不用 Task.WhenAll？─────────────────────────────
@@ -206,7 +206,7 @@ Partial Class Form1
             Cursor = Cursors.Default : Return
         End If
 
-        ' by AntiGravity, 2026/04/03: 區隔邏輯準備與 Await 調用
+        ' by Gemini, 2026/04/03: 區隔邏輯準備與 Await 調用
         Try ' L2: BFS 展開整棵子樹，快取命中剪枝，底部向上彙總，回傳顯示清單
             Dim progressIndicator = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
             Dim rows As List(Of FolderBfsEntry) = Await ComputeFolderStatsAsync(selectedFolder, progressIndicator)
@@ -216,7 +216,7 @@ Partial Class Form1
 
             ' ✅ ESC 中斷封 ComputeFolderStatsAsync 回空 List → 不更新 ListView
             If _cancelRequested OrElse rows.Count = 0 Then
-                Dbg("結束", If(_cancelRequested, "ESC 中斷", "結果為空")) ' by AntiGravity, 2026/04/04: Issue 3
+                Dbg("結束", If(_cancelRequested, "ESC 中斷", "結果為空")) ' by Gemini, 2026/04/04: Issue 3
                 ProgressBar1.Text = "已中斷。" : Cursor = Cursors.Default : Return
             End If
 
@@ -233,7 +233,7 @@ Partial Class Form1
             ListView1.EndUpdate()
 
         Catch ex As System.Exception
-            Dbg("錯誤", ex.Message) ' by AntiGravity, 2026/04/04: Issue 4 標準化
+            Dbg("錯誤", ex.Message) ' by Gemini, 2026/04/04: Issue 4 標準化
         End Try
 
         sw.Stop()
@@ -278,7 +278,7 @@ Partial Class Form1
         ' === Layer 2 (流程協調層) ===
         ' 職責: BFS 廣度優先搜索，展開整棵子樹，管理快取剪枝，驅動 L3，底部向上彙總，回傳顯示清單
         ' 
-        ' 2026/04/04 by AntiGravity 重構紀錄:
+        ' 2026/04/04 by Gemini 重構紀錄:
         ' v5: 原有的百行巨型函數已被依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。
         '
         ' 拆分後的五個步驟 (Steps):
@@ -296,7 +296,7 @@ Partial Class Form1
         ' ==============================================================
         Dbg(" - 開始", rootFolder.Name)
 
-        ' ── Step 1: 負責展開樹狀結構與初步快取剪枝 (by AntiGravity, 2026/04/05 改為非同步以提升響應)
+        ' ── Step 1: 負責展開樹狀結構與初步快取剪枝 (by Gemini, 2026/04/05 改為非同步以提升響應)
         Dim allEntries As List(Of FolderBfsEntry) = Await BuildBfsFolderTree(rootFolder)
         If _cancelRequested Then Return New List(Of FolderBfsEntry)
 
@@ -378,10 +378,10 @@ Partial Class Form1
 
             For Each s As ListViewItem In selectedItems
                 'If s.Index = 0 Then Continue For ' 一樣, 若選中本體目錄則跳過 (之前統計速度很慢的時候, 怕計算量太大跑太久)
-                Dim folder As Outlook.Folder = TryCast(s.Tag, Outlook.Folder)       ' 2026/3/24 by AntiGravity: 改用 Tag 取回 Folder，避免 GetFolderByName 遞迴展開 TreeView
+                Dim folder As Outlook.Folder = TryCast(s.Tag, Outlook.Folder)       ' 2026/3/24 by Gemini: 改用 Tag 取回 Folder，避免 GetFolderByName 遞迴展開 TreeView
                 If folder Is Nothing Then Continue For
 
-                Dim folderSize As Long = Await GetCachedFolderSizeAllAsync(folder)  ' 2026/3/29 by AntiGravity: 改為存取 L2.5 快取代理，第二次點擊同一資料夾直接命中快取
+                Dim folderSize As Long = Await GetCachedFolderSizeAllAsync(folder)  ' 2026/3/29 by Gemini: 改為存取 L2.5 快取代理，第二次點擊同一資料夾直接命中快取
 
                 Dim strFolderSize As String
                 If folderSize < 0 Then strFolderSize = "計算失敗" Else strFolderSize = (folderSize / 1024).ToString("###,###,###,##0 KB")
@@ -406,7 +406,7 @@ Partial Class Form1
         Dim queue As New Queue(Of (folderObj As Outlook.Folder, parentIdx As Integer))
         queue.Enqueue((rootFolder, -1))
 
-        ' by AntiGravity, 2026/04/05: 每 100ms 主動讓出執行緒並檢查中斷，兼顧效能與靈敏度
+        ' by Gemini, 2026/04/05: 每 100ms 主動讓出執行緒並檢查中斷，兼顧效能與靈敏度
         Dim swThrottle As New Stopwatch() : swThrottle.Start()
         Do While queue.Count > 0
             Dim curr = queue.Dequeue()
@@ -434,7 +434,7 @@ Partial Class Form1
                 queue.Enqueue((subFolder, myIdx))
             Next
 
-            ' by AntiGravity, 2026/04/05: 定時讓位以處理系統訊息
+            ' by Gemini, 2026/04/05: 定時讓位以處理系統訊息
             If swThrottle.ElapsedMilliseconds >= 100 Then
                 swThrottle.Restart()
                 Await Task.Delay(1) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
@@ -455,8 +455,8 @@ Partial Class Form1
         Dim processed As Integer = 0
         Dim swThrottle As New Stopwatch() : swThrottle.Start()
 
-        For i As Integer = 0 To total - 1
-            Dim entry As FolderBfsEntry = allEntries(i)
+        For fd As Integer = 0 To total - 1
+            Dim entry As FolderBfsEntry = allEntries(fd)
             If Not entry.IsFromCache Then
                 entry.DirectMailCount = GetCachedMailCount(entry.Folder) ' 直接呼叫 Proxy 代理層
                 entry.TotalMailCount = entry.DirectMailCount             ' 初始值 = 本層，後面底部向上累加子孫
@@ -464,7 +464,7 @@ Partial Class Form1
             End If
             processed += 1
 
-            ' by AntiGravity, 2026/04/05: 每 100ms 節流觸發進度報告與中斷檢查，確保即便沒有 progress 物件也能隨時中斷
+            ' by Gemini, 2026/04/05: 每 100ms 節流觸發進度報告與中斷檢查，確保即便沒有 progress 物件也能隨時中斷
             If swThrottle.ElapsedMilliseconds >= 100 Then
                 If progress IsNot Nothing Then
                     progress.Report(New L3ProgressReport With {.CurrentCount = processed, .TotalCount = total,
@@ -474,12 +474,10 @@ Partial Class Form1
                 Await Task.Delay(1)                  ' 有更新progressBar的地方, 至少要保留.delay(1)才會來得及顯示
                 If _cancelRequested Then Return True ' ✅ Delay 後立即檢查
             End If
-
-            'Dbg("結束", "ESC 中斷") ' by AntiGravity, 2026/04/04: Issue 2 補上結束
             Await Task.Delay(1)                  ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
             If _cancelRequested Then Return True ' ✅ ESC 中斷: 取消計算
         Next
-        Dbg(" - 結束", $"共讀取 {total} 個節點（非快取）") ' by AntiGravity, 2026/04/04: Issue 2 補上結束
+        Dbg(" - 結束", $"共讀取 {total} 個節點（非快取）") ' by Gemini, 2026/04/04: Issue 2 補上結束
         Return False ' 沒有ESC中斷，順利完成COM的讀取並填充List
     End Function
     Private Sub SummarizeSubTreeBottomUp(allEntries As IReadOnlyList(Of FolderBfsEntry))
@@ -544,7 +542,7 @@ Partial Class Form1
         ' isRoot=False → 顯示名稱加「 - 」前綴 (直屬子資料夾，視覺上縮排)
         ' ─────────────────────────────────────────────────────────────
 
-        ' by AntiGravity, 2026/03/31: 視覺優化重構
+        ' by Gemini, 2026/03/31: 視覺優化重構
         ' 1. 資料夾名稱：還原開頭縮排空白 (使用 " - ")，保持整齊。
         ' 2. 防止切邊：不論名稱或右對齊數字，斜體時一律在字串結尾補上一格空白。
         Dim isItalicFolder As Boolean = Not IsMailFolder(entry.Folder)
@@ -563,7 +561,7 @@ Partial Class Form1
         If sizeStr <> "- " Then sizeStr &= " "
         Dim lvi As New ListViewItem({displayName, directMailStr, totalSubStr, totalMailStr, sizeStr})
 
-        ' by AntiGravity, 2026/03/29: 特殊顯示非郵件資料夾 (斜體 + 灰色)
+        ' by Gemini, 2026/03/29: 特殊顯示非郵件資料夾 (斜體 + 灰色)
         If isItalicFolder Then
             lvi.ForeColor = Color.DarkGray
             lvi.Font = New Font(ListView1.Font, _fontItalic)
@@ -614,7 +612,7 @@ Partial Class Form1
     '   Layer 3 (COM 資料層)   : GetYearCountsForFolderAsync
     ' ==============================================================
 #Region "  ├ L1 UI事件層"
-    ' by AntiGravity, 2026/03/29: 已移除 TreeView2_AfterSelect，其功能由 SimTree2 完全取代。
+    ' by Gemini, 2026/03/29: 已移除 TreeView2_AfterSelect，其功能由 SimTree2 完全取代。
     Private Async Sub SimTree2_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTree2.AfterSelect
         ' ---------------------------------------------------------------
         ' === Layer 1: UI 事件層 ===
@@ -636,14 +634,14 @@ Partial Class Form1
         ' 取得 SimTree2 多選清單 (SelectedNodes 是 SimTree 提供的 List(Of TreeNode))
         Dim selectedNodes As List(Of TreeNode) = SimTree2.SelectedNodes
         If selectedNodes Is Nothing OrElse selectedNodes.Count = 0 Then
-            Dbg("結束", "無節點被選取") ' by AntiGravity, 2026/04/04: Issue 3
+            Dbg("結束", "無節點被選取") ' by Gemini, 2026/04/04: Issue 3
             Cursor = Cursors.Default : Return           ' 選擇節點為空，直接結束
         End If
 
         Dim targetFolderList =                          ' 把所有已選 TreeNode 的 Tag 轉換成 Outlook.Folder，過濾掉無效節點
             selectedNodes.Select(Function(n) TryCast(n.Tag, Outlook.Folder)).Where(Function(f) f IsNot Nothing).ToList()
         If targetFolderList.Count = 0 Then
-            Dbg("結束", "所有選定節點均無效資料夾") ' by AntiGravity, 2026/04/04: Issue 3
+            Dbg("結束", "所有選定節點均無效資料夾") ' by Gemini, 2026/04/04: Issue 3
             Cursor = Cursors.Default : Return           ' 如果沒有任何有效的資料夾 (List.Count=0) 就直接結束
         End If
 
@@ -670,7 +668,7 @@ Partial Class Form1
         ' --- 計算所有選定根資料夾的郵件總數，作為 ComputeYearCounts 進度條的分母
         Dim totalMailCount As Long = 0
         For Each rf As Outlook.Folder In targetFolderList
-            If _cancelRequested Then Exit For               ' by AntiGravity, 2026/04/05: 在預讀階段也加入中斷檢查
+            If _cancelRequested Then Exit For               ' by Gemini, 2026/04/05: 在預讀階段也加入中斷檢查
             If CheckSubFolder2.Checked Then
                 ' GetMailCountAll 是 Async，不能像上面放在 LINQ Sum lambda 裡，改用明確的 For Each + Await (光是這二點, 效能也差一大截)
                 ' 2026/3/20, 再次嚐試把GetMailCountAll() 改平行處理+非同步, 效能回復到原有的遞迴函數, 但速度並不穩定
@@ -689,7 +687,7 @@ Partial Class Form1
         ' --- 序號校驗點 2 (進入核心運算前) ---
         If _tab2SelectSeq <> mySeq Then Return              'Dbg("結束", "序號已不匹配，丟棄本次結果（核心運算前中斷）")
 
-        If _cancelRequested Then                            ' by AntiGravity, 2026/04/05: 若預讀被取消，提前結束
+        If _cancelRequested Then                            ' by Gemini, 2026/04/05: 若預讀被取消，提前結束
             Cursor = Cursors.Default : Return
         End If
 
@@ -745,7 +743,7 @@ Partial Class Form1
         ' 與 Chart2_MouseMove 共用 _lastHoveredPointIndex，確保兩者高亮互斥不累積
         ' 注意: Chart2_MouseLeave 會清掉 _lastHoveredPointIndex，
         '       滑鼠離開圖表後 ListView 的選取高亮也會消失
-        ' 2026-03-18, by Claude.ai / 2026-04-04 by AntiGravity: 共用函數重構
+        ' 2026-03-18, by Claude.ai / 2026-04-04 by Gemini: 共用函數重構
         ' ---------------------------------------------------------------
         Dbg("開始")
         If ListView2.SelectedItems.Count = 0 Then Return
@@ -786,7 +784,7 @@ Partial Class Form1
         ' 反向對應: ListView2_SelectedIndexChanged 負責 ListView → Chart2
         ' 設定 item.Selected = True 會觸發 ListView2_SelectedIndexChanged，
         ' 後者會再次把 Chart2 同一條塗紅 — 因為是同一條，行為是 idempotent 不會閃爍
-        ' 2026-03-18, by Claude.ai / 2026-04-04 by AntiGravity: 共用函數重構
+        ' 2026-03-18, by Claude.ai / 2026-04-04 by Gemini: 共用函數重構
         ' ---------------------------------------------------------------
         Dbg("開始")
         If Chart2.Series.Count = 0 OrElse Chart2.Series(0).Points.Count = 0 Then Return
@@ -840,7 +838,7 @@ Partial Class Form1
     Private Sub CheckSubFolder2_CheckedChanged(sender As Object, e As EventArgs) Handles CheckSubFolder2.CheckedChanged
         Dbg("開始", CheckSubFolder2.Checked.ToString)
 
-        ' by AntiGravity, 2026/03/29: 合併為 SimTree2 單一操作路徑
+        ' by Gemini, 2026/03/29: 合併為 SimTree2 單一操作路徑
         Dim selectedNodes As List(Of TreeNode) = SimTree2.SelectedNodes
         If selectedNodes IsNot Nothing AndAlso selectedNodes.Count > 0 Then
             SimTree2_AfterSelect(SimTree2, New TreeViewEventArgs(selectedNodes(0)))
@@ -864,7 +862,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         Dbg("開始", $"目標資料夾數: {folderList.Count}")
 
-        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02
+        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
         Dim processedCount As Integer = 0       ' ✅ 局部計數器，取代全域的 _intProcessedCount 和 _intTotalMailCount, 不會被其他事件汙染，快速點選時不會計數錯亂
 
         Dim merged As New ConcurrentDictionary(Of Integer, Integer)
@@ -887,7 +885,7 @@ Partial Class Form1
             merged = MergeDictionaries(merged, folderResult)    ' 把這個資料夾的結果合併到總計 (純 .NET 運算，不碰 COM)
             processedCount += folderResult.Values.Sum()         ' 累加已處理郵件數，透過 callback 通知 L1 更新進度顯示
 
-            ' by AntiGravity, 2026/04/02: 100ms 節流回報進度，且不輸出 Dbg()
+            ' by Gemini, 2026/04/02: 100ms 節流回報進度，且不輸出 Dbg()
             If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse processedCount >= totalMailCount) Then
                 progress.Report(New L3ProgressReport With {.CurrentCount = processedCount, .TotalCount = totalMailCount,
                                                            .Message = $"正在統計年度分佈: {processedCount:###,###,##0} / {totalMailCount:###,###,##0}..."})
@@ -906,7 +904,7 @@ Partial Class Form1
         ' 規則: 不遞迴、不碰 UI、不修改任何全域狀態，
         '       只做一件事: 詢問 Outlook 某資料夾每年有幾封郵件，回傳結果
         '       不遞迴、不知道上層的進度計數、不碰 UI，完全純粹的資料查詢函數
-        ' 2026/3/24 by AntiGravity: 從逐年 Restrict 改為 GetTable + GetArray 一次讀完再記憶體分組
+        ' 2026/3/24 by Gemini: 從逐年 Restrict 改為 GetTable + GetArray 一次讀完再記憶體分組
         '   原本每年一次 Restrict + Items.Count = ~30 次 COM call
         '   現在 1 次 GetTable + ceil(N/1000) 次 GetArray，大幅減少 COM 跨程序呼叫
         ' ---------------------------------------------------------------
@@ -915,15 +913,15 @@ Partial Class Form1
         ' 2026/3/11再次重構: 優化 COM 呼叫，減少 RCW 物件積累，提升效能和穩定性
         'Dim folderItems As Outlook.Items = Nothing
         Dim yearCounts As New ConcurrentDictionary(Of Integer, Integer)
-        Const BATCH_SIZE As Integer = 1000  ' 2026/3/24 by AntiGravity: 每次批量讀取的筆數
+        Const BATCH_SIZE As Integer = 1000  ' 2026/3/24 by Gemini: 每次批量讀取的筆數
         Dim table As Outlook.Table = Nothing
         Try
-            ' 2026/3/24 by AntiGravity: 改用 GetTable + GetArray 取代逐年 Restrict
+            ' 2026/3/24 by Gemini: 改用 GetTable + GetArray 取代逐年 Restrict
             ' 只讀 ReceivedTime 一欄，最小化每 row 的傳輸量
             table = folder.GetTable()
             table.Columns.RemoveAll()
             table.Columns.Add("ReceivedTime")   ' 欄位索引 0
-            ' by AntiGravity, 2026/04/05: 每批次讀取後，若超過 100ms 則釋放執行緒並檢查中斷
+            ' by Gemini, 2026/04/05: 每批次讀取後，若超過 100ms 則釋放執行緒並檢查中斷
             Dim swThrottle As New Stopwatch() : swThrottle.Start()
             Do While Not table.EndOfTable
                 If _cancelRequested Then Exit Do
@@ -941,7 +939,7 @@ Partial Class Form1
                     End If
                 Next
 
-                ' by AntiGravity, 2026/04/05: 每 100ms 節流讓出執行緒
+                ' by Gemini, 2026/04/05: 每 100ms 節流讓出執行緒
                 If swThrottle.ElapsedMilliseconds >= 100 Then
                     swThrottle.Restart()
                     Await Task.Delay(1) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
@@ -949,7 +947,7 @@ Partial Class Form1
                 End If
             Loop
         Catch ex As System.Exception
-            Dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+            Dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally
             TryMarshalRelease(table)
         End Try
@@ -964,7 +962,7 @@ Partial Class Form1
         ' GetMonthCountsForYear (完整替換舊版，加入快取和進度支援)
         ' L3 COM 資料層: 計算單一資料夾在指定年份中每個月的郵件數量
         ' 快取 key = FolderPath + "_" + year，與 yearCountsCache 的命名慣例一致
-        ' 2026/3/24 by AntiGravity: 從逐月 Restrict 改為 GetTable + GetArray 一次讀完再記憶體分組
+        ' 2026/3/24 by Gemini: 從逐月 Restrict 改為 GetTable + GetArray 一次讀完再記憶體分組
         '   原本 12 次 Restrict + 12 次 Items.Count = 24 次 COM call
         '   現在 1 次 GetTable (含日期範圍 filter) + ceil(N/1000) 次 GetArray
         ' ---------------------------------------------------------------
@@ -975,10 +973,10 @@ Partial Class Form1
         If _monthCountsCache.TryGetValue(cacheKey, value) Then Return value
 
         Dim monthCounts As New ConcurrentDictionary(Of Integer, Integer)
-        Const BATCH_SIZE As Integer = 1000  ' 2026/3/24 by AntiGravity
+        Const BATCH_SIZE As Integer = 1000  ' 2026/3/24 by Gemini
         Dim table As Outlook.Table = Nothing
         Try
-            ' 2026/3/24 by AntiGravity: 改用 GetTable + 日期範圍 DASL filter + GetArray
+            ' 2026/3/24 by Gemini: 改用 GetTable + 日期範圍 DASL filter + GetArray
             ' 用整年的日期範圍一次篩選，不再逐月 Restrict
             Dim startDate As New Date(year, 1, 1, 0, 0, 0)
             Dim endDate As New Date(year, 12, 31, 23, 59, 59)
@@ -1002,7 +1000,7 @@ Partial Class Form1
                 Await Task.Yield()
             Loop
         Catch ex As System.Exception
-            Dbg("錯誤", $"{folder.Name}, year={year}: {ex.Message}") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+            Dbg("錯誤", $"{folder.Name}, year={year}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally
             TryMarshalRelease(table)
         End Try
@@ -1063,12 +1061,12 @@ Partial Class Form1
         Dim monthCounts As New ConcurrentDictionary(Of Integer, Integer)
         Dim totalFolders As Integer = _tab2FolderList.Count
         Dim processedFolders As Integer = 0
-        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02
+        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
         For Each folder As Outlook.Folder In _tab2FolderList
             ' ✅ 進度顯示: 每完成一個資料夾更新一次
             processedFolders += 1
 
-            ' by AntiGravity, 2026/04/02: 100ms 節流回報進度到 ProgressBar2 (詳細內容)
+            ' by Gemini, 2026/04/02: 100ms 節流回報進度到 ProgressBar2 (詳細內容)
             If swThrottle.ElapsedMilliseconds >= 100 OrElse processedFolders = totalFolders Then
                 ProgressBar1.Text = "正在讀取..."
                 ProgressBar2.Text = $"正在統計 {selectedYear} 年月份分佈: ({processedFolders}/{totalFolders})個資料夾。"
@@ -1116,7 +1114,7 @@ Partial Class Form1
 
         ' 更新 Chart2 為月份長條圖
         UpdateChart2forMonthView(monthCounts, selectedYear)
-        ' by AntiGravity, 2026/03/29: 僅保留 SimTree2 顯示路徑，移除 TreeView2 判定
+        ' by Gemini, 2026/03/29: 僅保留 SimTree2 顯示路徑，移除 TreeView2 判定
         If SimTree2.Visible Then
             Dim nodes As List(Of TreeNode) = SimTree2.SelectedNodes
             If nodes IsNot Nothing AndAlso nodes.Count > 0 Then nodes(0).EnsureVisible()
@@ -1145,7 +1143,7 @@ Partial Class Form1
             ListView2.BeginUpdate()                                                     ' ✅ 批次更新，避免每次 Add 都觸發重繪
             Dim sortedYearCounts = yearCounts.OrderBy(Function(pair) pair.Key).ToList() ' 將年份按照升序排序
             For Each pair In sortedYearCounts
-                ListView2.Items.Add(New ListViewItem({pair.Key, pair.Value.ToString("###,###,##0") & " "})) ' ✅ 字串結尾一律補一格空白 (by AntiGravity, 2026/03/31)
+                ListView2.Items.Add(New ListViewItem({pair.Key, pair.Value.ToString("###,###,##0") & " "})) ' ✅ 字串結尾一律補一格空白 (by Gemini, 2026/03/31)
             Next
             ListView2.EndUpdate()
             UpdateChart2forDefultView(sortedYearCounts)
@@ -1192,7 +1190,7 @@ Partial Class Form1
         avgSeries.Points.AddXY(xMax, average)      ' 1: 這是圖表最右邊長條的確切 X 座標 (保證在視覺範圍內)
         avgSeries.Points.AddXY(xMax + 1, average)  ' 2: 到 X 軸最大值往右延伸
 
-        ' ✅ 用 TextAnnotation 顯示平均值標籤 (by AntiGravity, 2026/04/04 改用 DeepAmber 提升辨識度)
+        ' ✅ 用 TextAnnotation 顯示平均值標籤 (by Gemini, 2026/04/04 改用 DeepAmber 提升辨識度)
         Dim avgLabel As New TextAnnotation With {.Name = "平均值標籤",
                                                  .Text = "AVG: " & average.ToString("#,###,##0"),
                                                  .ForeColor = ThemeColors.avgLineColor,
@@ -1249,8 +1247,8 @@ Partial Class Form1
 
     End Sub
     Private Sub ShowProgressTab2(yearCounts As ConcurrentDictionary(Of Integer, Integer), elapsed As TimeSpan)
-        ' by AntiGravity, 2026/04/04: Issue 7 移除開始/結束 Dbg（函數體只有 5 行計算，不需要追蹤）
-        ' 顯示執行時間與統計速度 (ProgressBar1 為主結果，ProgressBar2 為輔助說明 by AntiGravity, 2026/04/02) ，yearCounts.Values.Sum 是最可靠的實際計數來源:
+        ' by Gemini, 2026/04/04: Issue 7 移除開始/結束 Dbg（函數體只有 5 行計算，不需要追蹤）
+        ' 顯示執行時間與統計速度 (ProgressBar1 為主結果，ProgressBar2 為輔助說明 by Gemini, 2026/04/02) ，yearCounts.Values.Sum 是最可靠的實際計數來源:
         '   - 含子資料夾時:   Sum = 整棵樹的郵件數
         '   - 不含子資料夾時: Sum = 只有選定資料夾的郵件數
         '   兩種情況都正確，不需要再透過 sender.SelectedNode 取值 (舊版 HACK 的根源)
@@ -1281,7 +1279,7 @@ Partial Class Form1
         ' 2026/3/10, by Claude, 重構 Find1stYear 函數
         ' 改進: 多層try/catch加強錯誤處理、確保 COM 物件正確釋放，避免 RCW 殘留問題
 
-        ' 2026/3/24 by AntiGravity:
+        ' 2026/3/24 by Gemini:
         ' 改用 GetTable + GetArray 取代逐年 Restrict之後就用不到這個函數了，因為 GetTable 直接過濾掉 1974 年之前的郵件
         ' =============================================================
         Dim mail As Outlook.MailItem = Nothing
@@ -1328,7 +1326,7 @@ Partial Class Form1
     End Function
 
     Private Function ParseYearFromText(text As String) As Integer
-        ' by AntiGravity, 2026/04/04: 從字串 (例如 "2024" 或包含年份的標題) 萃取出年份數字的共用邏輯
+        ' by Gemini, 2026/04/04: 從字串 (例如 "2024" 或包含年份的標題) 萃取出年份數字的共用邏輯
         If String.IsNullOrWhiteSpace(text) Then Return 0
 
         ' 處理 "── 2024 年月份分佈 ──" 這種標題格式，或是純數字 "2024"
@@ -1353,7 +1351,7 @@ Partial Class Form1
 
     End Function
     Private Function ParseMonthFromText(text As String) As Integer
-        ' by AntiGravity, 2026/04/04: 從字串 (例如 "2024 / 03月" 或 "3月") 萃取出月份數字的共用邏輯
+        ' by Gemini, 2026/04/04: 從字串 (例如 "2024 / 03月" 或 "3月") 萃取出月份數字的共用邏輯
         Dim moonIdx As Integer = text.IndexOf(CChar("月"))
         If moonIdx < 0 Then Return 0
 
@@ -1368,14 +1366,14 @@ Partial Class Form1
 
     End Function
     Private Function FindListViewItemByYear(targetYear As Integer) As ListViewItem
-        ' by AntiGravity, 2026/04/04: 根據年份尋找對應的 ListViewItem
+        ' by Gemini, 2026/04/04: 根據年份尋找對應的 ListViewItem
         For Each item As ListViewItem In ListView2.Items
             If ParseYearFromText(item.Text) = targetYear Then Return item
         Next
         Return Nothing
     End Function
     Private Function FindListViewItemByMonth(targetMonth As Integer) As ListViewItem
-        ' by AntiGravity, 2026/04/04: 根據月份數字尋找對應的 ListViewItem
+        ' by Gemini, 2026/04/04: 根據月份數字尋找對應的 ListViewItem
         Dim monthStr As String = targetMonth.ToString("D2") & "月"  ' e.g. "03月"
         For Each item As ListViewItem In ListView2.Items
             If item.Tag IsNot Nothing AndAlso item.Tag.ToString() = "BACK" Then Continue For
@@ -1396,7 +1394,7 @@ Partial Class Form1
 
     End Sub
     Private Sub BrushChartHoverState(chart As Chart, pointIndex As Integer)
-        ' by AntiGravity, 2026/04/04: 抽取共用的圖表高亮渲染邏輯
+        ' by Gemini, 2026/04/04: 抽取共用的圖表高亮渲染邏輯
         If pointIndex = _lastHoveredPointIndex Then Return ' 如果跟上次是同一個點就不重複處理，避免閃爍
 
         ' ✅ 先把上一個點的顏色跟狀態清除，但在這裡不要馬上 Refresh 畫面，等新的屬性上完再一起重繪避免畫面閃爍
@@ -1421,7 +1419,7 @@ Partial Class Form1
 
     End Sub
     Private Sub ClearChartHoverState(chart As Chart, Optional refreshChart As Boolean = True)
-        ' by AntiGravity, 2026/04/04: 抽取共用的清除圖表高亮邏輯
+        ' by Gemini, 2026/04/04: 抽取共用的清除圖表高亮邏輯
         If _lastHoveredPointIndex >= 0 AndAlso chart.Series.Count > 0 AndAlso _lastHoveredPointIndex < chart.Series(0).Points.Count Then
             Dim prevPt = chart.Series(0).Points(_lastHoveredPointIndex)
             prevPt.Color = Color.Empty
@@ -1445,7 +1443,7 @@ Partial Class Form1
     '      策略: 建立雙階段搜尋 (Phase1 GetTable 快速掃描中繼資料, Phase2 GetItemFromID 讀取附件明細)。
     '      成效: 大幅減少對 MailItem 物件的依賴和操作，提升搜尋效率。
     '
-    ' [v3] by AntiGravity, 2026/04/05 (現行架構)
+    ' [v3] by Gemini, 2026/04/05 (現行架構)
     '      策略: 導入「管線化處理 (Pipeline)」與「SOLID 分層 (L1/L2.5/L3)」，徹底解耦 MAPI、業務與 UI。
     '      分層:
     '        ├─ L1 (UI/流程層) : Button3_Click, ShowResultTab3
@@ -1472,7 +1470,7 @@ Partial Class Form1
         ListView3.Items.Clear()
         ProgressBar1.Text = "準備中" : ProgressBar2.Text = ""
         Button3.Enabled = False : TextBox3.Enabled = False
-        _cancelRequested = False         ' 2026/04/05 by AntiGravity: 統一使用全域中斷旗標，不再區分 _isTab3_Stop
+        _cancelRequested = False         ' 2026/04/05 by Gemini: 統一使用全域中斷旗標，不再區分 _isTab3_Stop
         Cursor = Cursors.WaitCursor
 
         Dim rootFolder = DirectCast(TreeView3.SelectedNode.Tag, Folder)
@@ -1520,7 +1518,7 @@ Partial Class Form1
             ShowResultTab3(targetMails, sw.Elapsed.TotalSeconds)
         Catch ex As System.Exception
             MessageBox.Show("搜尋發生錯誤: " & ex.Message, "錯誤")
-            Dbg("錯誤", ex.Message) ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+            Dbg("錯誤", ex.Message) ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally
             ' ── 無論如何都解鎖 UI ──
             TextBox3.Enabled = CheckAttachName.Checked
@@ -1576,7 +1574,7 @@ Partial Class Form1
         ' Pipeline 過濾 2: 逐一讀取附件明細，利用 _cacheAttachFilename 大幅降低 COM 存取
         Dbg("開始", $"候選郵件: {sourceList.Count} 封")
 
-        ' by AntiGravity: L2 業務層向 L2.5 請求平行預載快取。若 RDO 存在，這行能在極短時間內把後續需要的資料全數載入記憶體。
+        ' by Gemini: L2 業務層向 L2.5 請求平行預載快取。若 RDO 存在，這行能在極短時間內把後續需要的資料全數載入記憶體。
         Await PreloadAttachmentCacheRDOAsync(sourceList, progress)
 
         Dim mustCountAttach As Boolean = CheckAttCount.Checked
@@ -1594,7 +1592,7 @@ Partial Class Form1
         For i As Integer = 0 To sourceList.Count - 1
             If _cancelRequested Then Exit For
 
-            ' 2026/4/5, by AntiGravity: 將進度報告與 UI 釋放移至迴圈開頭，提早反饋處理進度
+            ' 2026/4/5, by Gemini: 將進度報告與 UI 釋放移至迴圈開頭，提早反饋處理進度
             ' 避免被下方的 Guard Clauses (Continue For) 略過而導致長時間霸佔主執行緒, 未更新UI進度反饋
             processed = i + 1
             If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse processed = total) Then
@@ -1675,7 +1673,7 @@ Partial Class Form1
     End Function
     Private Function GetSizeMultiplier(sizeUnit As String, Optional base1024 As Boolean = False) As Integer
         ' 獲取大小單位的倍數
-        ' by AntiGravity, 2026/04/04: Issue 5 移除 Dbg("開始")/Dbg("結束")
+        ' by Gemini, 2026/04/04: Issue 5 移除 Dbg("開始")/Dbg("結束")
         '   原因: Select Case + Return 結構中，「結束」永遠到不了, 機制簡單只是選 case 不需要追蹤
         Dim multi As Long = If(base1024, 1024, 1000)
         Select Case sizeUnit.ToLower()
@@ -1688,7 +1686,7 @@ Partial Class Form1
     End Function
     Private Sub OpenMailByEntryID(strEntryID As String)
         ' 依照傳入的Mailitem's EntryID, 呼叫NameSpace打開郵件再釋放object
-        Dbg("開始", strEntryID) ' by AntiGravity, 2026/04/04: Issue 4 標準化 msg
+        Dbg("開始", strEntryID) ' by Gemini, 2026/04/04: Issue 4 標準化 msg
         If strEntryID Is Nothing Then Return        'Dbg("結束", "EntryID 為空")
 
         'Dim currentMail As MailItem = Nothing
@@ -1746,7 +1744,7 @@ Partial Class Form1
         ProgressBar2.Text = "開始掃描系列郵件..."
         Dim sw As New Stopwatch() : sw.Start()
         Dim progress4 As IProgress(Of L3ProgressReport) = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
-        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02: 重用秒錶做節流
+        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02: 重用秒錶做節流
         Dim topicDict As New Dictionary(Of String, List(Of MailItemInfo))(StringComparer.OrdinalIgnoreCase)
         Try
             ' 取得所有子資料夾 (L3 展開)
@@ -1788,14 +1786,14 @@ Partial Class Form1
                         Next
                     Loop
                 Catch ex As System.Exception
-                    Dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+                    Dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
                 Finally
                     TryMarshalRelease(table)
                 End Try
-                swThrottle.Start() ' by AntiGravity, 2026/04/02: 重用秒錶做節流
+                swThrottle.Start() ' by Gemini, 2026/04/02: 重用秒錶做節流
                 processed += 1
 
-                ' by AntiGravity, 2026/04/02: 100ms 節流回報 (標準化 IProgress Pattern)
+                ' by Gemini, 2026/04/02: 100ms 節流回報 (標準化 IProgress Pattern)
                 If progress4 IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse processed = targetFolderList.Count) Then
                     progress4.Report(New L3ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
                                                                 .Message = $"正在掃描系列郵件: {processed} / {targetFolderList.Count} 個資料夾..."})
@@ -1812,7 +1810,7 @@ Partial Class Form1
                     TreeView4.Nodes.Add(node)
                     nodesProcessed += 1
 
-                    ' by AntiGravity, 2026/04/02: 長列表建構時也需節流 (標準化 IProgress)
+                    ' by Gemini, 2026/04/02: 長列表建構時也需節流 (標準化 IProgress)
                     If swThrottle.ElapsedMilliseconds >= 100 Then
                         progress4.Report(New L3ProgressReport With {.Message = $"正在建立系列清單: {nodesProcessed} 組..."})
                         swThrottle.Restart()
@@ -1892,7 +1890,7 @@ Partial Class Form1
         ProgressBar2.Text = "準備全信箱掃描重複郵件..."
         Dim sw As New Stopwatch() : sw.Start()
         Dim progress5 As IProgress(Of L3ProgressReport) = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
-        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by AntiGravity, 2026/04/02
+        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
         Dim exactDict As New Dictionary(Of String, List(Of MailItemInfo))(StringComparer.OrdinalIgnoreCase)
         Dim isExact As Boolean = rbExactMatch.Checked
         Try
@@ -1951,13 +1949,13 @@ Partial Class Form1
                                 Await Task.Yield()
                             Loop
                         Catch ex As System.Exception
-                            Dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+                            Dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
                         Finally
                             TryMarshalRelease(table)
                         End Try
                         totalProcessed += 1
 
-                        ' by AntiGravity, 2026/04/02: 100ms 節流回報 (標準化 IProgress)
+                        ' by Gemini, 2026/04/02: 100ms 節流回報 (標準化 IProgress)
                         If swThrottle.ElapsedMilliseconds >= 100 Then
                             progress5.Report(New L3ProgressReport With {.Message = $"掃描中 ({store.DisplayName}): 已處理 {totalProcessed} 個資料夾..."})
                             swThrottle.Restart()
@@ -1965,14 +1963,14 @@ Partial Class Form1
                         End If
                     Next
                 Catch ex As System.Exception
-                    Dbg("錯誤", $"{store.DisplayName}: {ex.Message}") ' by AntiGravity, 2026/04/04: Issue 4 格式標準化
+                    Dbg("錯誤", $"{store.DisplayName}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
                 End Try
             Next
             ' 尋找符合條件的群組
             ListView5.BeginUpdate()
             Dim groupID As Integer = 1
             Dim totalDuplicateMails As Integer = 0
-            Dim swThrottleBuild As New Stopwatch() : swThrottleBuild.Start() ' by AntiGravity, 2026/04/02
+            Dim swThrottleBuild As New Stopwatch() : swThrottleBuild.Start() ' by Gemini, 2026/04/02
             For Each kvp In exactDict
                 If kvp.Value.Count > 1 Then
                     Dim isValidGroup As Boolean = True
@@ -2001,7 +1999,7 @@ Partial Class Form1
                         Next
                         groupID += 1
 
-                        ' by AntiGravity, 2026/04/02: 100ms 節流回報 (標準化 IProgress)
+                        ' by Gemini, 2026/04/02: 100ms 節流回報 (標準化 IProgress)
                         If swThrottleBuild.ElapsedMilliseconds >= 100 Then
                             progress5.Report(New L3ProgressReport With {.Message = $"正在建立重複郵件清單: {groupID} 組..."})
                             swThrottleBuild.Restart()
@@ -2025,7 +2023,7 @@ Partial Class Form1
 
     End Sub
     Private Function CalculateSimilarity(strA As String, strB As String) As Double
-        ' by AntiGravity, 2026/04/04: Issue 1 移除 Dbg（Tab5 高頻呼叫，N封×2個函數=2N行輸出）
+        ' by Gemini, 2026/04/04: Issue 1 移除 Dbg（Tab5 高頻呼叫，N封×2個函數=2N行輸出）
         ' 計算編輯距離
         Dim editDistance As Integer = LevenshteinDistance(strA, strB)
         ' 將編輯距離歸一化為範圍在 0 到 1 之間的值
@@ -2035,7 +2033,7 @@ Partial Class Form1
 
     End Function
     Private Function LevenshteinDistance(strA As String, strB As String) As Integer
-        ' by AntiGravity, 2026/04/04: Issue 1 移除 Dbg（Tab5 高頻呼叫，同上）
+        ' by Gemini, 2026/04/04: Issue 1 移除 Dbg（Tab5 高頻呼叫，同上）
         ' 計算 Levenshtein 編輯距離的輔助函數
         Dim lenA As Integer = strA.Length
         Dim lenB As Integer = strB.Length
@@ -2045,11 +2043,11 @@ Partial Class Form1
         For j As Integer = 1 To lenB
             For i As Integer = 1 To lenA
                 '' 改前 (5行)
-                'If strA(i - 1) = strB(j - 1) Then
-                '    distance(i, j) = distance(i - 1, j - 1)
+                'If strA(fd - 1) = strB(j - 1) Then
+                '    distance(fd, j) = distance(fd - 1, j - 1)
                 'Else
-                '    distance(i, j) = Math.Min(Math.Min(distance(i - 1, j) + 1,
-                '                                       distance(i, j - 1) + 1), distance(i - 1, j - 1) + 1)
+                '    distance(fd, j) = Math.Min(Math.Min(distance(fd - 1, j) + 1,
+                '                                       distance(fd, j - 1) + 1), distance(fd - 1, j - 1) + 1)
                 'End If
                 ' 改後 (1行)
                 distance(i, j) = If(strA(i - 1) = strB(j - 1),
@@ -2070,11 +2068,11 @@ Partial Class Form1
         Me.Left += offset
         System.Windows.Forms.Cursor.Position = New Point(
             System.Windows.Forms.Cursor.Position.X + offset,
-            System.Windows.Forms.Cursor.Position.Y) ' 2026/3/28 by AntiGravity: 滑鼠游標跟著表單偏移
-        ' 2026/3/26 by AntiGravity: 先同步位置與大小再顯示，確保第一次 Load 時就能抓到正確的視窗寬度
+            System.Windows.Forms.Cursor.Position.Y) ' 2026/3/28 by Gemini: 滑鼠游標跟著表單偏移
+        ' 2026/3/26 by Gemini: 先同步位置與大小再顯示，確保第一次 Load 時就能抓到正確的視窗寬度
         If CheckDebug.Checked Then
             SyncDebugFormPosition()
-            If Not DebugForm.Visible Then DebugForm.Show(Me) ' 2026/3/27 by AntiGravity: 設定 Owner 確保點選 Form1 時 DebugForm 一起回到前面
+            If Not DebugForm.Visible Then DebugForm.Show(Me) ' 2026/3/27 by Gemini: 設定 Owner 確保點選 Form1 時 DebugForm 一起回到前面
         Else
             DebugForm.Hide()
         End If

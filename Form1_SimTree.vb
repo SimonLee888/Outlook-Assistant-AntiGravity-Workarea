@@ -55,7 +55,7 @@ Public Class SimTree
     <DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)>
     Public Shadows Property SelectedNode As TreeNode
         ' SelectedNode：Shadows 原生屬性
-        ' [Fix by AntiGravity, 2026/03/26]
+        ' [Fix by Gemini, 2026/03/26]
         ' 為什麼顯示紅色？
         '   因為 Shadows 了基類的屬性，WinForms Designer 會試圖序列化它。
         '   但 TreeNode 類型無法直接序列化，導致設計工具報錯（未設定其屬性內容序列化）。

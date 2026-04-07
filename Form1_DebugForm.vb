@@ -42,6 +42,9 @@ Public Class DebugForm
     Private _lastRecalcWidth As Integer = 0
     Private _searchPattern As String = ""
     Private _lastHighlightedPair As ListViewItem    ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
+    Private _historyDebug As New List(Of String)    ' by AntiGravity, 2026/04/07: 搜尋歷史紀錄
+    Private _historyIndex As Integer = 0            ' by AntiGravity, 2026/04/07: 目前歷史紀錄索引 (與 Count 相同時代表原始輸入區)
+    Private _tempInput As String = ""               ' by AntiGravity, 2026/04/07: 暫存回溯前的原始輸入內容
     Private Class DebugItemTag          ' 2026/3/28 by Gemini: 定義快取結構，加速 OwnerDraw 繪製
         Public textFullRow As String    ' 預先合併好的整行小寫文字 (用於搜尋)
         Public isHit As Boolean         ' 是否命中目前搜尋關鍵字
@@ -86,6 +89,7 @@ Public Class DebugForm
         checkAndOr.Anchor = AnchorStyles.Top Or AnchorStyles.Right   ' 隨表單放大貼緊右上
 
         ' 4. 設定左側: txtDebug (搜尋輸入框) ──
+        txtDebug.ImeMode = ImeMode.Alpha            ' by AntiGravity, 2026/04/07: 強制預設英文/半形英數，解決輸入法自動切換中文問題
         txtDebug.Location = New Point(8, targetTop) ' 距左側 8px
         txtDebug.Width = checkAndOr.Left - 8 - 12   ' 右邊預留 12px 間距到 CheckBox
         txtDebug.Anchor = AnchorStyles.Top Or
@@ -117,6 +121,7 @@ Public Class DebugForm
 
         AddHandler lvwDebug.ItemSelectionChanged, AddressOf lvwDebug_ItemSelectionChanged
         AddHandler lvwDebug.ClientSizeChanged, AddressOf RecalcColumnWidths
+        AddHandler txtDebug.KeyDown, AddressOf txtDebug_KeyDown ' by AntiGravity, 2026/04/07: 支持搜尋歷史回溯
 
         ' 2026/3/28 by Gemini: 監聽 lvwDebug 本身的 ClientSizeChanged 事件，
         ' 無論何時 ListView 可用空間改變 (Dock 佈局結算、表單 Resize、SyncDebugFormPosition)，都自動重算欄寬, 不再需要猜延遲值或一次性 Timer
@@ -544,6 +549,61 @@ Public Class DebugForm
 #End Region
 
 #Region "■ 07 輔助函數"
+    ''' <summary>
+    ''' 2026/04/07 by AntiGravity: 攔截搜尋框按鍵，支援 Enter 紀錄歷史與上下鍵回溯
+    ''' </summary>
+    Private Sub txtDebug_KeyDown(sender As Object, e As KeyEventArgs)
+        Select Case e.KeyCode
+            Case Keys.Enter
+                AddToHistoryDebug(CType(sender, TextBox).Text)
+                e.SuppressKeyPress = True
+            Case Keys.Up
+                NavigateHistoryDebug(-1)
+                e.Handled = True
+            Case Keys.Down
+                NavigateHistoryDebug(1)
+                e.Handled = True
+        End Select
+    End Sub
+
+    ''' <summary>
+    ''' 2026/04/07 by AntiGravity: 將關鍵字存入歷史紀錄 (去重與限額 50 筆)
+    ''' </summary>
+    Private Sub AddToHistoryDebug(query As String)
+        Dim trimmed = query.Trim()
+        If String.IsNullOrEmpty(trimmed) Then Return
+        If _historyDebug.Count = 0 OrElse _historyDebug.Last() <> trimmed Then
+            _historyDebug.Add(trimmed)
+            If _historyDebug.Count > 50 Then _historyDebug.RemoveAt(0)
+        End If
+        _historyIndex = _historyDebug.Count
+        _tempInput = ""
+    End Sub
+
+    ''' <summary>
+    ''' 2026/04/07 by AntiGravity: 導覽歷史紀錄，並處理暫存原始輸入的邏輯
+    ''' </summary>
+    Private Sub NavigateHistoryDebug(direction As Integer)
+        If _historyDebug.Count = 0 Then Return
+        If _historyIndex = _historyDebug.Count AndAlso direction < 0 Then
+            _tempInput = txtDebug.Text
+        End If
+        Dim targetIndex As Integer = _historyIndex + direction
+        If targetIndex < 0 Then
+            targetIndex = 0
+        ElseIf targetIndex > _historyDebug.Count Then
+            targetIndex = _historyDebug.Count
+        End If
+        If targetIndex = _historyIndex Then Return
+        _historyIndex = targetIndex
+        If _historyIndex = _historyDebug.Count Then
+            txtDebug.Text = _tempInput
+        Else
+            txtDebug.Text = _historyDebug(_historyIndex)
+        End If
+        txtDebug.SelectionStart = txtDebug.Text.Length
+    End Sub
+
     Private Sub CalculateSelectedTimeSpan(sender As Object, e As EventArgs)
         ' by Gemini, 2026/03/29: 加總選取項目各自的耗時間隔 (使用 .Tag.timeStamp)
         ' 每個項目的耗時 = 該項目的 timeStamp - ListView 中前一項的 timeStamp

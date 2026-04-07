@@ -36,17 +36,18 @@ Partial Class Form1
     ' Outlook.MailItem	    Redemption.RDOMail	    對應單封郵件層級。
     ' Outlook.Store	        Redemption.RDOStore	    對應 PST 或 Exchange 帳戶。
 
-    Private Shared ReadOnly _cacheMailCount As New ConcurrentDictionary(Of String, Integer)         ' 自身資料夾的郵件個數
-    Private Shared ReadOnly _cacheMailCountAll As New ConcurrentDictionary(Of String, Integer)      ' 整支子樹的所有郵件總數
-    Private Shared ReadOnly _cacheFolderCount As New ConcurrentDictionary(Of String, Integer)       ' 自身資料夾的子目錄個數
-    Private Shared ReadOnly _cacheFolderCountAll As New ConcurrentDictionary(Of String, Integer)    ' 整支子樹的所有子目錄總數
-    Private Shared ReadOnly _cacheFolderSize As New ConcurrentDictionary(Of String, Long)           ' 自身資料夾的郵件大小加總
-    Private Shared ReadOnly _cacheFolderSizeAll As New ConcurrentDictionary(Of String, Long)        ' 整支子樹的所有子目錄郵件大小加總
+    Private Shared _cacheMailCount As New ConcurrentDictionary(Of String, Integer)          ' 自身資料夾的郵件個數
+    Private Shared _cacheMailCountAll As New ConcurrentDictionary(Of String, Integer)       ' 整支子樹的所有郵件總數
+    Private Shared _cacheFolderCount As New ConcurrentDictionary(Of String, Integer)        ' 自身資料夾的子目錄個數
+    Private Shared _cacheFolderCountAll As New ConcurrentDictionary(Of String, Integer)     ' 整支子樹的所有子目錄總數
+    Private Shared _cacheFolderSize As New ConcurrentDictionary(Of String, Long)            ' 自身資料夾的郵件大小加總
+    Private Shared _cacheFolderSizeAll As New ConcurrentDictionary(Of String, Long)         ' 整支子樹的所有子目錄郵件大小加總
 
-    Private Shared ReadOnly _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)                  ' 資料夾是否為郵件類型快取
-    Private Shared ReadOnly _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))    ' 已經排序的子資料夾清單快取 (GetSortedSubFolders) ，Key 是 FolderPath
-    Private Shared ReadOnly _cacheSubFolderList As New ConcurrentDictionary(Of String, List(Of Outlook.Folder)) ' by Gemini: 記住 GetSubFolderList 的樹狀展開平坦化清單
-    Private Shared ReadOnly _cacheAttachFilename As New ConcurrentDictionary(Of String, List(Of String))        ' 附件檔名清單
+    Private Shared _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)                   ' 資料夾是否為郵件類型
+    Private Shared _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))     ' GetSortedSubFolders 已排序的子資料夾清單
+    Private Shared _cacheSubFolderList As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))  ' GetSubFolderList 的樹狀展開平坦化清單
+    Private Shared _cacheAttachPreScan As New ConcurrentDictionary(Of String, FolderCacheTab3)          ' 包含附件的郵件預掃描結果 (速度很快, 不用存入SSD?)
+    Private Shared _cacheAttachFilename As New ConcurrentDictionary(Of String, List(Of String))         ' 所有附件檔名清單
 
     Public Structure MailItemInfo
         ' 候選郵件的純資料結構 (不帶 COM 物件，不受 GC 影響)
@@ -83,6 +84,7 @@ Partial Class Form1
 #Region "■ 10 底層 COM 函數群 (新設計，現役主力) "
 #Region "  ├ 各種載入函數"
     Private Sub InitOutlookNamespace()
+        Dbg("開始")
         ' by Gemini, 2026/04/01: 從 Form1_Load 抽離出 Outlook 初始化邏輯，優化結構並加入 TryMarshalRelease 以防內存洩漏
         ' 1. 檢查系統中是否已經啟動 Outlook
         Dim processes() As Process = Process.GetProcessesByName("OUTLOOK")
@@ -105,6 +107,7 @@ Partial Class Form1
             _olApp = Nothing : _olNS = Nothing
             MessageBox.Show("Outlook Object 連接失敗!" & vbCrLf & ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error) : End
         End Try
+        Dbg("結束")
 
     End Sub
     Private Sub InitRdoSession()
@@ -291,11 +294,14 @@ Partial Class Form1
             ' [下面是新版優化] by Gemini, 2026/03/29:
             ' 1. 動態過濾: 根據 checkIncludeAllFolders.Checked 決定是否顯示非郵件目錄
             ' 2. 單次屬性讀取: 先快取 Name 後排序，避開 LINQ 重複打 COM 的 N log N 效能陷阱
+
+            ' 2026/4/7 進一步優化 by Gemini: 把 checkIncludeAllFolders.Checked 提前到迴圈外面讀取，避免每次迴圈都去問一次 UI 狀態
+            Dim isIncludeAll As Boolean = checkIncludeAllFolders.Checked
             For Each subFolder As Outlook.Folder In folder.Folders
                 ' 🔥 核心過濾: 正常若「沒勾選顯示全部」且「不是郵件資料夾」時就排除
                 ' by Gemini, 2026/04/01: 明確短路邏輯
                 ' 如果「沒勾選顯示全部」且「不是郵件資料夾」時就排除
-                If Not checkIncludeAllFolders.Checked Then
+                If Not isIncludeAll Then
                     ' 只有在非全部顯示模式下，才去調用 IsMailFolder (現在已具備快取)
                     If Not IsMailFolder(subFolder) Then Continue For
                 End If
@@ -305,10 +311,16 @@ Partial Class Form1
         Catch ex As System.Exception
             Dbg("GetSortedSubFolders 遍歷失敗", ex.Message)
         End Try
+
         ' ② 純記憶體排序: 完全不觸發 COM 呼叫 (快速且不卡 UI)
+        'Dim sortedFolders = infoList.OrderBy(Function(i) If(i.HasChinese, 1, 0)).
+        '                             ThenBy(Function(i) i.Name).
+        '                             Select(Function(i) i.FolderObj).ToList()
+        ' 2026/4/7 進一步優化 by Gemini: 加入 StringComparer.OrdinalIgnoreCase 略過語系分析，爆發性提速
         Dim sortedFolders = infoList.OrderBy(Function(i) If(i.HasChinese, 1, 0)).
-                                     ThenBy(Function(i) i.Name).
+                                     ThenBy(Function(i) i.Name, StringComparer.OrdinalIgnoreCase).
                                      Select(Function(i) i.FolderObj).ToList()
+
         _cacheFolderTree(fPath) = sortedFolders
         If _iLikeNoisy Then Dbg("結束", $"{folder.Name} | 子資料夾數: {sortedFolders.Count}")
         Return sortedFolders
@@ -339,10 +351,12 @@ Partial Class Form1
             Dbg("結束", $"{rootFolder.Name} (Single) | {sw.ElapsedMilliseconds}ms")
             Return result     ' 若不包含子資料夾，直接回傳只有 rootFolder 的清單
         End If
+
         ' 取得目標資料夾清單 (BFS，含子資料夾)
         Static swThrottle As New Stopwatch()
         If Not swThrottle.IsRunning Then swThrottle.Start()
 
+        Dim isIncludeAll As Boolean = checkIncludeAllFolders.Checked
         Dim queue As New Queue(Of Outlook.Folder)
         queue.Enqueue(rootFolder)
         While queue.Count > 0
@@ -350,18 +364,19 @@ Partial Class Form1
             Try
                 For Each subFolder As Outlook.Folder In current.Folders
                     ' 🔥 核心過濾: 正常若「沒勾選顯示全部」且「不是郵件資料夾」時就排除
-                    ' by Gemini, 2026/04/01: 明確短路邏輯
-                    If Not checkIncludeAllFolders.Checked Then
+                    If Not isIncludeAll Then  ' by Gemini, 2026/04/08: 提前至迴圈外讀取，避免高頻 UI 存取
                         If Not IsMailFolder(subFolder) Then Continue For
                     End If
                     result.Add(subFolder)       ' 把子資料夾加入結果清單
                     queue.Enqueue(subFolder)    ' 把子資料夾加入佇列，繼續往下搜尋
                 Next
+
             Catch ex As System.Exception
                 Dbg("GetSubFolderList ① OOM 失敗", current.Name & " - " & ex.Message)
             End Try
 
             ' by Gemini, 2026/04/05: 在大迴圈中增加中斷檢查，減少長時間阻塞
+            ' 但其實這裡沒有放await task.delay(1), 應該永遠偵測不到下面這行 :-(
             If _cancelRequested Then Exit While
 
             ' by Gemini, 2026/04/02: 100ms 節流回報已發現的資料夾數
@@ -369,7 +384,7 @@ Partial Class Form1
                 progress.Report(New L3ProgressReport With {.CurrentCount = result.Count, .Message = $"正在展開資料夾結構: 已發現 {result.Count} 個資料夾..."})
                 swThrottle.Restart()
                 ' BFS 展開通常很快，但在超大 PST 中可能卡頓，Yield 讓 UI 有機會處理中斷
-                ' Await Task.Yield() ' 此函數不是 Async，故不使用 Await
+                'Await Task.Yield() ' 此函數不是 Async，故不使用 Await
             End If
         End While
         sw.Stop()
@@ -467,7 +482,10 @@ Partial Class Form1
             Dim nodeList As New List(Of TreeNode) ' 創建一個 TreeNode 的 List 來暫存所有要添加的節點
             For Each folder As Outlook.Folder In sortedFolders
                 Dim node As New TreeNode(folder.Name) With {.Tag = folder}
-                If GetCachedFolderCount(folder) > 0 Then node.Nodes.Add(":::")
+                Try
+                    If GetCachedFolderCount(folder) > 0 Then node.Nodes.Add(":::")
+                    'If HasCachedSubFoldersFast(folder) > 0 Then node.Nodes.Add(":::") ' 2026/4/7 by Gemini, 光速版子資料夾加號預測 (專為 TreeView 展開設計)
+                Catch ex As System.Exception : End Try
                 nodeList.Add(node) ' 先加進List在記憶體中快速操作, 而不是直接加到Treeview.Nodes
                 ' by Gemini, 2026/04/04: 移除每筆 Dbg("", ...)，改在結束時一次輸出（Issue 1 高頻去噪）
             Next
@@ -479,90 +497,260 @@ Partial Class Form1
 #End Region
 #Region "  ├ L2.5 快取存取點 (Cache Proxy Layer)"
     ' 2026/03/27 by Gemini: 新增 L2.5 快取存取點 (Cache Proxy Layer)，保護 L3 不被頻繁呼叫
-    ' todo: 將快取存入SSD, 避免重開機後重新讀取
+    ' 2026/04/07: Phase 2 — 在記憶體 miss 時加入 SQLite lazy SELECT，命中後一次填滿所有欄位
+    '             寫入仍由 SaveCachesToSQLiteAsync (SaveCache 按鈕) 批次處理，本層不做即時寫入
+
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    '             讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    '
+    ' 呼叫順序 (每個 GetCachedXxx 函數):
+    '   ① 記憶體命中 → 直接回傳（最快，0 COM call）
+    '   ② DB 命中 + snapshot 驗證通過 → 填滿記憶體快取 → 回傳（快，0 COM call）
+    '   ③ DB miss 或 snapshot 不符 → 呼叫 L3 → 填入記憶體快取 → 回傳（慢，有 COM call）
+    '
+    ' snapshot 驗證: DB 儲存的 content_count_snapshot = save 時的 PR_CONTENT_COUNT 值
+    '   用 GetLivePrContentCount (單次 PropertyAccessor call) 與 snapshot 比對
+    '   相同 → 快取仍有效；不同 → 資料夾內容已變，跳過 DB，呼叫 L3
+
+    ' ---------------------------------------------------------------
+    ' L2.5 輔助函數
+    ' ---------------------------------------------------------------
+    Private Function GetLivePrContentCount(folder As Outlook.Folder) As Integer
+        ' 快速讀取 PR_CONTENT_COUNT，用於 SQLite snapshot 驗證
+        ' 不走完整 L3 fallback chain，只走最快的 PropertyAccessor 路徑
+        ' 失敗時回傳 -999（不可能等於任何正常 snapshot 值，確保快取失效）
+        ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+        ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+        Try
+            Const PR_CC As String = "http://schemas.microsoft.com/mapi/proptag/0x36020003"
+            Return CInt(folder.PropertyAccessor.GetProperty(PR_CC))
+        Catch
+            Try : Return folder.Items.Count : Catch : Return -999 : End Try
+        End Try
+    End Function
+
+    Private Sub PopulateFolderCacheFromDbRow(fPath As String, row As FolderStatsDbRow)
+        ' DB 命中且 snapshot 驗證通過時，一次填滿所有欄位
+        ' 使用 TryAdd：記憶體已有值（例如另一個 L2.5 函數剛填入）時不覆蓋
+        ' -1 代表 DB 中該欄位尚未存入（例如 mca 還沒算過），跳過，不污染記憶體快取
+        If row.mc >= 0 Then _cacheMailCount.TryAdd(fPath, row.mc)
+        If row.mca >= 0 Then _cacheMailCountAll.TryAdd(fPath, row.mca)
+        If row.fc >= 0 Then _cacheFolderCount.TryAdd(fPath, row.fc)
+        If row.fca >= 0 Then _cacheFolderCountAll.TryAdd(fPath, row.fca)
+        If row.fs >= 0 Then _cacheFolderSize.TryAdd(fPath, row.fs)
+        If row.fsa >= 0 Then _cacheFolderSizeAll.TryAdd(fPath, row.fsa)
+    End Sub
+
+    ' ---------------------------------------------------------------
+    ' GetCachedMailCount — 單一資料夾本層郵件數 (PR_CONTENT_COUNT)
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Function GetCachedMailCount(folder As Outlook.Folder) As Integer
         Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheMailCount.TryGetValue(fPath, count) Then Return count
+        If _cacheMailCount.TryGetValue(fPath, count) Then Return count  ' ① 記憶體命中
 
+        ' ② DB lazy load：命中且 mc 有效且 snapshot 吻合 → 一次填滿所有欄位
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.mc >= 0 AndAlso GetLivePrContentCount(folder) = row.snap Then
+            PopulateFolderCacheFromDbRow(fPath, row) : Return row.mc
+        End If
+
+        ' ③ L3 呼叫
         count = GetMailCount(folder)
         _cacheMailCount.TryAdd(fPath, count)
         Return count
-
     End Function
+
+    ' ---------------------------------------------------------------
+    ' HasCachedSubFoldersFast — 光速版子資料夾加號預測 (專為 TreeView 展開設計)
+    ' 2026/4/7 by Gemini, 解決 SSD 讀出後無法出現假節點 + 號，以及嚴重卡頓問題
+    ' todo: 好像沒有作用???
+    ' ---------------------------------------------------------------
+    Private Function HasCachedSubFoldersFast(folder As Outlook.Folder) As Boolean
+        Dim fPath As String
+        Try
+            fPath = folder.FolderPath
+        Catch : Return False : End Try
+
+        Dim fc As Integer
+        If _cacheFolderCount.TryGetValue(fPath, fc) Then Return fc > 0
+
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fc >= 0 Then
+            _cacheFolderCount.TryAdd(fPath, row.fc) ' 把確認的值送回記憶體快取
+            Return row.fc > 0
+        End If
+
+        ' 萬一都沒有，直接保底呼叫一次 COM (比 PR_CONTENT_COUNT 驗證還快)
+        Try : Return folder.Folders.Count > 0 : Catch : Return False : End Try
+    End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedFolderCount — 單一資料夾直屬子資料夾數
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Function GetCachedFolderCount(folder As Outlook.Folder) As Integer
         Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheFolderCount.TryGetValue(fPath, count) Then Return count
+        If _cacheFolderCount.TryGetValue(fPath, count) Then Return count  ' ①
 
+        ' ② DB lazy load（fc 欄位）
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fc >= 0 AndAlso GetLivePrContentCount(folder) = row.snap Then
+            PopulateFolderCacheFromDbRow(fPath, row) : Return row.fc
+        End If
+
+        ' ③ L3
         count = GetFolderCount(folder)
         _cacheFolderCount.TryAdd(fPath, count)
         Return count
-
     End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedMailCountAllAsync — 整棵子樹的郵件總數
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Async Function GetCachedMailCountAllAsync(folder As Outlook.Folder, Optional progress As IProgress(Of L3ProgressReport) = Nothing) As Task(Of Long)
         Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheMailCountAll.TryGetValue(fPath, count) Then Return count
+        If _cacheMailCountAll.TryGetValue(fPath, count) Then Return count  ' ①
 
+        ' ② DB lazy load（mca 欄位）
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.mca >= 0 AndAlso GetLivePrContentCount(folder) = row.snap Then
+            PopulateFolderCacheFromDbRow(fPath, row) : Return row.mca
+        End If
+
+        ' ③ L3
         Dim total As Long = Await GetMailCountAll(folder, progress)
         If total >= 0 AndAlso Not _cancelRequested Then _cacheMailCountAll.TryAdd(fPath, CInt(total))
         Return total
-
     End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedFolderCountAllAsync — 整棵子樹的資料夾總數
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Async Function GetCachedFolderCountAllAsync(folder As Outlook.Folder) As Task(Of Integer)
         Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheFolderCountAll.TryGetValue(fPath, count) Then Return count
+        If _cacheFolderCountAll.TryGetValue(fPath, count) Then Return count  ' ①
 
+        ' ② DB lazy load（fca 欄位）
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fca >= 0 AndAlso GetLivePrContentCount(folder) = row.snap Then
+            PopulateFolderCacheFromDbRow(fPath, row) : Return row.fca
+        End If
+
+        ' ③ L3
         count = Await GetFolderCountAll(folder)
         If count >= 0 AndAlso Not _cancelRequested Then _cacheFolderCountAll.TryAdd(fPath, count)
         Return count
-
     End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedFolderSizeAsync — 單一資料夾本層大小 (GetTable 加總)
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Async Function GetCachedFolderSizeAsync(folder As Outlook.Folder) As Task(Of Long)
         ' 2026/3/29 by Gemini: L2.5 快取代理層 - 取得單一資料夾本層的大小 (含快取機制)
         Dim size As Long, fPath As String = folder.FolderPath
-        If _cacheFolderSize.TryGetValue(fPath, size) Then Return size
+        If _cacheFolderSize.TryGetValue(fPath, size) Then Return size  ' ①
 
+        ' ② DB lazy load（fs 欄位）
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fs >= 0 AndAlso GetLivePrContentCount(folder) = row.snap Then
+            PopulateFolderCacheFromDbRow(fPath, row) : Return row.fs
+        End If
+
+        ' ③ L3
         size = Await GetFolderSize(folder)
         If size >= 0 Then _cacheFolderSize.TryAdd(fPath, size)
         Return size
-
     End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedFolderSizeAllAsync — 整棵子樹大小總計
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Async Function GetCachedFolderSizeAllAsync(folder As Outlook.Folder) As Task(Of Long)
         ' 2026/3/29 by Gemini: L2.5 快取代理層 - 取得整棵子樹的大小總計 (含快取機制)
         Dim size As Long, fPath As String = folder.FolderPath
-        If _cacheFolderSizeAll.TryGetValue(fPath, size) Then Return size
+        If _cacheFolderSizeAll.TryGetValue(fPath, size) Then Return size  ' ①
 
+        ' ② DB lazy load（fsa 欄位）
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fsa >= 0 AndAlso GetLivePrContentCount(folder) = row.snap Then
+            PopulateFolderCacheFromDbRow(fPath, row) : Return row.fsa
+        End If
+
+        ' ③ L3
         size = Await GetFolderSizeAll(folder)
         If size >= 0 AndAlso Not _cancelRequested Then _cacheFolderSizeAll.TryAdd(fPath, size)
         Return size
-
     End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedMailWithAttachment — Tab3 Phase1：含附件的候選郵件清單
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Async Function GetCachedMailWithAttachment(folder As Outlook.Folder, progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of MailItemInfo))
         ' by Gemini, 2026/04/05: L2.5 快取代理層 - Tab3 Phase 1 快取 - 取得單一資料夾本層含附件的郵件清單
+        ' 2026/04/07: Phase 2 — 加入 DB lazy load (mail_basic)
         Dbg("開始", folder.Name)
-
         Dim key As String = folder.FolderPath
-        Dim currentCount As Integer = GetCachedMailCount(folder) ' 依賴同層快取
+        Dim currentCount As Integer = GetCachedMailCount(folder)  ' 依賴同層快取（本身已有 DB lazy load）
 
+        ' ① 記憶體命中
         Dim entry As FolderCacheTab3
-        If _cachePhase1tab3.TryGetValue(key, entry) AndAlso entry.ItemCountWhenCached = currentCount Then Return entry.mailWithAttachment
+        If _cacheAttachPreScan.TryGetValue(key, entry) AndAlso entry.ItemCountWhenCached = currentCount Then Return entry.mailWithAttachment
 
+        ' ② DB lazy load (mail_basic)：item_count_snap == currentCount → 快取仍有效
+        Dim dbResult = DbGetMailBasic(key)
+        If dbResult IsNot Nothing AndAlso dbResult.Snap = currentCount Then
+            Dim cached As New FolderCacheTab3 With {.mailWithAttachment = dbResult.Mails, .ItemCountWhenCached = currentCount}
+            _cacheAttachPreScan(key) = cached   ' 覆蓋式寫入，確保 ItemCountWhenCached 對應正確
+            Dbg("DB 命中", $"{folder.Name} ({dbResult.Mails.Count} 封)")
+            Return dbResult.Mails
+        End If
+
+        ' ③ L3 呼叫
         Dim targetMailList As List(Of MailItemInfo) = Await GetMailWithAttachment(folder, progress)
-        _cachePhase1tab3(key) = New FolderCacheTab3 With {.mailWithAttachment = targetMailList, .ItemCountWhenCached = currentCount}
-        ' by Gemini, 2026/04/05: 這裡不使用 TryAdd/TryUpdate，因為我們不在意多執行幾次 GetMailWithAttachment 的成本，反而要確保最後的 cache entry 是正確的 (ItemCountWhenCached 與實際快取的 mail list 對應)，所以直接覆蓋式賦值
-
+        _cacheAttachPreScan(key) = New FolderCacheTab3 With {.mailWithAttachment = targetMailList, .ItemCountWhenCached = currentCount}
+        ' 2026/04/05: 不使用 TryAdd/TryUpdate，確保最後的 cache entry 是正確的 (ItemCountWhenCached 與 mail list 對應)
         Return targetMailList
     End Function
+
+    ' ---------------------------------------------------------------
+    ' GetCachedAttachFilename — Tab3 Phase2：附件檔名清單 (by EntryID)
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
     Private Function GetCachedAttachFilename(mail As MailItemInfo) As List(Of String)
         ' by Gemini, 2026/04/04: L2.5 快取代理層 - 取得附件檔名清單 (含 _cacheAttachFilename 機制)
+        ' 2026/04/07: Phase 2 — 加入 DB lazy load (mail_attachments)「持久化快取」存入SSD
+        ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
         Dim result As List(Of String) = Nothing
-        If _cacheAttachFilename.TryGetValue(mail.EntryID, result) Then Return result
+        If _cacheAttachFilename.TryGetValue(mail.EntryID, result) Then Return result  ' ①
 
+        ' ② DB lazy load (mail_attachments)
+        result = DbGetAttachFilenames(mail.EntryID)
+        If result IsNot Nothing Then
+            _cacheAttachFilename.TryAdd(mail.EntryID, result)
+            Return result
+        End If
+
+        ' ③ L3 呼叫
         result = GetAttachFilename(mail)
         If result IsNot Nothing Then _cacheAttachFilename.TryAdd(mail.EntryID, result)
         Return result
-
     End Function
-    Friend Async Function PreloadAttachmentCacheRDOAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task
+
+    Friend Async Function PreloadAttachByRDOAsync1(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task
         ' by Gemini, 2026/04/05: L2.5 快取代理層 - 批次預熱附件檔名快取
         ' 利用 Redemption (RDO) Free-Threaded 安全的特性，在進入 L2 迴圈前平行提早把附件檔名讀進 _cacheAttachFilename。
         ' 完全不動原來的迴圈運作邏輯，以防呆的姿態大幅壓縮等待時間。
@@ -576,38 +764,97 @@ Partial Class Form1
 
         Await Task.Run(Sub()
                            Dim parallelOptions As New ParallelOptions With {.MaxDegreeOfParallelism = Environment.ProcessorCount}
-                           Parallel.ForEach(sourceList, parallelOptions, Sub(mail)
-                                                                             If _cancelRequested Then Return
+                           Parallel.ForEach(sourceList, parallelOptions,
+                                            Sub(mail)
+                                                If _cancelRequested Then Return ' 迴圈內也要檢查ESC中斷，盡快停止處理
 
-                                                                             If Not _cacheAttachFilename.ContainsKey(mail.EntryID) Then
-                                                                                 Dim rdoMsg As Redemption.RDOMail = Nothing
-                                                                                 Try
-                                                                                     rdoMsg = TryCast(_rdo.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
-                                                                                     If rdoMsg IsNot Nothing Then
-                                                                                         Dim list As New List(Of String)()
-                                                                                         ' COM 的 index 從 1 開始
-                                                                                         For i As Integer = 1 To rdoMsg.Attachments.Count
-                                                                                             list.Add(rdoMsg.Attachments.Item(i).FileName)
-                                                                                         Next
-                                                                                         _cacheAttachFilename.TryAdd(mail.EntryID, list)
-                                                                                     End If
-                                                                                 Catch
-                                                                                 Finally
-                                                                                     If rdoMsg IsNot Nothing Then TryMarshalRelease(rdoMsg)
-                                                                                 End Try
-                                                                             End If
+                                                If Not _cacheAttachFilename.ContainsKey(mail.EntryID) Then
+                                                    Dim rdoMsg As Redemption.RDOMail = Nothing
+                                                    Try
+                                                        rdoMsg = TryCast(_rdo.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
+                                                        If rdoMsg IsNot Nothing Then
+                                                            Dim list As New List(Of String)()
+                                                            ' COM 的 index 從 1 開始
+                                                            For i As Integer = 1 To rdoMsg.Attachments.Count
+                                                                list.Add(rdoMsg.Attachments.Item(i).FileName)
+                                                            Next
+                                                            _cacheAttachFilename.TryAdd(mail.EntryID, list)
+                                                        End If
+                                                    Catch
+                                                    Finally
+                                                        If rdoMsg IsNot Nothing Then TryMarshalRelease(rdoMsg)
+                                                    End Try
+                                                End If
 
-                                                                             Dim currentProcessed As Integer = Interlocked.Increment(processed)
-                                                                             If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse currentProcessed = total) Then
-                                                                                 Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
-                                                                                 Dim speed As Double = currentProcessed / elapsedSec
-                                                                                 progress.Report(New L3ProgressReport With {.CurrentCount = currentProcessed, .TotalCount = total,
-                                                               .Message = $"Phase 2 (預載快取): {currentProcessed} / {total} ({speed:F0} 封/秒)"})
-                                                                                 swThrottle.Restart()
-                                                                             End If
-                                                                         End Sub)
+                                                Dim currentProcessed As Integer = Interlocked.Increment(processed)
+                                                If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse currentProcessed = total) Then
+                                                    Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
+                                                    Dim speed As Double = currentProcessed / elapsedSec
+                                                    progress.Report(New L3ProgressReport With {.CurrentCount = currentProcessed,
+                                                                                               .TotalCount = total,
+                                                                                               .Message = $"Phase 2 (RDO 預載快取): {currentProcessed} / {total} ({speed:F0} 封/秒)"})
+                                                    swThrottle.Restart()
+                                                End If
+                                            End Sub)
                        End Sub)
-        Dbg("結束", $"RDO預載完成，處理共 {processed} 筆")
+        Dbg("結束", $"RDO 預載完成，處理共 {processed} 筆")
+    End Function
+    Friend Async Function PreloadAttachByRDOAsync2(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task
+        ' by AntiGravity, 2026/04/07: 實驗性質 - 使用 Task.WhenAll + SemaphoreSlim，試圖推高 SSD I/O 並發度
+        If _rdo Is Nothing OrElse sourceList.Count = 0 Then Return
+
+        Dbg("開始", $"WhenAll平行預載 {sourceList.Count} 筆")
+        Dim swThrottle As New Stopwatch() : swThrottle.Start()
+        Dim swTotal As New Stopwatch() : swTotal.Start()
+        Dim processed As Integer = 0
+        Dim total As Integer = sourceList.Count
+
+        ' 設定並發數：嘗試設為 CPU 核心數的 4 倍，壓榨 SSD 的 Queue Depth
+        Dim maxConcurrency As Integer = Environment.ProcessorCount * 4
+        Dim throttler As New SemaphoreSlim(maxConcurrency)
+        Dim tasks As New List(Of Task)()
+
+        For Each m As MailItemInfo In sourceList
+            If _cancelRequested Then Exit For
+            Dim mail = m ' 在 lambda 中避免變數捕獲問題
+
+            tasks.Add(Task.Run(Async Function()
+                                   Await throttler.WaitAsync()
+                                   Try
+                                       If Not _cacheAttachFilename.ContainsKey(mail.EntryID) Then
+                                           Dim rdoMsg As Redemption.RDOMail = Nothing
+                                           Try
+                                               rdoMsg = TryCast(_rdo.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
+                                               If rdoMsg IsNot Nothing Then
+                                                   Dim list As New List(Of String)()
+                                                   For i As Integer = 1 To rdoMsg.Attachments.Count
+                                                       list.Add(rdoMsg.Attachments.Item(i).FileName)
+                                                   Next
+                                                   _cacheAttachFilename.TryAdd(mail.EntryID, list)
+                                               End If
+                                           Catch
+                                           Finally
+                                               If rdoMsg IsNot Nothing Then TryMarshalRelease(rdoMsg)
+                                           End Try
+                                       End If
+
+                                       Dim currentProcessed As Integer = Interlocked.Increment(processed)
+                                       If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse currentProcessed = total) Then
+                                           Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
+                                           Dim speed As Double = currentProcessed / elapsedSec
+                                           progress.Report(New L3ProgressReport With {.CurrentCount = currentProcessed,
+                                                                   .TotalCount = total,
+                                                                   .Message = $"Phase 2 (WhenAll 預載): {currentProcessed} / {total} ({speed:F0} 封/秒)"})
+                                           swThrottle.Restart()
+                                       End If
+                                   Finally
+                                       throttler.Release()
+                                   End Try
+                               End Function))
+        Next
+
+        If tasks.Count > 0 Then Await Task.WhenAll(tasks)
+        Dbg("結束", $"WhenAll 預載完成，處理共 {processed} 筆")
     End Function
 #End Region
 #Region "  ├ L3 直接存取底層計數函數"

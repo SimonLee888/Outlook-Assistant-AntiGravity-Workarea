@@ -1,4 +1,4 @@
-﻿Imports System.ComponentModel
+Imports System.ComponentModel
 
 Public Class SimTree
 
@@ -365,10 +365,16 @@ Public Class SimTree
     Public Sub ClearSelectedNodes()
         ' ClearSelectedNodes：清除所有選取（顏色還原 + 清空清單）
         ' Form1 在切換模式時呼叫，避免殘留不正確的高亮
-        For Each node As TreeNode In _selectedNodes
-            node.BackColor = Me.BackColor
-            node.ForeColor = Me.ForeColor
-        Next
+        ' by Gemini, 2026/04/07: 清空大量選取時加上 Begin/End Update 避免背景色重複重繪導致閃爍
+        Me.BeginUpdate()
+        Try
+            For Each node As TreeNode In _selectedNodes
+                node.BackColor = Me.BackColor
+                node.ForeColor = Me.ForeColor
+            Next
+        Finally
+            Me.EndUpdate()
+        End Try
         _selectedNodes.Clear()
         _lastClickedNode = Nothing
         MyBase.SelectedNode = Nothing

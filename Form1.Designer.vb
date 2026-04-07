@@ -24,9 +24,9 @@ Partial Class Form1
 
     <System.Diagnostics.DebuggerStepThrough()>
     Private Sub InitializeComponent()
-        Dim ChartArea2 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
-        Dim Legend2 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
-        Dim Series2 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
+        Dim ChartArea1 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
+        Dim Legend1 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
+        Dim Series1 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
         Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(Form1))
         TabControl1 = New TabControl()
         TabPage1 = New TabPage()
@@ -89,7 +89,10 @@ Partial Class Form1
         Button5 = New Button()
         Label2 = New Label()
         TabPage6 = New TabPage()
+        TextBox4 = New TextBox()
         SettingGroup = New GroupBox()
+        RDO_Parallel2 = New RadioButton()
+        RDO_Parallel1 = New RadioButton()
         RenewCache = New Button()
         ClearCache = New Button()
         checkIncludeAllFolders = New CheckBox()
@@ -214,7 +217,7 @@ Partial Class Form1
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(579, 1244)
+        ListView1.Size = New Size(567, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -300,7 +303,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(579, 395)
+        ListView2.Size = New Size(567, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -324,18 +327,18 @@ Partial Class Form1
         ' 
         Chart2.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         Chart2.BackGradientStyle = DataVisualization.Charting.GradientStyle.TopBottom
-        ChartArea2.Name = "ChartArea1"
-        Chart2.ChartAreas.Add(ChartArea2)
-        Legend2.Name = "Legend1"
-        Chart2.Legends.Add(Legend2)
+        ChartArea1.Name = "ChartArea1"
+        Chart2.ChartAreas.Add(ChartArea1)
+        Legend1.Name = "Legend1"
+        Chart2.Legends.Add(Legend1)
         Chart2.Location = New Point(0, 400)
         Chart2.Margin = New Padding(4)
         Chart2.Name = "Chart2"
-        Series2.ChartArea = "ChartArea1"
-        Series2.Legend = "Legend1"
-        Series2.Name = "Series1"
-        Chart2.Series.Add(Series2)
-        Chart2.Size = New Size(548, 857)
+        Series1.ChartArea = "ChartArea1"
+        Series1.Legend = "Legend1"
+        Series1.Name = "Series1"
+        Chart2.Series.Add(Series1)
+        Chart2.Size = New Size(536, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -392,7 +395,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(544, 77)
+        CheckSubFolder3.Location = New Point(532, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -406,7 +409,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(550, 10)
+        Button3.Location = New Point(538, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -489,7 +492,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(579, 1133)
+        ListView3.Size = New Size(567, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -544,6 +547,7 @@ Partial Class Form1
         ' 
         ' TextBox3
         ' 
+        TextBox3.ImeMode = ImeMode.Alpha
         TextBox3.Location = New Point(8, 60)
         TextBox3.Margin = New Padding(4)
         TextBox3.Name = "TextBox3"
@@ -707,7 +711,7 @@ Partial Class Form1
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(579, 1133)
+        ListView4.Size = New Size(567, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
@@ -727,7 +731,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(483, 15)
+        Button4.Location = New Point(471, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 42)
@@ -830,6 +834,7 @@ Partial Class Form1
         ' 
         ' TabPage6
         ' 
+        TabPage6.Controls.Add(TextBox4)
         TabPage6.Controls.Add(SettingGroup)
         TabPage6.Controls.Add(DebugGroup)
         TabPage6.Location = New Point(4, 37)
@@ -841,8 +846,18 @@ Partial Class Form1
         TabPage6.Text = "Setting"
         TabPage6.UseVisualStyleBackColor = True
         ' 
+        ' TextBox4
+        ' 
+        TextBox4.Location = New Point(514, 28)
+        TextBox4.Name = "TextBox4"
+        TextBox4.Size = New Size(125, 29)
+        TextBox4.TabIndex = 15
+        TextBox4.Text = "Database Stats"
+        ' 
         ' SettingGroup
         ' 
+        SettingGroup.Controls.Add(RDO_Parallel2)
+        SettingGroup.Controls.Add(RDO_Parallel1)
         SettingGroup.Controls.Add(RenewCache)
         SettingGroup.Controls.Add(ClearCache)
         SettingGroup.Controls.Add(checkIncludeAllFolders)
@@ -857,10 +872,34 @@ Partial Class Form1
         SettingGroup.TabStop = False
         SettingGroup.Text = "設定選項"
         ' 
+        ' RDO_Parallel2
+        ' 
+        RDO_Parallel2.FlatStyle = FlatStyle.System
+        RDO_Parallel2.Font = New Font("Microsoft JhengHei UI", 9F)
+        RDO_Parallel2.Location = New Point(16, 215)
+        RDO_Parallel2.Name = "RDO_Parallel2"
+        RDO_Parallel2.Size = New Size(135, 26)
+        RDO_Parallel2.TabIndex = 15
+        RDO_Parallel2.Text = "Task.WhenAll"
+        RDO_Parallel2.UseVisualStyleBackColor = True
+        ' 
+        ' RDO_Parallel1
+        ' 
+        RDO_Parallel1.Checked = True
+        RDO_Parallel1.FlatStyle = FlatStyle.System
+        RDO_Parallel1.Font = New Font("Microsoft JhengHei UI", 9F)
+        RDO_Parallel1.Location = New Point(16, 186)
+        RDO_Parallel1.Name = "RDO_Parallel1"
+        RDO_Parallel1.Size = New Size(135, 26)
+        RDO_Parallel1.TabIndex = 14
+        RDO_Parallel1.TabStop = True
+        RDO_Parallel1.Text = "Parallel.Foreach"
+        RDO_Parallel1.UseVisualStyleBackColor = True
+        ' 
         ' RenewCache
         ' 
         RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        RenewCache.BackColor = Color.Azure
+        RenewCache.BackColor = Color.Transparent
         RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         RenewCache.ForeColor = SystemColors.ActiveCaptionText
         RenewCache.Location = New Point(167, 116)
@@ -1091,6 +1130,7 @@ Partial Class Form1
         CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer5.ResumeLayout(False)
         TabPage6.ResumeLayout(False)
+        TabPage6.PerformLayout()
         SettingGroup.ResumeLayout(False)
         DebugGroup.ResumeLayout(False)
         StatusStrip1.ResumeLayout(False)
@@ -1190,5 +1230,8 @@ Partial Class Form1
     Friend WithEvents OKiLikeNoisy As CheckBox
     Friend WithEvents SettingGroup As GroupBox
     Friend WithEvents RenewCache As Button
+    Friend WithEvents TextBox4 As TextBox
+    Friend WithEvents RDO_Parallel2 As RadioButton
+    Friend WithEvents RDO_Parallel1 As RadioButton
 
 End Class

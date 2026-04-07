@@ -61,6 +61,7 @@ Partial Class Form1
     Private WithEvents SimTree3 As New SimTree
     Private WithEvents SimTree4 As New SimTree
 
+    Private pnlOptions_tab3 As Panel
     Private _ctxListView1 As ContextMenuStrip
     Private rbExactMatch As New RadioButton()   ' tab5 用到的radio button
     Private rbFuzzyMatch As New RadioButton()   ' tab5 用到的radio button
@@ -101,32 +102,19 @@ Partial Class Form1
             Me.BeginInvoke(Sub() CheckDebug.Checked = True)
             ' Memo: 這裡設成True 就會預設開啟 DebugForm，False 就是預設不開啟，設計階段方便debug用，正式版自動改成False
         End If
+        ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
+        AddHandler Me.Resize, Sub() SyncDebugFormPosition()
+        AddHandler Me.Move, Sub() SyncDebugFormPosition()
 
         InitOutlookNamespace()
         'InitRdoSession()
         InitLookAndFeel()       ' 設計程式外觀
         InitProgressBarEvents() ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
-
-        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
-        ' 原本的 ListView1 寬度調整邏輯已移至 HandleListViewResize 中，由 ListView 自行處理 Resize 事件
-        ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
-        ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
-        AddHandler Me.Resize, Sub() SyncDebugFormPosition()
-        AddHandler Me.Move, Sub() SyncDebugFormPosition()
-
-        Me.BringToFront()
-        Me.Show()               ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
-
-        ' 2026/04/06 by Gemini:
         InitDatabase()          ' by Gemini, 2026/04/06: 初始化 SQLite 快取資料庫
-        'Await LoadCachesFromSQLiteAsync()
-        ' 掛載 Setting 頁面的快取按鈕事件, 這裡使用 AddHandler 動態掛載，確保按鈕邏輯正確連結到 SQLite 處理函數
-        AddHandler SaveCache.Click, Async Sub(s1, e1) Await SaveCachesToSQLiteAsync()
-        AddHandler LoadCache.Click, Async Sub(s1, e1)
-                                        Await LoadCachesFromSQLiteAsync()
-                                        Dim st = GetDbStats()
-                                        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / mail_basic:{st.mb} 筆 / mail_attachments:{st.at} 筆 / {st.kb} KB"
-                                    End Sub
+        ' high: 使用SSD讀回的cache資料, 會讓treeview預塞的假node":::" 不生效, 沒有+號
+
+        Me.BringToFront()       ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
+        Me.Show()
 
         ' 2024/5/17, PST檔太多, 啟動速度愈來愈差, 全部重寫. 依照20年前的做法動態載入:
         ' 啟動時只載入第一層表皮, 若下層有subFolders=True 則暫塞一個假的":::" 讓它能顯示"+"加號表示還有子資料夾就好
@@ -188,6 +176,9 @@ Partial Class Form1
     End Sub
     Private Sub Form1_ResizeEnd(sender As Object, e As EventArgs) Handles Me.ResizeEnd
         Dbg("結束", sender.Width & "x" & sender.Height)
+        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
+        ' 原本的 ListView1 寬度調整邏輯已移至 HandleListViewResize 中，由 ListView 自行處理 Resize 事件
+        ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
     End Sub
     Private Sub Form1_KeyDown(sender As Object, e As KeyEventArgs) Handles MyBase.KeyDown
         ' ── ESC 全域中斷 ──────────────────────────────────────────────
@@ -325,6 +316,7 @@ Partial Class Form1
         ''' 集中初始化 ProgressBar1 與 ProgressBar2 的互動事件 (TextChanged, Click, Hover)
         ''' 2026/04/02 by Gemini
         ''' </summary>
+        Dbg("開始")
 
         ' 1. 文字變更紀錄
         AddHandler ProgressBar1.TextChanged, Sub() AppendStatusHistory(ProgressBar1.Text, "PB1")
@@ -349,6 +341,7 @@ Partial Class Form1
         AddHandler ProgressBar2.MouseEnter, hoverIn
         AddHandler ProgressBar1.MouseLeave, hoverOut
         AddHandler ProgressBar2.MouseLeave, hoverOut
+        Dbg("結束")
 
     End Sub
 
@@ -448,7 +441,7 @@ Partial Class Form1
         InitListView(ListView3)
         InitSplitContainer(SplitContainer3)
         ' 建立頂部面板，將所有原本散落在 Panel2 的搜尋控制項集中
-        Dim pnlOptions_tab3 As Panel
+        'Dim pnlOptions_tab3 As Panel
         pnlOptions_tab3 = New Panel With {.Dock = DockStyle.Top,
                                          .Height = 115,
                                          .BackColor = ThemeColors.Gray95,
@@ -810,7 +803,7 @@ Partial Class Form1
         _monthCountsCache.Clear()
 
         ' Tab3 附件搜尋快取 (String key，安全直接清除)
-        _cachePhase1tab3.Clear()       ' 第一階段搜尋結果快取 (資料夾展開用)
+        _cacheAttachPreScan.Clear()       ' 第一階段搜尋結果快取 (資料夾展開用)
 
         ' 以下快取的 Key 已改為 String，.Clear() 安全且直接 (by Gemini, 2026/03/27 修正快取鍵值型別)
         _cacheMailCount.Clear()         ' 直屬郵件數量快取 (by Gemini, 2026/03/27 新增)
@@ -894,6 +887,50 @@ Partial Class Form1
         Dim textRect As New Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 4, e.Bounds.Height)
         Dim flags = TextFormatFlags.VerticalCenter Or TextFormatFlags.Left Or TextFormatFlags.EndEllipsis Or TextFormatFlags.PreserveGraphicsClipping
         TextRenderer.DrawText(e.Graphics, HistoryListBox.Items(e.Index).ToString(), e.Font, textRect, foreColor, flags)
+
+    End Sub
+
+    Private Async Sub SaveCache_Click(sender As Object, e As EventArgs) Handles SaveCache.Click
+        Await SaveCachesToSQLiteAsync()
+    End Sub
+    Private Async Sub LoadCache_Click(sender As Object, e As EventArgs) Handles LoadCache.Click
+        Await LoadCachesFromSQLiteAsync()
+        Dim st = GetDatabaseSummary()
+        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / mail_basic:{st.mb} 筆 / mail_attachments:{st.at} 筆 / {st.kb} KB"
+
+    End Sub
+    Private Async Sub RenewCache_Click(sender As Object, e As EventArgs) Handles RenewCache.Click
+        ' 2026/04/07: RenewCache = 用 COM BFS 掃出目前完整的 live folder 路徑集合，
+        '             傳給 CleanupOrphanFolderPath 做精確孤兒清除（比 SaveCache 前的記憶體聯集更準確）
+        ProgressBar1.Text = "正在掃描資料夾清單..." : Cursor = Cursors.WaitCursor
+
+        Try
+            ' BFS 展開所有 PST store 的資料夾，取完整 FolderPath 集合
+            Dim livePaths As New HashSet(Of String)()
+            For Each store As Outlook.Store In _pstStoreList
+                Dim root As Outlook.Folder = TryCast(store.GetRootFolder(), Outlook.Folder)
+                If root Is Nothing Then Continue For
+
+                Dim allFolders = GetSubFolderList(root, includeSubF:=True)
+                For Each f As Outlook.Folder In allFolders
+                    livePaths.Add(f.FolderPath)
+                Next
+            Next
+
+            ProgressBar1.Text = $"掃描完成，共 {livePaths.Count} 個資料夾，正在清除孤兒快取..."
+            Await Task.Delay(1)  ' 讓 UI 刷新
+            CleanupOrphanFolderPath(livePaths)
+
+            Dim st = GetDatabaseSummary()
+            ProgressBar1.Text = $"RenewCache 完成 — DB: folder_stats:{st.fc} 筆 / mail_basic:{st.mb} 筆 / mail_attachments:{st.at} 筆 / {st.kb} KB"
+
+        Catch ex As System.Exception
+            ProgressBar1.Text = "RenewCache 失敗"
+            Dbg("錯誤", ex.Message)
+        Finally
+            Cursor = Cursors.Default
+            Dbg("結束", ProgressBar1.Text)
+        End Try
 
     End Sub
 #End Region
@@ -1140,6 +1177,8 @@ Partial Class Form1
         Dim rootNode = tv.Nodes(0)
         If rootNode.Nodes.Count = 0 Then Return
 
+        ' by Gemini, 2026/04/07: 分離 UI 展開 與 資料載入(AfterSelect)，讓樹狀圖以最快極速展開完畢，不再卡這 100ms
+        Dim nodeToSelect As TreeNode = Nothing
         tv.BeginUpdate()
         Try
             rootNode.Expand()
@@ -1148,36 +1187,40 @@ Partial Class Form1
             ' 新版: tv.Nodes(0).Nodes.Count - 1 = 第一個 PST 下的所有子資料夾數
             ' 遍歷第一個 PST 的「子資料夾」
             For Each node As TreeNode In rootNode.Nodes
-
                 ' 3. 第三層Guard Clauses：不是收件匣就繼續找下一個 (過濾模式)
                 If Not (node.Text.Contains("Inbox") Or node.Text.Contains("收件匣")) Then Continue For
                 Dbg("發現預設收件匣", node.FullPath)
-
-                ' 4. 使用 TryCast 簡化類型判斷，減少多層 If
-                Dim st = TryCast(tv, SimTree)
-                If st IsNot Nothing Then
-                    ' 2026/3/18: 必須明確 TryCast 到 SimTree，才能正確呼叫 AddSelectedNode 更新 _selectedNodes 和高亮色
-                    ' 同時, 把自訂控制項裡面的 FireAfterSelect() 從 private 改成 public, 直接手動觸發 AfterSelect 事件
-                    st.AddSelectedNode(node)    ' ← SimTree 專用路徑: 直接更新 _selectedNodes + 高亮
-                    st.FireAfterSelect(node)    ' ← 直接手動觸發 AfterSelect 事件，讓統計邏輯跑起來
-                ElseIf TypeOf tv Is TreeView Then
-                    ' 2026/3/18: debug找了好幾天, 首次切換到tab2時, SimTree2無法正確選取到預設的收件匣
-                    ' 結果原來是下方的 tv.SelectedNode = node 送到SimTree控制項, 沒有被觸發選中的event
-                    ' 一定要自己主動去手動觸發 FireAfterSelect 事件
-                    tv.SelectedNode = node
-                End If
-                tv.Focus() : tv.Refresh()
-
-                ' 成功選取後提早返回 (Finally 塊會負責執行 EndUpdate)
-                Dbg("結束", $"{tv.Name}: 已成功選取預設收件匣")
-                Return
+                nodeToSelect = node
+                Exit For
             Next
-            Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾") ' by Gemini, 2026/04/04: Issue 3
+            If nodeToSelect Is Nothing Then
+                Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾") ' by Gemini, 2026/04/04: Issue 3
+            End If
         Finally
             ' 💡 確保無論中途 Return 或發生 Exception，UI 都不會卡在 BeginUpdate
             tv.EndUpdate()
         End Try
-        Await Task.Yield()
+
+        ' 找到節點的話，在 EndUpdate 解鎖 UI 後，由以下區塊執行「資料載入觸發」
+        If nodeToSelect IsNot Nothing Then
+            Await Task.Yield() ' 讓 UI 執行緒去把因為 EndUpdate 而要畫的圖立刻畫出來
+
+            ' 4. 使用 TryCast 簡化類型判斷，減少多層 If
+            Dim st = TryCast(tv, SimTree)
+            If st IsNot Nothing Then
+                ' 2026/3/18: 必須明確 TryCast 到 SimTree，才能正確呼叫 AddSelectedNode 更新 _selectedNodes 和高亮色
+                ' 同時, 把自訂控制項裡面的 FireAfterSelect() 從 private 改成 public, 直接手動觸發 AfterSelect 事件
+                st.AddSelectedNode(nodeToSelect)    ' ← SimTree 專用路徑: 直接更新 _selectedNodes + 高亮
+                st.FireAfterSelect(nodeToSelect)    ' ← 直接手動觸發 AfterSelect 事件，讓統計邏輯跑起來
+            ElseIf TypeOf tv Is TreeView Then
+                ' 2026/3/18: debug找了好幾天, 首次切換到tab2時, SimTree2無法正確選取到預設的收件匣
+                ' 結果原來是下方的 tv.SelectedNode = node 送到SimTree控制項, 沒有被觸發選中的event
+                ' 一定要自己主動去手動觸發 FireAfterSelect 事件
+                tv.SelectedNode = nodeToSelect
+            End If
+            tv.Focus()
+            Dbg("結束", $"{tv.Name}: 已成功選取預設收件匣")
+        End If
 
     End Sub
     Private Function GetActiveTreeView() As TreeView
@@ -1452,6 +1495,7 @@ Partial Class Form1
         ''' <summary>Chart2 平均線 琥珀 (#FFAA00)</summary>
         Public Shared ReadOnly avgLineColor As Color = Color.FromArgb(255, 170, 0)
     End Class
+
 #End Region
 
 

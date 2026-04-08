@@ -700,7 +700,7 @@ Partial Class Form1
     ' ---------------------------------------------------------------
     Private Async Function GetCachedMailWithAttachment(folder As Outlook.Folder, progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of MailItemInfo))
         ' by Gemini, 2026/04/05: L2.5 快取代理層 - Tab3 Phase 1 快取 - 取得單一資料夾本層含附件的郵件清單
-        ' 2026/04/07: Phase 2 — 加入 DB lazy load (mail_basic)
+        ' 2026/04/07: Phase 2 — 加入 DB lazy load (mail_withattachs)
         Dbg("開始", folder.Name)
         Dim key As String = folder.FolderPath
         Dim currentCount As Integer = GetCachedMailCount(folder)  ' 依賴同層快取（本身已有 DB lazy load）
@@ -709,7 +709,7 @@ Partial Class Form1
         Dim entry As FolderCacheTab3
         If _cacheAttachPreScan.TryGetValue(key, entry) AndAlso entry.ItemCountWhenCached = currentCount Then Return entry.mailWithAttachment
 
-        ' ② DB lazy load (mail_basic)：item_count_snap == currentCount → 快取仍有效
+        ' ② DB lazy load (mail_withattachs)：item_count_snap == currentCount → 快取仍有效
         Dim dbResult = DbGetMailBasic(key)
         If dbResult IsNot Nothing AndAlso dbResult.Snap = currentCount Then
             Dim cached As New FolderCacheTab3 With {.mailWithAttachment = dbResult.Mails, .ItemCountWhenCached = currentCount}
@@ -732,12 +732,12 @@ Partial Class Form1
     ' ---------------------------------------------------------------
     Private Function GetCachedAttachFilename(mail As MailItemInfo) As List(Of String)
         ' by Gemini, 2026/04/04: L2.5 快取代理層 - 取得附件檔名清單 (含 _cacheAttachFilename 機制)
-        ' 2026/04/07: Phase 2 — 加入 DB lazy load (mail_attachments)「持久化快取」存入SSD
+        ' 2026/04/07: Phase 2 — 加入 DB lazy load (attach_filenames)「持久化快取」存入SSD
         ' 讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
         Dim result As List(Of String) = Nothing
         If _cacheAttachFilename.TryGetValue(mail.EntryID, result) Then Return result  ' ①
 
-        ' ② DB lazy load (mail_attachments)
+        ' ② DB lazy load (attach_filenames)
         result = DbGetAttachFilenames(mail.EntryID)
         If result IsNot Nothing Then
             _cacheAttachFilename.TryAdd(mail.EntryID, result)

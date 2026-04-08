@@ -509,6 +509,15 @@ Partial Class Form1
 
         AddHandler NumberMin.ValueChanged, Sub() UpdateNumericIncrement(NumberMin, UnitMin)
         AddHandler NumberMax.ValueChanged, Sub() UpdateNumericIncrement(NumberMax, UnitMax)
+
+        ' by Gemini, 2026/04/08: 為數字輸入框增加 Enter 鍵觸發搜尋功能
+        AddHandler NumberMin.KeyDown, Sub(s, ev)
+                                         If ev.KeyCode = Keys.Enter Then Button3.PerformClick() : ev.SuppressKeyPress = True
+                                     End Sub
+        AddHandler NumberMax.KeyDown, Sub(s, ev)
+                                         If ev.KeyCode = Keys.Enter Then Button3.PerformClick() : ev.SuppressKeyPress = True
+                                     End Sub
+
         AddHandler UnitMin.SelectedIndexChanged, Sub() UpdateNumericIncrement(NumberMin, UnitMin)
         AddHandler UnitMax.SelectedIndexChanged, Sub() UpdateNumericIncrement(NumberMax, UnitMax)
 
@@ -896,7 +905,7 @@ Partial Class Form1
     Private Async Sub LoadCache_Click(sender As Object, e As EventArgs) Handles LoadCache.Click
         Await LoadCachesFromSQLiteAsync()
         Dim st = GetDatabaseSummary()
-        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / mail_basic:{st.mb} 筆 / mail_attachments:{st.at} 筆 / {st.kb} KB"
+        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / mail_withattachs:{st.mb} 筆 / attach_filenames:{st.at} 筆 / {st.kb} KB"
 
     End Sub
     Private Async Sub RenewCache_Click(sender As Object, e As EventArgs) Handles RenewCache.Click
@@ -922,7 +931,7 @@ Partial Class Form1
             CleanupOrphanFolderPath(livePaths)
 
             Dim st = GetDatabaseSummary()
-            ProgressBar1.Text = $"RenewCache 完成 — DB: folder_stats:{st.fc} 筆 / mail_basic:{st.mb} 筆 / mail_attachments:{st.at} 筆 / {st.kb} KB"
+            ProgressBar1.Text = $"RenewCache 完成 — DB: folder_stats:{st.fc} 筆 / mail_withattachs:{st.mb} 筆 / attach_filenames:{st.at} 筆 / {st.kb} KB"
 
         Catch ex As System.Exception
             ProgressBar1.Text = "RenewCache 失敗"

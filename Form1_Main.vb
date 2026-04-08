@@ -1467,7 +1467,7 @@ Partial Class Form1
     '      策略: 導入「管線化處理 (Pipeline)」與「SOLID 分層 (L1/L2.5/L3)」，徹底解耦 MAPI、業務與 UI。
     '      分層:
     '        ├─ L1 (UI/流程層) : Button3_Click, ShowResultTab3
-    '        ├─ L2 (商務過濾層): FilterBySize, FilterByAttachmentDetailsAsync
+    '        ├─ L2 (商務過濾層): FilterBySize, FilterByAttachDetailsAsync
     '        ├─ L2.5 (快取層)  : GetCachedMailWithAttachment (_cacheAttachPreScan / _cacheAttachFilename)
     '        └─ L3 (MAPI操作層): GetMailWithAttachmentL3
     '
@@ -1476,7 +1476,7 @@ Partial Class Form1
     '   Step 2. BFS 遍歷      → GetSubFolderList，取得目標資料夾樹 (COM)
     '   Step 3. 匯集資料全集  → 向 L2.5 索取候選郵件全集 (GetCachedMailWithAttachment)
     '   Step 4. 管線過濾 1    → 記憶體 LINQ 瞬間過濾大小限制 (FilterBySize)
-    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 L2.5 快取判定 (FilterByAttachmentDetailsAsync)
+    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 L2.5 快取判定 (FilterByAttachDetailsAsync)
     '   Step 6. UI 映射與顯示 → 將資料封裝為介面項目並顯示，無縫銜接">0"或真實統計 (ShowResultTab3)
     ' ===================================================
 #Region "  ├ L1 UI事件層"
@@ -1530,7 +1530,7 @@ Partial Class Form1
             Dim hasKeyword = CheckAttachName.Checked AndAlso TextBox3.Text.Trim.Length > 0
             If hasKeyword OrElse CheckAttCount.Checked Then
                 Dim progressPhase2 = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
-                targetMails = Await FilterByAttachmentDetailsAsync(targetMails, progressPhase2)
+                targetMails = Await FilterByAttachDetailsAsync(targetMails, progressPhase2)
             End If
 
             ' ── 終極 Mapping 與顯示結果 ──
@@ -1590,7 +1590,7 @@ Partial Class Form1
         Dbg("結束", $"篩選後剩下 {resultList.Count} 封")
         Return resultList
     End Function
-    Private Async Function FilterByAttachmentDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of MailItemInfo))
+    Private Async Function FilterByAttachDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of MailItemInfo))
         ' Pipeline 過濾 2: 逐一讀取附件明細，利用 _cacheAttachFilename 大幅降低 COM 存取
         Dbg("開始", $"候選郵件: {sourceList.Count} 封")
 
@@ -1694,7 +1694,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  └ 輔助函數"
-    Private Function BuildFilterAttachmentTab3() As String
+    Private Function BuildFilterAttachment() As String
         ' 2026-03-16: 大小篩選移到 Button3_Click Step3b 的 LINQ，
         '   此函數保留但現在只回傳 hasattachment 基礎 filter (與 strFilterHasAttachment 一致)
         '   保留原有大小條件建構邏輯以備日後參考，但 Button3_Click 已不呼叫此函數

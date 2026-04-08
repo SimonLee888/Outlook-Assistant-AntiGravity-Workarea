@@ -19,8 +19,8 @@ Imports System.Text.Json
 '
 '   三張表合一個 cache.db (Application.StartupPath):
 '     folder_stats      — 資料夾層級六個數字快取 + content_count_snapshot
-'     mail_basic        — Tab3 Phase1 候選郵件基本資訊 (MailItemInfo)
-'     mail_attachments  — Tab3 Phase2 附件檔名清單 (JSON array)
+'     mail_withattachs        — Tab3 Phase1 候選郵件基本資訊 (MailItemInfo)
+'     attach_filenames  — Tab3 Phase2 附件檔名清單 (JSON array)
 '
 ' 設計決策 (2026-04-06):
 '   1. 三張表合一個 cache.db，跨表 Transaction 保證原子性，一個 Connection 管理最簡單
@@ -55,7 +55,7 @@ Partial Class Form1
     End Class
 
     Friend Class MailBasicDbResult
-        ' mail_basic WHERE folder_path=? 的讀出結果
+        ' mail_withattachs WHERE folder_path=? 的讀出結果
         Public Snap As Integer = -1
         Public Mails As New List(Of MailItemInfo)()
     End Class
@@ -97,7 +97,7 @@ Partial Class Form1
                     content_count_snapshot  INTEGER,
                     updated_at              TEXT
                                                         );
-                CREATE TABLE IF NOT EXISTS mail_basic (
+                CREATE TABLE IF NOT EXISTS mail_withattachs (
                     entry_id        TEXT    PRIMARY KEY,
                     folder_path     TEXT    NOT NULL,
                     subject         TEXT,
@@ -108,15 +108,15 @@ Partial Class Form1
                     item_count_snap INTEGER,
                     updated_at      TEXT
                                                         );
-                CREATE INDEX IF NOT EXISTS idx_mb_folder ON mail_basic(folder_path);
-                CREATE TABLE IF NOT EXISTS mail_attachments (
+                CREATE INDEX IF NOT EXISTS idx_mb_folder ON mail_withattachs(folder_path);
+                CREATE TABLE IF NOT EXISTS attach_filenames (
                     entry_id        TEXT    PRIMARY KEY,
                     folder_path     TEXT    NOT NULL,
                     filenames       TEXT,
                     msg_size        INTEGER,
                     updated_at      TEXT
                                                         );
-                CREATE INDEX IF NOT EXISTS idx_ma_folder ON mail_attachments(folder_path);
+                CREATE INDEX IF NOT EXISTS idx_ma_folder ON attach_filenames(folder_path);
                 CREATE TABLE IF NOT EXISTS year_counts (
                     folder_path     TEXT    NOT NULL,
                     year            INTEGER NOT NULL,
@@ -174,7 +174,7 @@ Partial Class Form1
                                            Try
                                                Dim f = SaveFolderStatsInner(txn)
                                                Dim b = SaveMailBasicInner(txn)
-                                               Dim a = SaveMailAttachmentsInner(txn)
+                                               Dim a = SaveAttachFilenamesInner(txn)
                                                Dim y = SaveYearCountsInner(txn)
                                                txn.Commit()
                                                Return (f, b, a, y)
@@ -191,9 +191,9 @@ Partial Class Form1
             ' ③ 統計：各快取字典目前的 entry 數
             Dim statLine1 = $"① [記憶體] MailCount: {_cacheMailCount.Count} / MailCountAll: {_cacheMailCountAll.Count} / FolderCount: {_cacheFolderCount.Count} / FolderCountAll: {_cacheFolderCountAll.Count}"
             Dim statLine2 = $"② [記憶體] FolderSize: {_cacheFolderSize.Count} / FolderSizeAll: {_cacheFolderSizeAll.Count} / AttachPreScan: {_cacheAttachPreScan.Count} / AttachFilename: {_cacheAttachFilename.Count}"
-            Dim statLine3 = $"③ [寫入DB] folder_stats: {savedFolders} 筆 / mail_basic: {savedMailBasic} 筆 / mail_attachments: {savedAttach} 筆 / year_counts: {savedYears} 筆 / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
+            Dim statLine3 = $"③ [寫入DB] folder_stats: {savedFolders} 筆 / mail_withattachs: {savedMailBasic} 筆 / attach_filenames: {savedAttach} 筆 / year_counts: {savedYears} 筆 / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
             Dim st = GetDatabaseSummary()
-            Dim statLine4 = $"④ [DB現況] folder_stats: {st.fc} 筆 / mail_basic: {st.mb} 筆 / mail_attachments: {st.at} 筆 / year_counts: {st.yc} 筆 / 檔案: {st.kb} KB"
+            Dim statLine4 = $"④ [DB現況] folder_stats: {st.fc} 筆 / mail_withattachs: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / 檔案: {st.kb} KB"
 
             ProgressBar1.Text = $"SaveCache 完成 — {statLine3}"
             ProgressBar2.Text = statLine4
@@ -237,7 +237,7 @@ Partial Class Form1
             Dim r = Await Task.Run(Function()
                                        Dim f = LoadFolderStatsInner()
                                        Dim b = LoadMailBasicInner()
-                                       Dim a = LoadMailAttachmentsInner()
+                                       Dim a = LoadAttachFilenamesInner()
                                        Dim y = LoadYearCountsInner()
                                        Return (f, b, a, y)
                                    End Function)
@@ -253,11 +253,11 @@ Partial Class Form1
             Dim statLine2 = $"② [folder_stats cont.] " &
                             $"FolderSize +{_cacheFolderSize.Count - beforeFS} / " &
                             $"FolderSizeAll +{_cacheFolderSizeAll.Count - beforeFSA}"
-            Dim statLine3 = $"③ [mail_basic] 讀入 {r.Item2} 筆 → AttachPreScan +{_cacheAttachPreScan.Count - beforePS} 個資料夾"
-            Dim statLine4 = $"④ [mail_attachments] 讀入 {r.Item3} 筆 → AttachFilename +{_cacheAttachFilename.Count - beforeAF} 筆"
+            Dim statLine3 = $"③ [mail_withattachs] 讀入 {r.Item2} 筆 → AttachPreScan +{_cacheAttachPreScan.Count - beforePS} 個資料夾"
+            Dim statLine4 = $"④ [attach_filenames] 讀入 {r.Item3} 筆 → AttachFilename +{_cacheAttachFilename.Count - beforeAF} 筆"
             Dim statLine_yc = $"⑤ [year_counts] 讀入 {r.Item4} 筆 → _yearCountsCache {_yearCountsCache.Count} 個資料夾"
             Dim st = GetDatabaseSummary()
-            Dim statLine5 = $"⑥ [DB現況] folder_stats: {st.fc} 筆 / mail_basic: {st.mb} 筆 / mail_attachments: {st.at} 筆 / year_counts: {st.yc} 筆 / 檔案: {st.kb} KB / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
+            Dim statLine5 = $"⑥ [DB現況] folder_stats: {st.fc} 筆 / mail_withattachs: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / 檔案: {st.kb} KB / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
 
             ProgressBar1.Text = $"LoadCache 完成 — DB: {st.fc}/{st.mb}/{st.at}/{st.yc} 筆，{st.kb} KB，耗時 {sw.Elapsed.TotalSeconds:0.000} 秒"
             ProgressBar2.Text = $"記憶體增量 — mailCount+{_cacheMailCount.Count - beforeMC} / attachFilename+{_cacheAttachFilename.Count - beforeAF} / yearCounts:{_yearCountsCache.Count} 資料夾"
@@ -310,16 +310,16 @@ Partial Class Form1
                     Using c1 As New SqliteCommand("DELETE FROM folder_stats WHERE folder_path=@p", _db, txn)
                         c1.Parameters.AddWithValue("@p", stale) : dF += c1.ExecuteNonQuery()
                     End Using
-                    Using c2 As New SqliteCommand("DELETE FROM mail_basic WHERE folder_path=@p", _db, txn)
+                    Using c2 As New SqliteCommand("DELETE FROM mail_withattachs WHERE folder_path=@p", _db, txn)
                         c2.Parameters.AddWithValue("@p", stale) : dB += c2.ExecuteNonQuery()
                     End Using
-                    Using c3 As New SqliteCommand("DELETE FROM mail_attachments WHERE folder_path=@p", _db, txn)
+                    Using c3 As New SqliteCommand("DELETE FROM attach_filenames WHERE folder_path=@p", _db, txn)
                         c3.Parameters.AddWithValue("@p", stale) : dA += c3.ExecuteNonQuery()
                     End Using
                 Next
                 txn.Commit()
             End Using
-            Dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / 刪除 folder_stats:{dF} 行 / mail_basic:{dB} 行 / mail_attachments:{dA} 行")
+            Dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / 刪除 folder_stats:{dF} 行 / mail_withattachs:{dB} 行 / attach_filenames:{dA} 行")
 
         Catch ex As System.Exception
             Dbg("錯誤", ex.Message)
@@ -329,7 +329,7 @@ Partial Class Form1
     Friend Function GetDatabaseSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, kb As Long)
         ' ---------------------------------------------------------------
         ' GetDatabaseSummary — 取得 DB 統計摘要，供按鈕顯示
-        ' 回傳 (folder_stats 行數, mail_basic 行數, mail_attachments 行數, year_counts 行數, 檔案大小 KB)
+        ' 回傳 (folder_stats 行數, mail_withattachs 行數, attach_filenames 行數, year_counts 行數, 檔案大小 KB)
         ' ---------------------------------------------------------------
         Dbg(" - 開始")
         If _db Is Nothing Then Return (0, 0, 0, 0, 0)
@@ -337,8 +337,8 @@ Partial Class Form1
         Try
             Dim fc, mb, at, yc As Integer
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM folder_stats", _db) : fc = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
-            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM mail_basic", _db) : mb = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
-            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM mail_attachments", _db) : at = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM mail_withattachs", _db) : mb = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_filenames", _db) : at = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM year_counts", _db) : yc = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Dim fi As New IO.FileInfo(_dbPath)
             Return (fc, mb, at, yc, If(fi.Exists, fi.Length \ 1024L, 0L))
@@ -451,10 +451,10 @@ Partial Class Form1
     End Function
     Private Function SaveMailBasicInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
-        ' SaveMailBasicInner — Transaction 內批次寫入 mail_basic（Tab3 Phase1）
+        ' SaveMailBasicInner — Transaction 內批次寫入 mail_withattachs（Tab3 Phase1）
         ' ---------------------------------------------------------------
         Dbg("開始")
-        Dim sql = "INSERT OR REPLACE INTO mail_basic" &
+        Dim sql = "INSERT OR REPLACE INTO mail_withattachs" &
                   " (entry_id,folder_path,subject,msg_size,received_time,sender_name,attach_count,item_count_snap,updated_at)" &
                   " VALUES (@eid,@fp,@subj,@sz,@rt,@sn,@ac,@snap,@ts)"
 
@@ -493,13 +493,13 @@ Partial Class Form1
         Dbg("結束")
 
     End Function
-    Private Function SaveMailAttachmentsInner(txn As SqliteTransaction) As Integer
+    Private Function SaveAttachFilenamesInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
-        ' SaveMailAttachmentsInner — Transaction 內批次寫入 mail_attachments（Tab3 Phase2）
+        ' SaveAttachFilenamesInner — Transaction 內批次寫入 attach_filenames（Tab3 Phase2）
         ' folder_path 透過反查 _cacheAttachPreScan 取得（_cacheAttachFilename key 是 EntryID）
         ' ---------------------------------------------------------------
         Dbg("開始")
-        Dim sql = "INSERT OR REPLACE INTO mail_attachments" &
+        Dim sql = "INSERT OR REPLACE INTO attach_filenames" &
                   " (entry_id,folder_path,filenames,msg_size,updated_at)" &
                   " VALUES (@eid,@fp,@fn,@sz,@ts)"
         Dim count As Integer = 0
@@ -605,7 +605,7 @@ Partial Class Form1
         ' 暫存用：先按 folder_path 分組收集，最後一次性寫入 _cacheAttachPreScan
         Dim tempDict As New Dictionary(Of String, (snap As Integer, mails As List(Of MailItemInfo)))()
 
-        Using cmd As New SqliteCommand("SELECT entry_id,folder_path,subject,msg_size,received_time,sender_name,attach_count,item_count_snap FROM mail_basic", _db)
+        Using cmd As New SqliteCommand("SELECT entry_id,folder_path,subject,msg_size,received_time,sender_name,attach_count,item_count_snap FROM mail_withattachs", _db)
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim fp = reader.GetString(1)
@@ -637,13 +637,13 @@ Partial Class Form1
         Dbg("結束")
 
     End Function
-    Private Function LoadMailAttachmentsInner() As Integer
+    Private Function LoadAttachFilenamesInner() As Integer
         ' ---------------------------------------------------------------
-        ' LoadMailAttachmentsInner — 重建 _cacheAttachFilename（JSON 反序列化）
+        ' LoadAttachFilenamesInner — 重建 _cacheAttachFilename（JSON 反序列化）
         ' ---------------------------------------------------------------
         Dbg("開始")
         Dim count As Integer = 0
-        Using cmd As New SqliteCommand("SELECT entry_id,filenames FROM mail_attachments", _db)
+        Using cmd As New SqliteCommand("SELECT entry_id,filenames FROM attach_filenames", _db)
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim eid = reader.GetString(0)
@@ -706,7 +706,7 @@ Partial Class Form1
     End Function
     Friend Function DbGetMailBasic(folderPath As String) As MailBasicDbResult
         ' ---------------------------------------------------------------
-        ' DbGetMailBasic — 讀取 mail_basic WHERE folder_path=? 的所有行
+        ' DbGetMailBasic — 讀取 mail_withattachs WHERE folder_path=? 的所有行
         ' 回傳 Nothing 表示 DB 中無此資料夾的郵件記錄
         ' ---------------------------------------------------------------
         Dbg("開始")
@@ -716,7 +716,7 @@ Partial Class Form1
             Dim result As New MailBasicDbResult()
             Using cmd As New SqliteCommand(
                 "SELECT entry_id,subject,msg_size,received_time,sender_name,attach_count,item_count_snap" &
-                " FROM mail_basic WHERE folder_path=@p", _db)
+                " FROM mail_withattachs WHERE folder_path=@p", _db)
 
                 cmd.Parameters.AddWithValue("@p", folderPath)
                 Using reader = cmd.ExecuteReader()
@@ -745,7 +745,7 @@ Partial Class Form1
     End Function
     Friend Function DbGetAttachFilenames(entryId As String) As List(Of String)
         ' ---------------------------------------------------------------
-        ' DbGetAttachFilenames — 讀取 mail_attachments WHERE entry_id=? 的一行
+        ' DbGetAttachFilenames — 讀取 attach_filenames WHERE entry_id=? 的一行
         ' 回傳 Nothing 表示 DB 中無此 EntryID
         ' ---------------------------------------------------------------
         Dbg("開始")
@@ -753,7 +753,7 @@ Partial Class Form1
 
         Try
             Using cmd As New SqliteCommand(
-                "SELECT filenames FROM mail_attachments WHERE entry_id=@eid", _db)
+                "SELECT filenames FROM attach_filenames WHERE entry_id=@eid", _db)
 
                 cmd.Parameters.AddWithValue("@eid", entryId)
                 Using reader = cmd.ExecuteReader()

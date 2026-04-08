@@ -28,8 +28,11 @@ Public Class DebugForm
 
 #Region "■ 01 Win32 API & 常數"
     <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function SendMessage(hWnd As IntPtr, msg As Integer, wParam As IntPtr, lParam As IntPtr) As IntPtr
-
+    Private Shared Function SendMessage(
+        hWnd As IntPtr,
+        msg As Integer,
+        wParam As IntPtr,
+        lParam As IntPtr) As IntPtr
     End Function
     Private Const WM_SETREDRAW As Integer = &HB  ' 2026/3/26 by Gemini
 #End Region

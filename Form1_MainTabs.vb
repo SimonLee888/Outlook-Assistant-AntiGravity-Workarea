@@ -30,7 +30,7 @@ Partial Class Form1
     Private Shared ReadOnly _monthCountsCache As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
 
     Private Structure FolderCacheTab3
-        Dim mailWithAttachment As List(Of MailItemInfo)         ' 所有 hasattachment 候選 (無大小篩選)
+        Dim mailWithAttachs As List(Of MailItemInfo)            ' 所有 hasattachment 候選 (無大小篩選)
         Dim ItemCountWhenCached As Integer                      ' 快取當下的 PR_CONTENT_COUNT，失效偵測用
     End Structure
 
@@ -138,30 +138,30 @@ Partial Class Form1
     '   todo: 但我還是想要再嚐試看看, 我覺得上次測試結果應該不是這個原因
     '
     ' ── 分層架構 ──────────────────────────────────────────────────
-    '   L1  TreeView1_AfterSelect   UI 事件層
-    '       取得選中資料夾 → 呼叫 L2 → 批次更新 ListView1
+    '   Layer1  TreeView1_AfterSelect   UI 事件層
+    '       取得選中資料夾 → 呼叫 Layer2 → 批次更新 ListView1
     '       規則: 不做計算，不直接操作 COM，只傳達意圖與呈現結果
     '
-    '   L2  ComputeFolderStatsAsync 流程協調層 (核心)
+    '   Layer2  ComputeFolderStatsAsync 流程協調層 (核心)
     '       BFS 展開整棵子樹 (root 永遠展開直屬子，其餘節點依快取決定)
-    '       → 呼叫 L3 讀每個節點的直接郵件數
+    '       → 呼叫 Layer3 讀每個節點的直接郵件數
     '       → 底部向上彙總 (O(N)，無遞迴 stack overflow 風險)
     '       → 一次性寫快取 (整棵子樹預讀)
-    '       → 回傳 root + 直屬子資料夾清單供 L1 顯示
-    '       回呼 onProgress 讓 L1 更新進度，L2 自身不碰任何 UI 控制項
+    '       → 回傳 root + 直屬子資料夾清單供 Layer1 顯示
+    '       回呼 onProgress 讓 Layer1 更新進度，Layer2 自身不碰任何 UI 控制項
     '
-    '   L3  GetMailCount            COM 資料層
+    '   Layer3  GetMailCount            COM 資料層
     '       只讀單一資料夾的 PR_CONTENT_COUNT (本層郵件數，不含子孫)
     '       不遞迴，不展開子資料夾，最小化 COM 呼叫量
     '
     ' ── 快取策略 ──────────────────────────────────────────────────
-    '   mailCountCache   → TotalMailCount (含子孫郵件總數)   L2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
-    '   folderCountCache → TotalSubCount (含子孫資料夾總數)  L2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
+    '   mailCountCache   → TotalMailCount (含子孫郵件總數)   Layer2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
+    '   folderCountCache → TotalSubCount (含子孫資料夾總數)  Layer2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
     '   folderSizeCache  → 資料夾大小 (Lazy，由 ColumnClick / 右鍵觸發計算)
     '   folderTreeCache  → 子資料夾排序清單 (GetSortedSubFolders 負責維護)
     ' ─────────────────────────────────────────────────────────────
     ' FolderBfsEntry: BFS 過程中每個資料夾節點的容器
-    ' 貫穿 L2 的所有步驟 (BFS 展開 → L3 讀取 → 底部向上彙總 → 快取寫入 → 回傳清單)
+    ' 貫穿 Layer2 的所有步驟 (BFS 展開 → Layer3 讀取 → 底部向上彙總 → 快取寫入 → 回傳清單)
     ' ─────────────────────────────────────────────────────────────
     '   快取命中剪枝規則:
     '     root (BFS 起點)   → 永遠展開直屬子資料夾 (v4 bug fix 的核心)
@@ -169,23 +169,23 @@ Partial Class Form1
     '
     ' ── 使用說明 ──────────────────────────────────────────────────
     '   【替換以下函數】
-    '     - TreeView1_AfterSelect   → 本檔 L1 取代
-    '     - GetInfoForListview      → 由 L2/L3 取代，舊函數可刪除
+    '     - TreeView1_AfterSelect   → 本檔 Layer1 取代
+    '     - GetInfoForListview      → 由 Layer2/Layer3 取代，舊函數可刪除
     '     - GetFolderSizeLegacy     → 本檔修正版取代 (移除 Task.Run 包 COM)
     '
     '   【完全不動的函數】
     '     - GetMailCountByMAPINew    保留 (GetFolderSizeLegacy exception path 仍呼叫)
     '     - GetTotalFolderCountAsync 保留 (不再由 Tab1 主流程呼叫，但其他地方可能用到)
-    '     - GetSortedSubFolders      不改 (L2 BFS 直接呼叫)
+    '     - GetSortedSubFolders      不改 (Layer2 BFS 直接呼叫)
     '     - GetFolderByName, FindNodeByName (右鍵、雙擊功能用)
     '     - ListView1_ColumnClick, ComputeFolderSize, EnterFolderMenuItem
     '     - GetFolderSizeOld (問題資料夾的 fallback，新版 GetFolderSizeLegacy 仍呼叫)
     ' ==============================================================
-#Region "  ├ L1 UI事件層"
+#Region "  ├ Layer1 UI事件層"
     Private Async Sub TreeView1_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles TreeView1.AfterSelect
         ' ==============================================================
         ' === Layer 1 (UI 事件層) ===
-        ' 職責: 回應 TreeView1 點選，呼叫 L2 計算，批次更新 ListView1
+        ' 職責: 回應 TreeView1 點選，呼叫 Layer2 計算，批次更新 ListView1
         '       第一次點選: 完整遍歷整棵子樹並預讀快取
         '       後續點選  : 命中快取，BFS 立即剪枝，近乎瞬間完成
         ' 規則: 不做遞迴計算，不直接操作 COM，只傳達意圖與呈現結果
@@ -207,8 +207,8 @@ Partial Class Form1
         ProgressBar1.Text = "" : ProgressBar2.Text = ""
 
         ' by Gemini, 2026/04/03: 區隔邏輯準備與 Await 調用
-        Try ' L2: BFS 展開整棵子樹，快取命中剪枝，底部向上彙總，回傳顯示清單
-            Dim progressIndicator = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+        Try ' Layer2: BFS 展開整棵子樹，快取命中剪枝，底部向上彙總，回傳顯示清單
+            Dim progressIndicator = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
             Dim rows As List(Of FolderBfsEntry) = Await ComputeFolderStatsAsync(selectedFolder, progressIndicator)
 
             ' 序號機制配對
@@ -216,7 +216,7 @@ Partial Class Form1
 
             ' ✅ ESC 中斷封 ComputeFolderStatsAsync 回空 List → 不更新 ListView
             If _cancelRequested OrElse rows.Count = 0 Then
-                Dbg("結束", If(_cancelRequested, "ESC 中斷", "結果為空")) ' by Gemini, 2026/04/04: Issue 3
+                Dbg("結束", If(_cancelRequested, "ESC 中斷", "結果為空"))
                 ProgressBar1.Text = "已中斷。" : Cursor = Cursors.Default : Return
             End If
 
@@ -272,11 +272,11 @@ Partial Class Form1
 
     End Sub
 #End Region
-#Region "  ├ L2 流程協調層"
-    Private Async Function ComputeFolderStatsAsync(rootFolder As Outlook.Folder, progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of FolderBfsEntry))
+#Region "  ├ Layer2 流程協調層"
+    Private Async Function ComputeFolderStatsAsync(rootFolder As Outlook.Folder, progress As IProgress(Of ProgressReport)) As Task(Of List(Of FolderBfsEntry))
         ' ==============================================================
         ' === Layer 2 (流程協調層) ===
-        ' 職責: BFS 廣度優先搜索，展開整棵子樹，管理快取剪枝，驅動 L3，底部向上彙總，回傳顯示清單
+        ' 職責: BFS 廣度優先搜索，展開整棵子樹，管理快取剪枝，驅動 Layer3，底部向上彙總，回傳顯示清單
         ' 
         ' 2026/04/04 by Gemini 重構紀錄:
         ' v5: 原有的百行巨型函數已被依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。
@@ -286,7 +286,7 @@ Partial Class Form1
         '   Step 2. FetchDirectMailCountsAsync  : 對未快取節點逐一呼叫 GetCachedMailCount() 取本層郵件數。
         '                                         處理 progress 報告並支援 _cancelRequested 中斷。
         '   Step 3. SummarizeSubTreeBottomUp    : 利用 BFS「父索引 < 子索引」特性，從陣列尾端往前掃一次完成加總。
-        '   Step 4. UpdateFolderStatsCache      : 將最新結果寫入 L2.5 的 _cacheMailCountAll 等字典。
+        '   Step 4. UpdateFolderStatsCache      : 將最新結果寫入 Layer2.5 的 _cacheMailCountAll 等字典。
         '   Step 5. GetBfsResult                : 從陣列中挑出 root 與直屬子資料夾 (ParentIndex=0) 並補讀快取。
         '
         ' 架構與效能考量:
@@ -381,7 +381,7 @@ Partial Class Form1
                 Dim folder As Outlook.Folder = TryCast(s.Tag, Outlook.Folder)       ' 2026/3/24 by Gemini: 改用 Tag 取回 Folder，避免 GetFolderByName 遞迴展開 TreeView
                 If folder Is Nothing Then Continue For
 
-                Dim folderSize As Long = Await GetCachedFolderSizeAllAsync(folder)  ' 2026/3/29 by Gemini: 改為存取 L2.5 快取代理，第二次點擊同一資料夾直接命中快取
+                Dim folderSize As Long = Await GetCachedFolderSizeAllAsync(folder)  ' 2026/3/29 by Gemini: 改為存取 Layer2.5 快取代理，第二次點擊同一資料夾直接命中快取
 
                 Dim strFolderSize As String
                 If folderSize < 0 Then strFolderSize = "計算失敗" Else strFolderSize = (folderSize / 1024).ToString("###,###,###,##0 KB")
@@ -398,7 +398,7 @@ Partial Class Form1
 #Region "  └ 輔助函數"
     ' 以下為 ComputeFolderStatsAsync 專用的拆分子函數 (Steps 1~5)
     Private Async Function BuildBfsFolderTree(rootFolder As Outlook.Folder) As Task(Of List(Of FolderBfsEntry))
-        ' 負責: 維護 Queue 執行 BFS，根據 L2.5 快取字典決定是否剪枝。
+        ' 負責: 維護 Queue 執行 BFS，根據 Layer2.5 快取字典決定是否剪枝。
         ' 產出: 所有走訪過的資料夾陣列，每個元素皆紀錄了其 ParentIndex。
         Dbg(" - 開始", rootFolder.Name)
 
@@ -428,7 +428,7 @@ Partial Class Form1
                 Dim row = DbGetFolderStats(fPath)
                 If row IsNot Nothing AndAlso row.mca >= 0 AndAlso row.fca >= 0 Then
                     cachedMail = row.mca : cachedSub = row.fca
-                    PopulateFolderCacheFromDbRow(fPath, row)   ' 一次填滿所有欄位到記憶體快取
+                    FillFolderCacheFromDbRow(fPath, row)   ' 一次填滿所有欄位到記憶體快取
                     isHit = True    ' ② DB 命中
                 End If
             End If
@@ -460,7 +460,7 @@ Partial Class Form1
         Return allEntries
 
     End Function
-    Private Async Function FetchDirectMailCountsAsync(allEntries As IReadOnlyList(Of FolderBfsEntry), progress As IProgress(Of L3ProgressReport)) As Task(Of Boolean)
+    Private Async Function FetchDirectMailCountsAsync(allEntries As IReadOnlyList(Of FolderBfsEntry), progress As IProgress(Of ProgressReport)) As Task(Of Boolean)
         ' 負責: 對未快取節點打 COM (呼叫 GetCachedMailCount)，並負責 UI 節流 (Task.Yield) 與 ESC 中斷檢查。
         ' 回傳: True 代表被使用者取消；False 代表順利讀取完成。
         ' 備註: 參數型別使用 IReadOnlyList 宣告不增減長度，確保 ParentIndex 不受影響，但允許修改屬性。
@@ -481,7 +481,7 @@ Partial Class Form1
             ' by Gemini, 2026/04/05: 每 100ms 節流觸發進度報告與中斷檢查，確保即便沒有 progress 物件也能隨時中斷
             If swThrottle.ElapsedMilliseconds >= 100 Then
                 If progress IsNot Nothing Then
-                    progress.Report(New L3ProgressReport With {.CurrentCount = processed, .TotalCount = total,
+                    progress.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
                                                                .Message = $"正在統計郵件數: {processed} / {total} 個資料夾..."})
                 End If
                 swThrottle.Restart()
@@ -491,6 +491,7 @@ Partial Class Form1
             Await Task.Delay(1)                  ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
             If _cancelRequested Then Return True ' ✅ ESC 中斷: 取消計算
         Next
+
         Dbg(" - 結束", $"共讀取 {total} 個節點（非快取）") ' by Gemini, 2026/04/04: Issue 2 補上結束
         Return False ' 沒有ESC中斷，順利完成COM的讀取並填充List
     End Function
@@ -510,7 +511,7 @@ Partial Class Form1
         Next
     End Sub
     Private Sub UpdateFolderStatsCache(allEntries As IReadOnlyList(Of FolderBfsEntry))
-        ' 負責: 將新計算的彙總結果寫入 L2.5 快取 
+        ' 負責: 將新計算的彙總結果寫入 Layer2.5 快取 
         ' 備註: TryAdd 不覆蓋既有值，避免污染快取
         For Each entry As FolderBfsEntry In allEntries
             If Not entry.IsFromCache Then
@@ -520,7 +521,7 @@ Partial Class Form1
             End If
         Next
     End Sub
-    Private Function GetBfsResult(allEntries As IReadOnlyList(Of FolderBfsEntry), progress As IProgress(Of L3ProgressReport)) As List(Of FolderBfsEntry)
+    Private Function GetBfsResult(allEntries As IReadOnlyList(Of FolderBfsEntry), progress As IProgress(Of ProgressReport)) As List(Of FolderBfsEntry)
         Dbg("開始")
         ' 負責: 找出 root 與直屬子資料夾 (ParentIndex=0) 組裝成新的 UI 呈現清單，並在最後發布結束進度。
         Dim result As New List(Of FolderBfsEntry)
@@ -541,7 +542,7 @@ Partial Class Form1
         If progress IsNot Nothing Then
             Dim totalMail As Long = allEntries(0).TotalMailCount
             Dim totalFolder As Integer = allEntries(0).TotalSubCount
-            progress.Report(New L3ProgressReport With {.CurrentCount = allEntries.Count, .TotalCount = allEntries.Count,
+            progress.Report(New ProgressReport With {.CurrentCount = allEntries.Count, .TotalCount = allEntries.Count,
                                                        .Message = $"統計完成: 共 {totalFolder} 個子資料夾，{totalMail:###,###,##0} 封郵件。"})
         End If
 
@@ -591,12 +592,12 @@ Partial Class Form1
     ' ==============================================================
     ' 重構目標: COM/UI/流程邏輯與業務分離清晰分層，去除全域狀態，優化快取機制
     ' 1. 分層架構: 將原本混在一起的程式碼重構成三個明確的層次
-    '    - Layer 1 (UI 事件層)    : 回應使用者操作，組裝參數後交給 L2 執行，最後把結果交給顯示函數
-    '    - Layer 2 (流程協調層)   : BFS 遍歷 folderList，管理快取，驅動 L3 計算，合併結果，回報進度
+    '    - Layer 1 (UI 事件層)    : 回應使用者操作，組裝參數後交給 Layer2 執行，最後把結果交給顯示函數
+    '    - Layer 2 (流程協調層)   : BFS 遍歷 folderList，管理快取，驅動 Layer3 計算，合併結果，回報進度
     '    - Layer 3 (COM 資料層)   : 對 Outlook 發出 COM 呼叫，回傳單一資料夾的年份郵件分佈
     ' 2. 去除全域狀態: 原本的 _intTotalMailCount 和 _intProcessedCount 全域變數已改成局部變數，避免多次點選時的計數錯亂
-    ' 3. 優化快取機制: 快取的 key 改為純字串 FolderPath，避免 COM 物件當 key 導致 RCW 殘留問題；快取只存單一資料夾的結果，由 L2 負責合併
-    ' 4. 進度回報改為 callback 機制: L2 執行統計時，透過 onProgress callback 回報已處理的郵件數和總郵件數，L1 負責更新 UI 顯示，保持分層乾淨
+    ' 3. 優化快取機制: 快取的 key 改為純字串 FolderPath，避免 COM 物件當 key 導致 RCW 殘留問題；快取只存單一資料夾的結果，由 Layer2 負責合併
+    ' 4. 進度回報改為 callback 機制: Layer2 執行統計時，透過 onProgress callback 回報已處理的郵件數和總郵件數，Layer1 負責更新 UI 顯示，保持分層乾淨
     ' by: Claude AI (2026/3/10)
     ' ==============================================================
     '
@@ -609,7 +610,7 @@ Partial Class Form1
     '     - SimTree2_AfterSelect()                  (已重寫，不再 commented out)
     '     - CheckSubFolder2_CheckedChanged()        (已重寫)
     '     - GetYearCountsAsync_CL()                 (已由 ComputeYearCounts 取代)
-    '     - CountMailByYearAsync_CL2()              (已由 GetYearCountsForFolderAsync 取代)
+    '     - CountMailByYearAsync_CLayer2()              (已由 GetYearCountsForFolderAsync 取代)
     '     - UpdateCounterProgress()                 (已改成 callback 機制，函數可刪除)
     '     - ShowProgressTab2()                      (簽章已更改，請替換)
     '
@@ -625,12 +626,12 @@ Partial Class Form1
     '   Layer 2 (流程協調層)   : ComputeYearCounts
     '   Layer 3 (COM 資料層)   : GetYearCountsForFolderAsync
     ' ==============================================================
-#Region "  ├ L1 UI事件層"
+#Region "  ├ Layer1 UI事件層"
     ' by Gemini, 2026/03/29: 已移除 TreeView2_AfterSelect，其功能由 SimTree2 完全取代。
     Private Async Sub SimTree2_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTree2.AfterSelect
         ' ---------------------------------------------------------------
         ' === Layer 1: UI 事件層 ===
-        ' 職責: 回應使用者操作，組裝參數後交給 L2 執行，最後把結果交給顯示函數
+        ' 職責: 回應使用者操作，組裝參數後交給 Layer2 執行，最後把結果交給顯示函數
         ' 規則: 不做業務計算，不直接碰 COM，只傳達意圖
         ' ---------------------------------------------------------------
         ' SimTree2_AfterSelect: 多選模式 SimTree2 的節點點選事件, 完整替換舊版
@@ -647,14 +648,14 @@ Partial Class Form1
         ' 取得 SimTree2 多選清單 (SelectedNodes 是 SimTree 提供的 List(Of TreeNode))
         Dim selectedNodes As List(Of TreeNode) = SimTree2.SelectedNodes
         If selectedNodes Is Nothing OrElse selectedNodes.Count = 0 Then
-            Dbg("結束", "無節點被選取")         ' by Gemini, 2026/04/04: Issue 3
+            Dbg("結束", "無節點被選取")
             Cursor = Cursors.Default : Return  ' 選擇節點為空，直接結束
         End If
 
         Dim targetFolderList =                 ' 把所有已選 TreeNode 的 Tag 轉換成 Outlook.Folder，過濾掉無效節點
             selectedNodes.Select(Function(n) TryCast(n.Tag, Outlook.Folder)).Where(Function(f) f IsNot Nothing).ToList()
         If targetFolderList.Count = 0 Then
-            Dbg("結束", "所有選定節點均無效資料夾")   ' by Gemini, 2026/04/04: Issue 3
+            Dbg("結束", "所有選定節點均無效資料夾")
             Cursor = Cursors.Default : Return        ' 如果沒有任何有效的資料夾 (List.Count=0) 就直接結束
         End If
 
@@ -691,7 +692,7 @@ Partial Class Form1
                 If c > 0 Then totalMailCount += c           ' -1 表示讀取失敗，略過不累加
             Else
                 Dim c As Integer = GetCachedMailCount(rf)
-                If c > 0 Then totalMailCount += c           ' 只算本層，L3 同步函數，不需要 Await
+                If c > 0 Then totalMailCount += c           ' 只算本層，Layer3 同步函數，不需要 Await
             End If
         Next
 
@@ -701,9 +702,9 @@ Partial Class Form1
             Cursor = Cursors.Default : Return
         End If
 
-        Dim progressYear = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+        Dim progressYear = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
         Dim yearCounts As ConcurrentDictionary(Of Integer, Integer) =
-            Await ComputeYearCounts(folderList, totalMailCount, progressYear)   ' 呼叫 L2 流程協調層執行統計 (跟單選模式走一樣的路徑，只是 folderList 不同)
+            Await ComputeYearCounts(folderList, totalMailCount, progressYear)   ' 呼叫 Layer2 流程協調層執行統計 (跟單選模式走一樣的路徑，只是 folderList 不同)
 
         ' --- 序號校驗點 3 (核心運算完成後) ---
         If _tab2SelectSeq <> mySeq Then Return          ' Dbg("結束", "序號已不匹配，丟棄本次結果（運算完畢中斷）")
@@ -856,16 +857,16 @@ Partial Class Form1
 
     End Sub
 #End Region
-#Region "  ├ L2 流程協調層"
-    Private Async Function ComputeYearCounts(folderList As List(Of Outlook.Folder), totalMailCount As Integer, progress As IProgress(Of L3ProgressReport)) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+#Region "  ├ Layer2 流程協調層"
+    Private Async Function ComputeYearCounts(folderList As List(Of Outlook.Folder), totalMailCount As Integer, progress As IProgress(Of ProgressReport)) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' === Layer 2: 流程協調層 ===
-        ' 職責: BFS 遍歷 folderList，管理快取，驅動 L3 計算，合併結果，回報進度
+        ' 職責: BFS 遍歷 folderList，管理快取，驅動 Layer3 計算，合併結果，回報進度
         '       逐資料夾計算年份統計並合併，是 Tab2 所有統計流程的唯一入口
         ' 規則: 不直接碰 UI 控制項 (ProgressBar1 等) ，進度透過 onProgress callback 傳出, 自己不會知道上一層是單選還是多選，只知道接受傳入的 folderList 清單
         '
         ' 參數:
-        '   folderList    : 由 L1 組裝好的目標資料夾清單 (已包含 BFS 展開結果)
+        '   folderList    : 由 Layer1 組裝好的目標資料夾清單 (已包含 BFS 展開結果)
         '   totalMailCount: 總郵件數，用來計算進度百分比的分母
         '   onProgress    : 進度 callback，每處理完一個資料夾呼叫一次，回傳 (已處理, 總數)
         ' ---------------------------------------------------------------
@@ -877,7 +878,7 @@ Partial Class Form1
         Dim merged As New ConcurrentDictionary(Of Integer, Integer)
         For Each folder As Outlook.Folder In folderList
             'Await Task.Delay(1)                 ' 這裡不能加, 加了會讀不到下面行的快取, 每次都要重讀????!!!!!
-            If _cancelRequested Then Exit For   ' ✅ ESC 中斷: Exit For 回傳已算的部分結果，L1 會偵測到 _cancelRequested 並跳過顯示
+            If _cancelRequested Then Exit For   ' ✅ ESC 中斷: Exit For 回傳已算的部分結果，Layer1 會偵測到 _cancelRequested 並跳過顯示
 
             ' 只快取「單一資料夾」的結果，合併邏輯由本層負責
             Dim folderResult As ConcurrentDictionary(Of Integer, Integer)
@@ -892,19 +893,19 @@ Partial Class Form1
                     _yearCountsCache(cacheKey) = dbResult   ' 填入記憶體快取
                     folderResult = dbResult
                     'Dbg("DB Hit: ", folder.Name)
-            Else                                                ' ③ 快取未命中: 呼叫 L3 COM 資料層，計算這個資料夾的年份分佈
-                'Dbg("Cache miss: ", folder.Name)
-                folderResult = Await GetYearCountsForFolder(folder)
-                _yearCountsCache(cacheKey) = folderResult       ' ✅ 計算完成後存入快取，下次點選同一資料夾直接命中
-                ' ✅ 用 "=" 賦值 (非 .Add()) ，有重複 key 時直接覆蓋，不拋例外
+                Else                                                ' ③ 快取未命中: 呼叫 Layer3 COM 資料層，計算這個資料夾的年份分佈
+                    'Dbg("Cache miss: ", folder.Name)
+                    folderResult = Await GetYearCountsForFolder(folder)
+                    _yearCountsCache(cacheKey) = folderResult       ' ✅ 計算完成後存入快取，下次點選同一資料夾直接命中
+                    ' ✅ 用 "=" 賦值 (非 .Add()) ，有重複 key 時直接覆蓋，不拋例外
                 End If
             End If
             merged = MergeDictionaries(merged, folderResult)    ' 把這個資料夾的結果合併到總計 (純 .NET 運算，不碰 COM)
-            processedCount += folderResult.Values.Sum()         ' 累加已處理郵件數，透過 callback 通知 L1 更新進度顯示
+            processedCount += folderResult.Values.Sum()         ' 累加已處理郵件數，透過 callback 通知 Layer1 更新進度顯示
 
             ' by Gemini, 2026/04/02: 100ms 節流回報進度，且不輸出 Dbg()
             If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse processedCount >= totalMailCount) Then
-                progress.Report(New L3ProgressReport With {.CurrentCount = processedCount, .TotalCount = totalMailCount,
+                progress.Report(New ProgressReport With {.CurrentCount = processedCount, .TotalCount = totalMailCount,
                                                            .Message = $"正在統計年度分佈: {processedCount:###,###,##0} / {totalMailCount:###,###,##0}..."})
                 swThrottle.Restart()
                 Await Task.Yield
@@ -980,7 +981,7 @@ Partial Class Form1
     Private Async Function GetMonthCountsForYear(folder As Outlook.Folder, year As Integer) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' GetMonthCountsForYear (完整替換舊版，加入快取和進度支援)
-        ' L3 COM 資料層: 計算單一資料夾在指定年份中每個月的郵件數量
+        ' Layer3 COM 資料層: 計算單一資料夾在指定年份中每個月的郵件數量
         ' 快取 key = FolderPath + "_" + year，與 yearCountsCache 的命名慣例一致
         ' 2026/3/24 by Gemini: 從逐月 Restrict 改為 GetTable + GetArray 一次讀完再記憶體分組
         '   原本 12 次 Restrict + 12 次 Items.Count = 24 次 COM call
@@ -1005,6 +1006,8 @@ Partial Class Form1
             table.Columns.RemoveAll()
             table.Columns.Add("ReceivedTime")   ' 欄位索引 0
 
+            ' by simon, 2026/04/08: 每批次讀取後，若超過 100ms 則釋放執行緒並檢查中斷
+            Dim swThrottle As New Stopwatch() : swThrottle.Start()
             Do While Not table.EndOfTable
                 Dim arr As Object = table.GetArray(BATCH_SIZE)
                 If arr Is Nothing Then Exit Do
@@ -1017,7 +1020,13 @@ Partial Class Form1
                         monthCounts.AddOrUpdate(month, 1, Function(k, v) v + 1)
                     End If
                 Next
-                Await Task.Yield()
+
+                ' by simon, 2026/04/08: 每 100ms 節流讓出執行緒
+                If swThrottle.ElapsedMilliseconds >= 100 Then
+                    swThrottle.Restart()
+                    If _cancelRequested Then Exit Do
+                End If
+                Await Task.Delay(1) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
             Loop
         Catch ex As System.Exception
             Dbg("錯誤", $"{folder.Name}, year={year}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
@@ -1048,7 +1057,7 @@ Partial Class Form1
             '    解法: 暫時保存並清除旗標，讓這次靜默重算順利完成；完成後還原旗標
             Dim savedCancel As Boolean = _cancelRequested
             _cancelRequested = False
-            Dim progressSilent = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+            Dim progressSilent = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
             Dim yearCounts As ConcurrentDictionary(Of Integer, Integer) = Await ComputeYearCounts(_tab2FolderList, 0, progressSilent)
             _cancelRequested = savedCancel  ' 還原 (若使用者是在統計期間按 ESC，不影響後續操作的旗標)
             sw.Stop()
@@ -1267,7 +1276,6 @@ Partial Class Form1
 
     End Sub
     Private Sub ShowProgressTab2(yearCounts As ConcurrentDictionary(Of Integer, Integer), elapsed As TimeSpan)
-        ' by Gemini, 2026/04/04: Issue 7 移除開始/結束 Dbg（函數體只有 5 行計算，不需要追蹤）
         ' 顯示執行時間與統計速度 (ProgressBar1 為主結果，ProgressBar2 為輔助說明 by Gemini, 2026/04/02) ，yearCounts.Values.Sum 是最可靠的實際計數來源:
         '   - 含子資料夾時:   Sum = 整棵樹的郵件數
         '   - 不含子資料夾時: Sum = 只有選定資料夾的郵件數
@@ -1276,7 +1284,6 @@ Partial Class Form1
         Dim speed As Double = If(elapsed.TotalSeconds > 0, countedItems / elapsed.TotalSeconds, 0)
         ProgressBar1.Text = $"共 {countedItems:###,###,##0} 封 / {elapsed.TotalSeconds:0.00} 秒"
         ProgressBar2.Text = $"(年度統計完成 - 處理速度為 {speed:###,##0}/sec)"
-
     End Sub
 #End Region
 #Region "  └ 輔助函數"
@@ -1464,22 +1471,22 @@ Partial Class Form1
     '      成效: 大幅減少對 MailItem 物件的依賴和操作，提升搜尋效率。
     '
     ' [v3] by Gemini, 2026/04/05 (現行架構)
-    '      策略: 導入「管線化處理 (Pipeline)」與「SOLID 分層 (L1/L2.5/L3)」，徹底解耦 MAPI、業務與 UI。
+    '      策略: 導入「管線化處理 (Pipeline)」與「SOLID 分層 (Layer1/Layer2.5/Layer3)」，徹底解耦 MAPI、業務與 UI。
     '      分層:
-    '        ├─ L1 (UI/流程層) : Button3_Click, ShowResultTab3
-    '        ├─ L2 (商務過濾層): FilterBySize, FilterByAttachDetailsAsync
-    '        ├─ L2.5 (快取層)  : GetCachedMailWithAttachment (_cacheAttachPreScan / _cacheAttachFilename)
-    '        └─ L3 (MAPI操作層): GetMailWithAttachmentL3
+    '        ├─ Layer1 (UI/流程層) : Button3_Click, ShowResultTab3
+    '        ├─ Layer2 (商務過濾層): FilterBySize, FilterByAttachDetailsAsync
+    '        ├─ Layer2.5 (快取層)  : GetCachedMailWithAttachs (_cacheAttachPreScan / _cacheAttachFilename)
+    '        └─ Layer3 (MAPI操作層): GetMailWithAttachs
     '
     ' Button3_Click 管線 (Pipeline) 步驟分解:
     '   Step 1. 前置驗證      → 檢查參數合法性 (UI)
     '   Step 2. BFS 遍歷      → GetSubFolderList，取得目標資料夾樹 (COM)
-    '   Step 3. 匯集資料全集  → 向 L2.5 索取候選郵件全集 (GetCachedMailWithAttachment)
+    '   Step 3. 匯集資料全集  → 向 Layer2.5 索取候選郵件全集 (GetCachedMailWithAttachs)
     '   Step 4. 管線過濾 1    → 記憶體 LINQ 瞬間過濾大小限制 (FilterBySize)
-    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 L2.5 快取判定 (FilterByAttachDetailsAsync)
+    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 Layer2.5 快取判定 (FilterByAttachDetailsAsync)
     '   Step 6. UI 映射與顯示 → 將資料封裝為介面項目並顯示，無縫銜接">0"或真實統計 (ShowResultTab3)
     ' ===================================================
-#Region "  ├ L1 UI事件層"
+#Region "  ├ Layer1 UI事件層"
     Private Async Sub Button3_Click(sender As Object, e As EventArgs) Handles Button3.Click
         Dbg("開始")
 
@@ -1512,13 +1519,13 @@ Partial Class Form1
             ProgressBar2.Text = $"準備掃描 {folderList.Count} 個資料夾..."
             Await Task.Yield()
 
-            ' ── Step 3: 收集含附件的郵件清單 (透過 L2.5 快取) ──
-            Dim progressPhase1 = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+            ' ── Step 3: 收集含附件的郵件清單 (透過 Layer2.5 快取) ──
+            Dim progressPhase1 = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
             Dim targetMails As New List(Of MailItemInfo)
             For Each folder In folderList
                 If _cancelRequested Then Return
 
-                Dim folderResult = Await GetCachedMailWithAttachment(folder, progressPhase1)
+                Dim folderResult = Await GetCachedMailWithAttachs(folder, progressPhase1)
                 targetMails.AddRange(folderResult)
             Next
             If _cancelRequested Then Return
@@ -1529,7 +1536,7 @@ Partial Class Form1
             ' ── Pipeline 過濾 2: 附件條件深層篩選 ──
             Dim hasKeyword = CheckAttachName.Checked AndAlso TextBox3.Text.Trim.Length > 0
             If hasKeyword OrElse CheckAttCount.Checked Then
-                Dim progressPhase2 = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+                Dim progressPhase2 = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
                 targetMails = Await FilterByAttachDetailsAsync(targetMails, progressPhase2)
             End If
 
@@ -1580,7 +1587,7 @@ Partial Class Form1
         OpenMailByEntryID(lvItem.SubItems(5).Text)  ' 用 EntryID 打開郵件 (第 6 欄 SubItems(5))
     End Sub
 #End Region
-#Region "  ├ L2 流程協調層"
+#Region "  ├ Layer2 流程協調層"
     Private Function FilterBySize(sourceList As List(Of MailItemInfo)) As List(Of MailItemInfo)
         ' Pipeline 過濾 1: 大小篩選 (純記憶體 LINQ，速度極快)
         Dbg("開始")
@@ -1590,11 +1597,11 @@ Partial Class Form1
         Dbg("結束", $"篩選後剩下 {resultList.Count} 封")
         Return resultList
     End Function
-    Private Async Function FilterByAttachDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of L3ProgressReport)) As Task(Of List(Of MailItemInfo))
+    Private Async Function FilterByAttachDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport)) As Task(Of List(Of MailItemInfo))
         ' Pipeline 過濾 2: 逐一讀取附件明細，利用 _cacheAttachFilename 大幅降低 COM 存取
         Dbg("開始", $"候選郵件: {sourceList.Count} 封")
 
-        ' by Gemini: L2 業務層向 L2.5 請求平行預載快取。若 RDO 存在，這行能在極短時間內把後續需要的資料全數載入記憶體。
+        ' by Gemini: Layer2 業務層向 Layer2.5 請求平行預載快取。若 RDO 存在，這行能在極短時間內把後續需要的資料全數載入記憶體。
         If RDO_Parallel1.Checked Then
             Await PreloadAttachByRDOAsync1(sourceList, progress)    ' by Parellel.ForEach 來平行讀取附件資料，適合 CPU 密集型的 MAPI 存取
         ElseIf RDO_Parallel2.Checked Then
@@ -1628,7 +1635,7 @@ Partial Class Form1
             If progress IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse processed = total) Then
                 Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
                 Dim speed As Double = processed / elapsedSec
-                progress.Report(New L3ProgressReport With {.CurrentCount = processed, .TotalCount = total,
+                progress.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
                                                            .Message = $"Phase 2: {processed} / {total}，已符合 {resultList.Count} 封 ({speed:F0} 封/秒)"})
                 swThrottle.Restart()
                 Await Task.Delay(1)
@@ -1703,8 +1710,6 @@ Partial Class Form1
     End Function
     Private Function GetSizeMultiplier(sizeUnit As String, Optional base1024 As Boolean = False) As Integer
         ' 獲取大小單位的倍數
-        ' by Gemini, 2026/04/04: Issue 5 移除 Dbg("開始")/Dbg("結束")
-        '   原因: Select Case + Return 結構中，「結束」永遠到不了, 機制簡單只是選 case 不需要追蹤
         Dim multi As Long = If(base1024, 1024, 1000)
         Select Case sizeUnit.ToLower()
             Case "kb" : Return multi
@@ -1712,11 +1717,10 @@ Partial Class Form1
             Case "gb" : Return multi ^ 3
             Case Else : Return 1
         End Select
-
     End Function
     Private Sub OpenMailByEntryID(strEntryID As String)
         ' 依照傳入的Mailitem's EntryID, 呼叫NameSpace打開郵件再釋放object
-        Dbg("開始", strEntryID) ' by Gemini, 2026/04/04: Issue 4 標準化 msg
+        Dbg("開始", strEntryID)
         If strEntryID Is Nothing Then Return        'Dbg("結束", "EntryID 為空")
 
         'Dim currentMail As MailItem = Nothing
@@ -1773,11 +1777,11 @@ Partial Class Form1
         ProgressBar1.Text = "正在處理..."
         ProgressBar2.Text = "開始掃描系列郵件..."
         Dim sw As New Stopwatch() : sw.Start()
-        Dim progress4 As IProgress(Of L3ProgressReport) = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+        Dim progress4 As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
         Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02: 重用秒錶做節流
         Dim topicDict As New Dictionary(Of String, List(Of MailItemInfo))(StringComparer.OrdinalIgnoreCase)
         Try
-            ' 取得所有子資料夾 (L3 展開)
+            ' 取得所有子資料夾 (Layer3 展開)
             Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True, progress:=progress4)
             Dim processed As Integer = 0
             For Each folder In targetFolderList
@@ -1809,9 +1813,7 @@ Partial Class Form1
                                 .ReceivedTime = SafeGet(Of DateTime)(data, r, 3, DateTime.MinValue),
                                 .SenderName = SafeGet(Of String)(data, r, 4, "")
                             }
-                            If Not topicDict.ContainsKey(topic) Then
-                                topicDict(topic) = New List(Of MailItemInfo)()
-                            End If
+                            If Not topicDict.ContainsKey(topic) Then topicDict(topic) = New List(Of MailItemInfo)()
                             topicDict(topic).Add(info)
                         Next
                     Loop
@@ -1825,7 +1827,7 @@ Partial Class Form1
 
                 ' by Gemini, 2026/04/02: 100ms 節流回報 (標準化 IProgress Pattern)
                 If progress4 IsNot Nothing AndAlso (swThrottle.ElapsedMilliseconds >= 100 OrElse processed = targetFolderList.Count) Then
-                    progress4.Report(New L3ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
+                    progress4.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
                                                                 .Message = $"正在掃描系列郵件: {processed} / {targetFolderList.Count} 個資料夾..."})
                     swThrottle.Restart()
                     Await Task.Yield()
@@ -1842,7 +1844,7 @@ Partial Class Form1
 
                     ' by Gemini, 2026/04/02: 長列表建構時也需節流 (標準化 IProgress)
                     If swThrottle.ElapsedMilliseconds >= 100 Then
-                        progress4.Report(New L3ProgressReport With {.Message = $"正在建立系列清單: {nodesProcessed} 組..."})
+                        progress4.Report(New ProgressReport With {.Message = $"正在建立系列清單: {nodesProcessed} 組..."})
                         swThrottle.Restart()
                         Await Task.Delay(1)
                     End If
@@ -1919,7 +1921,7 @@ Partial Class Form1
         ProgressBar1.Text = "正在準備"
         ProgressBar2.Text = "準備全信箱掃描重複郵件..."
         Dim sw As New Stopwatch() : sw.Start()
-        Dim progress5 As IProgress(Of L3ProgressReport) = New Progress(Of L3ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+        Dim progress5 As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
         Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
         Dim exactDict As New Dictionary(Of String, List(Of MailItemInfo))(StringComparer.OrdinalIgnoreCase)
         Dim isExact As Boolean = rbExactMatch.Checked
@@ -1971,9 +1973,8 @@ Partial Class Form1
                                         If cleanSubj.Length > 20 Then cleanSubj = cleanSubj.Substring(0, 20)
                                         hashKey = $"{cleanSubj}|{size}"
                                     End If
-                                    If Not exactDict.ContainsKey(hashKey) Then
-                                        exactDict(hashKey) = New List(Of MailItemInfo)()
-                                    End If
+
+                                    If Not exactDict.ContainsKey(hashKey) Then exactDict(hashKey) = New List(Of MailItemInfo)()
                                     exactDict(hashKey).Add(info)
                                 Next
                                 Await Task.Yield()
@@ -1987,7 +1988,7 @@ Partial Class Form1
 
                         ' by Gemini, 2026/04/02: 100ms 節流回報 (標準化 IProgress)
                         If swThrottle.ElapsedMilliseconds >= 100 Then
-                            progress5.Report(New L3ProgressReport With {.Message = $"掃描中 ({store.DisplayName}): 已處理 {totalProcessed} 個資料夾..."})
+                            progress5.Report(New ProgressReport With {.Message = $"掃描中 ({store.DisplayName}): 已處理 {totalProcessed} 個資料夾..."})
                             swThrottle.Restart()
                             Await Task.Yield()
                         End If
@@ -2031,7 +2032,7 @@ Partial Class Form1
 
                         ' by Gemini, 2026/04/02: 100ms 節流回報 (標準化 IProgress)
                         If swThrottleBuild.ElapsedMilliseconds >= 100 Then
-                            progress5.Report(New L3ProgressReport With {.Message = $"正在建立重複郵件清單: {groupID} 組..."})
+                            progress5.Report(New ProgressReport With {.Message = $"正在建立重複郵件清單: {groupID} 組..."})
                             swThrottleBuild.Restart()
                             Await Task.Delay(1)
                         End If
@@ -2056,6 +2057,7 @@ Partial Class Form1
         ' by Gemini, 2026/04/04: Issue 1 移除 Dbg（Tab5 高頻呼叫，N封×2個函數=2N行輸出）
         ' 計算編輯距離
         Dim editDistance As Integer = LevenshteinDistance(strA, strB)
+
         ' 將編輯距離歸一化為範圍在 0 到 1 之間的值
         Dim maxLength As Integer = Math.Max(strA.Length, strB.Length)
         Dim similarity As Double = 1 - CDbl(editDistance) / maxLength
@@ -2079,6 +2081,7 @@ Partial Class Form1
                 '    distance(fd, j) = Math.Min(Math.Min(distance(fd - 1, j) + 1,
                 '                                       distance(fd, j - 1) + 1), distance(fd - 1, j - 1) + 1)
                 'End If
+
                 ' 改後 (1行)
                 distance(i, j) = If(strA(i - 1) = strB(j - 1),
                     distance(i - 1, j - 1), Math.Min(Math.Min(distance(i - 1, j) + 1,

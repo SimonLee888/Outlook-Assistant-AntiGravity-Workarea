@@ -12,7 +12,6 @@ Partial Class Form1
     Private Shared Function FindWindow(
         ByVal lpClassName As String,
         ByVal lpWindowName As String) As IntPtr
-
     End Function
     <Runtime.InteropServices.DllImport("user32.dll", CharSet:=Runtime.InteropServices.CharSet.Auto)>
     Private Shared Function FindWindowEx(
@@ -20,7 +19,6 @@ Partial Class Form1
         ByVal hWndChildAfter As IntPtr,
         ByVal lpszClass As String,
         ByVal lpszWindow As String) As IntPtr
-
     End Function
     <Runtime.InteropServices.DllImport("user32.dll", CharSet:=Runtime.InteropServices.CharSet.Auto)>
     Private Shared Function SendMessage(
@@ -28,17 +26,16 @@ Partial Class Form1
         ByVal msg As Integer,
         ByVal wParam As IntPtr,
         ByVal lParam As IntPtr) As IntPtr
-
     End Function
 
     <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function ShowWindow(ByVal hWnd As IntPtr, ByVal nCmdShow As Integer) As Boolean
-
+    Private Shared Function ShowWindow(
+        ByVal hWnd As IntPtr,
+        ByVal nCmdShow As Integer) As Boolean
     End Function
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function LockWindowUpdate(
         ByVal hWnd As IntPtr) As Boolean
-
     End Function
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function RedrawWindow(
@@ -46,16 +43,14 @@ Partial Class Form1
         ByVal lprcUpdate As IntPtr,
         ByVal hrgnUpdate As IntPtr,
         ByVal flags As UInteger) As Boolean
-
     End Function
 
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function PostMessage(
-    ByVal hWnd As IntPtr,
-    ByVal msg As Integer,
-    ByVal wParam As IntPtr,
-    ByVal lParam As IntPtr) As Boolean
-
+        ByVal hWnd As IntPtr,
+        ByVal msg As Integer,
+        ByVal wParam As IntPtr,
+        ByVal lParam As IntPtr) As Boolean
     End Function
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function SetWindowPos(
@@ -66,17 +61,19 @@ Partial Class Form1
         ByVal cx As Integer,
         ByVal cy As Integer,
         ByVal uFlags As Integer) As Boolean
-
     End Function
 
     ' === 用來強制移除 SplitContainer 焦點框 ===
     <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function GetWindowLong(hWnd As IntPtr, nIndex As Integer) As Integer
-
+    Private Shared Function GetWindowLong(
+        hWnd As IntPtr,
+        nIndex As Integer) As Integer
     End Function
     <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function SetWindowLong(hWnd As IntPtr, nIndex As Integer, dwNewLong As Integer) As Integer
-
+    Private Shared Function SetWindowLong(
+        hWnd As IntPtr,
+        nIndex As Integer,
+        dwNewLong As Integer) As Integer
     End Function
 
     Private Const GWL_STYLE As Integer = -16
@@ -200,17 +197,17 @@ Partial Class Form1
         '            直接回傳整棵子樹的郵件總數，MAPI 層面的快取彙總值，一次 COM call 結束，完全不需要 BFS 遍歷
         '            Redemption 可正確讀取 PST 上此屬性 (原生 OOM 無法取得)
         '            _rdoSession 未就緒時自動跳過此層
-        '   ① GetSubFolderList + GetMailCount(L3) 逐一加總, BFS 展開後逐一呼叫，清單與計算邏輯分離，支援取消和進度回報
+        '   ① GetSubFolderList + GetMailCount(Layer3) 逐一加總, BFS 展開後逐一呼叫，清單與計算邏輯分離，支援取消和進度回報
         '   ② 遞迴 fallback: GetSubFolderList 本身失敗時 (極少見) 的保險方案, 遞迴版本無法回報精確進度，但確保結果正確
         '   ③ 兩層都失敗就回傳 Return -1 並記錄 DebugForm，不讓單一資料夾的讀取失敗影響整體加總。
         '
         ' cancelRequested 參數: ' todo: 如何使用??
         '   傳入 _cancelRequested 旗標的 ByRef，讓呼叫端可以中途 ESC 取消
-        '   取消時回傳 -1，由 L1 判斷是否需要清空 UI
+        '   取消時回傳 -1，由 Layer1 判斷是否需要清空 UI
         '
         ' onProgress 參數 (可選) : ' todo: 如何使用??
         '   傳入 Action(Of Integer, Integer) callback，
-        '   L2 每處理一個資料夾回報 (已完成數, 總數)，讓 L1 更新狀態列
+        '   Layer2 每處理一個資料夾回報 (已完成數, 總數)，讓 Layer1 更新狀態列
         '   不需要進度回報時傳 Nothing
         '   注意: ⓪ Redemption 路徑一次取得結果，不會觸發 onProgress callback (無中間進度可回報)
         '
@@ -237,7 +234,7 @@ Partial Class Form1
                 TryMarshalRelease(rdoFolder)
             End Try
         End If
-        ' ① 標準路徑: GetSubFolderList BFS 展開 + GetMailCount(L3) 逐一加總
+        ' ① 標準路徑: GetSubFolderList BFS 展開 + GetMailCount(Layer3) 逐一加總
         Try
             ' BFS 展開整棵子樹的資料夾清單 (復用現有函數，不重寫)
             Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True)
@@ -270,7 +267,7 @@ Partial Class Form1
             Return totalCount
         Catch ex As System.Exception ' ③ 全部失敗就傳回 -1 讓上層流程去處理
             Dbg("GetMailCountAll ② 遞迴fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
-            Return -1   ' ③ 若前兩層都失敗，回傳 -1 讓 L2 知道這是「讀取失敗」而非「真的是 0 封」
+            Return -1   ' ③ 若前兩層都失敗，回傳 -1 讓 Layer2 知道這是「讀取失敗」而非「真的是 0 封」
         End Try
 
     End Function
@@ -352,7 +349,7 @@ Partial Class Form1
             Return grandTotal
         Catch ex As System.Exception
             Dbg("GetMailCountAllParallel ② 循序fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
-            Return -1       ' ③ 若前兩層都失敗，回傳 -1 讓 L2 知道這是「讀取失敗」而非「真的是 0 封」
+            Return -1       ' ③ 若前兩層都失敗，回傳 -1 讓 Layer2 知道這是「讀取失敗」而非「真的是 0 封」
         End Try
 
     End Function

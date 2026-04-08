@@ -128,6 +128,8 @@ Partial Class Form1
         ProgressBar1.Text = "啟動花費 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
         ProgressBar2.Text = ""
 
+        timerSaveCache.Interval = 5 * 60 * 1000 ' 每隔5分鐘自動保存一次快取資料到磁碟
+        timerSaveCache.Start() ' 啟動定時快取保存
         Dbg("結束")
 
     End Sub
@@ -246,6 +248,7 @@ Partial Class Form1
         Next
         TabControl1.Font = New Font(_fontDefault, _fontBold)
         TabControl1.Padding = New Point(12, 8)
+        txtDatabaseStats.Font = New Font(_fontDefault, _fontRegular)
 
         ' ── 容器化佈局與動態控制項掛載 ──
         ' by Gemini, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
@@ -506,17 +509,12 @@ Partial Class Form1
             num.Accelerations.Add(New NumericUpDownAcceleration(2, 5))  ' 2 秒後加速 5 倍
             num.Accelerations.Add(New NumericUpDownAcceleration(5, 50)) ' 5 秒後極速
         Next
-
         AddHandler NumberMin.ValueChanged, Sub() UpdateNumericIncrement(NumberMin, UnitMin)
         AddHandler NumberMax.ValueChanged, Sub() UpdateNumericIncrement(NumberMax, UnitMax)
 
         ' by Gemini, 2026/04/08: 為數字輸入框增加 Enter 鍵觸發搜尋功能
-        AddHandler NumberMin.KeyDown, Sub(s, ev)
-                                         If ev.KeyCode = Keys.Enter Then Button3.PerformClick() : ev.SuppressKeyPress = True
-                                     End Sub
-        AddHandler NumberMax.KeyDown, Sub(s, ev)
-                                         If ev.KeyCode = Keys.Enter Then Button3.PerformClick() : ev.SuppressKeyPress = True
-                                     End Sub
+        AddHandler NumberMin.KeyDown, Sub(s, ev) If ev.KeyCode = Keys.Enter Then Button3.PerformClick() : ev.SuppressKeyPress = True
+        AddHandler NumberMax.KeyDown, Sub(s, ev) If ev.KeyCode = Keys.Enter Then Button3.PerformClick() : ev.SuppressKeyPress = True
 
         AddHandler UnitMin.SelectedIndexChanged, Sub() UpdateNumericIncrement(NumberMin, UnitMin)
         AddHandler UnitMax.SelectedIndexChanged, Sub() UpdateNumericIncrement(NumberMax, UnitMax)
@@ -1054,7 +1052,6 @@ Partial Class Form1
 
     End Sub
     Private Sub HandleTreeViewKeyPress(sender As Object, e As KeyPressEventArgs)
-        ' by Gemini, 2026/04/04: Issue 2 移除 Dbg("開始")—高頻按鍵事件，不需要追蹤
 
         ' 在這裡處理所有TreeView KeyPress 事件的程式碼
         If TypeOf sender Is TreeView Then
@@ -1203,7 +1200,7 @@ Partial Class Form1
                 Exit For
             Next
             If nodeToSelect Is Nothing Then
-                Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾") ' by Gemini, 2026/04/04: Issue 3
+                Dbg("結束", $"{tv.Name}: 找不到預設收件匣，根節點共 {rootNode.Nodes.Count} 個子資料夾")
             End If
         Finally
             ' 💡 確保無論中途 Return 或發生 Exception，UI 都不會卡在 BeginUpdate

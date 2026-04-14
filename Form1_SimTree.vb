@@ -1,4 +1,4 @@
-﻿Imports System.ComponentModel
+Imports System.ComponentModel
 
 Public Class SimTree
 
@@ -142,6 +142,18 @@ Public Class SimTree
         If _lastClickedNode Is Nothing Then Return
         Dim bShift As Boolean = (ModifierKeys = Keys.Shift)
         Select Case e.KeyCode
+            Case Keys.A
+                If ModifierKeys = Keys.Control AndAlso Nodes.Count > 0 Then
+                    Dim lastNode As TreeNode = GetLastVisibleNode()
+                    If lastNode IsNot Nothing Then
+                        Me.BeginUpdate()
+                        SelectRange(Nodes(0), lastNode)
+                        Me.EndUpdate()
+                        FireAfterSelect(_lastClickedNode)
+                    End If
+                    e.Handled = True
+                    e.SuppressKeyPress = True
+                End If
             Case Keys.Up
                 ' 向上移動（Shift+Up 擴展範圍選取）
                 Dim prev As TreeNode = _lastClickedNode.PrevVisibleNode

@@ -25,13 +25,14 @@ Partial Class Form1
     <System.Diagnostics.DebuggerStepThrough()>
     Private Sub InitializeComponent()
         components = New ComponentModel.Container()
-        Dim ChartArea2 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
-        Dim Legend2 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
-        Dim Series2 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
+        Dim ChartArea1 As System.Windows.Forms.DataVisualization.Charting.ChartArea = New DataVisualization.Charting.ChartArea()
+        Dim Legend1 As System.Windows.Forms.DataVisualization.Charting.Legend = New DataVisualization.Charting.Legend()
+        Dim Series1 As System.Windows.Forms.DataVisualization.Charting.Series = New DataVisualization.Charting.Series()
         Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(Form1))
         TabControl1 = New TabControl()
         TabPage1 = New TabPage()
         SplitContainer1 = New SplitContainer()
+        SimTree1 = New SimTree()
         TreeView1 = New TreeView()
         ListView1 = New ListView()
         ColumnHeader11 = New ColumnHeader()
@@ -41,6 +42,7 @@ Partial Class Form1
         ColumnHeader15 = New ColumnHeader()
         TabPage2 = New TabPage()
         SplitContainer2 = New SplitContainer()
+        SimTree2 = New SimTree()
         CheckSubFolder2 = New CheckBox()
         ListView2 = New ListView()
         ColumnHeader21 = New ColumnHeader()
@@ -49,7 +51,7 @@ Partial Class Form1
         Chart2 = New DataVisualization.Charting.Chart()
         TabPage3 = New TabPage()
         SplitContainer3 = New SplitContainer()
-        TreeView3 = New TreeView()
+        SimTree3 = New SimTree()
         CheckSubFolder3 = New CheckBox()
         Button3 = New Button()
         GroupBox3 = New GroupBox()
@@ -92,12 +94,13 @@ Partial Class Form1
         TabPage6 = New TabPage()
         txtDatabaseStats = New TextBox()
         SettingGroup = New GroupBox()
+        RenewAttachFilename = New CheckBox()
         RenewIncludeSize = New CheckBox()
         RDO_Parallel2 = New RadioButton()
         RDO_Parallel1 = New RadioButton()
         RenewCache = New Button()
         ClearCache = New Button()
-        checkIncludeAllFolders = New CheckBox()
+        checkShowAllFolders = New CheckBox()
         LoadCache = New Button()
         SaveCache = New Button()
         CheckRDO = New CheckBox()
@@ -119,6 +122,7 @@ Partial Class Form1
         SplitContainer1.SuspendLayout()
         TabPage2.SuspendLayout()
         CType(SplitContainer2, ComponentModel.ISupportInitialize).BeginInit()
+        SplitContainer2.Panel1.SuspendLayout()
         SplitContainer2.Panel2.SuspendLayout()
         SplitContainer2.SuspendLayout()
         CType(Chart2, ComponentModel.ISupportInitialize).BeginInit()
@@ -165,7 +169,7 @@ Partial Class Form1
         TabControl1.Name = "TabControl1"
         TabControl1.Padding = New Point(6, 6)
         TabControl1.SelectedIndex = 0
-        TabControl1.Size = New Size(1006, 1319)
+        TabControl1.Size = New Size(1062, 1319)
         TabControl1.TabIndex = 2
         ' 
         ' TabPage1
@@ -175,7 +179,7 @@ Partial Class Form1
         TabPage1.Margin = New Padding(4)
         TabPage1.Name = "TabPage1"
         TabPage1.Padding = New Padding(4)
-        TabPage1.Size = New Size(998, 1278)
+        TabPage1.Size = New Size(1054, 1278)
         TabPage1.TabIndex = 0
         TabPage1.Text = "資料夾統計"
         TabPage1.UseVisualStyleBackColor = True
@@ -189,26 +193,34 @@ Partial Class Form1
         ' 
         ' SplitContainer1.Panel1
         ' 
+        SplitContainer1.Panel1.Controls.Add(SimTree1)
         SplitContainer1.Panel1.Controls.Add(TreeView1)
         ' 
         ' SplitContainer1.Panel2
         ' 
         SplitContainer1.Panel2.Controls.Add(ListView1)
-        SplitContainer1.Size = New Size(990, 1270)
-        SplitContainer1.SplitterDistance = 301
+        SplitContainer1.Size = New Size(1046, 1270)
+        SplitContainer1.SplitterDistance = 317
         SplitContainer1.SplitterWidth = 5
         SplitContainer1.TabIndex = 4
         SplitContainer1.TabStop = False
+        ' 
+        ' SimTree1
+        ' 
+        SimTree1.Location = New Point(0, 0)
+        SimTree1.Name = "SimTree1"
+        SimTree1.Size = New Size(151, 121)
+        SimTree1.TabIndex = 3
         ' 
         ' TreeView1
         ' 
         TreeView1.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         TreeView1.Font = New Font("Microsoft JhengHei UI", 10F)
         TreeView1.HideSelection = False
-        TreeView1.Location = New Point(0, 0)
+        TreeView1.Location = New Point(0, 968)
         TreeView1.Margin = New Padding(4)
         TreeView1.Name = "TreeView1"
-        TreeView1.Size = New Size(300, 1244)
+        TreeView1.Size = New Size(316, 276)
         TreeView1.TabIndex = 2
         ' 
         ' ListView1
@@ -220,7 +232,7 @@ Partial Class Form1
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(564, 1244)
+        ListView1.Size = New Size(588, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -261,7 +273,7 @@ Partial Class Form1
         TabPage2.Margin = New Padding(4)
         TabPage2.Name = "TabPage2"
         TabPage2.Padding = New Padding(4)
-        TabPage2.Size = New Size(998, 1278)
+        TabPage2.Size = New Size(1174, 1278)
         TabPage2.TabIndex = 1
         TabPage2.Text = "統計圖表"
         TabPage2.UseVisualStyleBackColor = True
@@ -273,16 +285,27 @@ Partial Class Form1
         SplitContainer2.Margin = New Padding(4)
         SplitContainer2.Name = "SplitContainer2"
         ' 
+        ' SplitContainer2.Panel1
+        ' 
+        SplitContainer2.Panel1.Controls.Add(SimTree2)
+        ' 
         ' SplitContainer2.Panel2
         ' 
         SplitContainer2.Panel2.Controls.Add(CheckSubFolder2)
         SplitContainer2.Panel2.Controls.Add(ListView2)
         SplitContainer2.Panel2.Controls.Add(Chart2)
-        SplitContainer2.Size = New Size(990, 1270)
-        SplitContainer2.SplitterDistance = 301
+        SplitContainer2.Size = New Size(1166, 1270)
+        SplitContainer2.SplitterDistance = 354
         SplitContainer2.SplitterWidth = 5
         SplitContainer2.TabIndex = 6
         SplitContainer2.TabStop = False
+        ' 
+        ' SimTree2
+        ' 
+        SimTree2.Location = New Point(0, 0)
+        SimTree2.Name = "SimTree2"
+        SimTree2.Size = New Size(151, 121)
+        SimTree2.TabIndex = 1
         ' 
         ' CheckSubFolder2
         ' 
@@ -306,7 +329,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(564, 395)
+        ListView2.Size = New Size(671, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -330,18 +353,18 @@ Partial Class Form1
         ' 
         Chart2.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         Chart2.BackGradientStyle = DataVisualization.Charting.GradientStyle.TopBottom
-        ChartArea2.Name = "ChartArea1"
-        Chart2.ChartAreas.Add(ChartArea2)
-        Legend2.Name = "Legend1"
-        Chart2.Legends.Add(Legend2)
+        ChartArea1.Name = "ChartArea1"
+        Chart2.ChartAreas.Add(ChartArea1)
+        Legend1.Name = "Legend1"
+        Chart2.Legends.Add(Legend1)
         Chart2.Location = New Point(0, 400)
         Chart2.Margin = New Padding(4)
         Chart2.Name = "Chart2"
-        Series2.ChartArea = "ChartArea1"
-        Series2.Legend = "Legend1"
-        Series2.Name = "Series1"
-        Chart2.Series.Add(Series2)
-        Chart2.Size = New Size(533, 857)
+        Series1.ChartArea = "ChartArea1"
+        Series1.Legend = "Legend1"
+        Series1.Name = "Series1"
+        Chart2.Series.Add(Series1)
+        Chart2.Size = New Size(640, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -352,7 +375,7 @@ Partial Class Form1
         TabPage3.Margin = New Padding(4)
         TabPage3.Name = "TabPage3"
         TabPage3.Padding = New Padding(4)
-        TabPage3.Size = New Size(998, 1278)
+        TabPage3.Size = New Size(1174, 1278)
         TabPage3.TabIndex = 2
         TabPage3.Text = "尋找附件檔案"
         TabPage3.UseVisualStyleBackColor = True
@@ -366,7 +389,7 @@ Partial Class Form1
         ' 
         ' SplitContainer3.Panel1
         ' 
-        SplitContainer3.Panel1.Controls.Add(TreeView3)
+        SplitContainer3.Panel1.Controls.Add(SimTree3)
         ' 
         ' SplitContainer3.Panel2
         ' 
@@ -376,29 +399,25 @@ Partial Class Form1
         SplitContainer3.Panel2.Controls.Add(ListView3)
         SplitContainer3.Panel2.Controls.Add(GroupBox1)
         SplitContainer3.Panel2.Controls.Add(GroupBox2)
-        SplitContainer3.Size = New Size(990, 1270)
-        SplitContainer3.SplitterDistance = 301
+        SplitContainer3.Size = New Size(1166, 1270)
+        SplitContainer3.SplitterDistance = 354
         SplitContainer3.SplitterWidth = 5
         SplitContainer3.TabIndex = 31
         SplitContainer3.TabStop = False
         ' 
-        ' TreeView3
+        ' SimTree3
         ' 
-        TreeView3.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        TreeView3.Font = New Font("Microsoft JhengHei UI", 10F)
-        TreeView3.HideSelection = False
-        TreeView3.Location = New Point(0, 0)
-        TreeView3.Margin = New Padding(4)
-        TreeView3.Name = "TreeView3"
-        TreeView3.Size = New Size(300, 1244)
-        TreeView3.TabIndex = 2
+        SimTree3.Location = New Point(0, 0)
+        SimTree3.Name = "SimTree3"
+        SimTree3.Size = New Size(151, 121)
+        SimTree3.TabIndex = 32
         ' 
         ' CheckSubFolder3
         ' 
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(529, 77)
+        CheckSubFolder3.Location = New Point(636, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -412,7 +431,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(535, 10)
+        Button3.Location = New Point(642, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -495,7 +514,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(564, 1133)
+        ListView3.Size = New Size(671, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -669,7 +688,7 @@ Partial Class Form1
         TabPage4.Margin = New Padding(4)
         TabPage4.Name = "TabPage4"
         TabPage4.Padding = New Padding(4)
-        TabPage4.Size = New Size(998, 1278)
+        TabPage4.Size = New Size(1174, 1278)
         TabPage4.TabIndex = 3
         TabPage4.Text = "尋找系列郵件"
         TabPage4.UseVisualStyleBackColor = True
@@ -689,8 +708,8 @@ Partial Class Form1
         ' 
         SplitContainer4.Panel2.Controls.Add(ListView4)
         SplitContainer4.Panel2.Controls.Add(Button4)
-        SplitContainer4.Size = New Size(990, 1270)
-        SplitContainer4.SplitterDistance = 301
+        SplitContainer4.Size = New Size(1166, 1270)
+        SplitContainer4.SplitterDistance = 354
         SplitContainer4.SplitterWidth = 5
         SplitContainer4.TabIndex = 11
         ' 
@@ -702,7 +721,7 @@ Partial Class Form1
         TreeView4.Location = New Point(0, 0)
         TreeView4.Margin = New Padding(4)
         TreeView4.Name = "TreeView4"
-        TreeView4.Size = New Size(300, 1244)
+        TreeView4.Size = New Size(353, 1244)
         TreeView4.TabIndex = 2
         ' 
         ' ListView4
@@ -714,7 +733,7 @@ Partial Class Form1
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(564, 1133)
+        ListView4.Size = New Size(671, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
@@ -734,7 +753,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(468, 15)
+        Button4.Location = New Point(575, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 42)
@@ -750,7 +769,7 @@ Partial Class Form1
         TabPage5.Margin = New Padding(4)
         TabPage5.Name = "TabPage5"
         TabPage5.Padding = New Padding(4)
-        TabPage5.Size = New Size(998, 1278)
+        TabPage5.Size = New Size(1174, 1278)
         TabPage5.TabIndex = 4
         TabPage5.Text = "尋找重複郵件"
         TabPage5.UseVisualStyleBackColor = True
@@ -773,7 +792,7 @@ Partial Class Form1
         SplitContainer5.Panel2.Controls.Add(TextBox1)
         SplitContainer5.Panel2.Controls.Add(Button5)
         SplitContainer5.Panel2Collapsed = True
-        SplitContainer5.Size = New Size(990, 1270)
+        SplitContainer5.Size = New Size(1166, 1270)
         SplitContainer5.SplitterDistance = 334
         SplitContainer5.SplitterWidth = 5
         SplitContainer5.TabIndex = 4
@@ -785,7 +804,7 @@ Partial Class Form1
         TreeView5.Location = New Point(0, 0)
         TreeView5.Margin = New Padding(4)
         TreeView5.Name = "TreeView5"
-        TreeView5.Size = New Size(989, 1244)
+        TreeView5.Size = New Size(1165, 1244)
         TreeView5.TabIndex = 0
         ' 
         ' lstEmails
@@ -844,7 +863,7 @@ Partial Class Form1
         TabPage6.Margin = New Padding(4)
         TabPage6.Name = "TabPage6"
         TabPage6.Padding = New Padding(4)
-        TabPage6.Size = New Size(998, 1278)
+        TabPage6.Size = New Size(1174, 1278)
         TabPage6.TabIndex = 5
         TabPage6.Text = "Setting"
         TabPage6.UseVisualStyleBackColor = True
@@ -859,12 +878,13 @@ Partial Class Form1
         ' 
         ' SettingGroup
         ' 
+        SettingGroup.Controls.Add(RenewAttachFilename)
         SettingGroup.Controls.Add(RenewIncludeSize)
         SettingGroup.Controls.Add(RDO_Parallel2)
         SettingGroup.Controls.Add(RDO_Parallel1)
         SettingGroup.Controls.Add(RenewCache)
         SettingGroup.Controls.Add(ClearCache)
-        SettingGroup.Controls.Add(checkIncludeAllFolders)
+        SettingGroup.Controls.Add(checkShowAllFolders)
         SettingGroup.Controls.Add(LoadCache)
         SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(CheckRDO)
@@ -876,15 +896,31 @@ Partial Class Form1
         SettingGroup.TabStop = False
         SettingGroup.Text = "設定選項"
         ' 
+        ' RenewAttachFilename
+        ' 
+        RenewAttachFilename.AutoSize = True
+        RenewAttachFilename.FlatStyle = FlatStyle.System
+        RenewAttachFilename.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        RenewAttachFilename.Location = New Point(167, 215)
+        RenewAttachFilename.Name = "RenewAttachFilename"
+        RenewAttachFilename.Size = New Size(202, 24)
+        RenewAttachFilename.TabIndex = 0
+        RenewAttachFilename.TabStop = False
+        RenewAttachFilename.Text = "Renew Attach Filename"
+        RenewAttachFilename.UseVisualStyleBackColor = True
+        ' 
         ' RenewIncludeSize
         ' 
         RenewIncludeSize.AutoSize = True
+        RenewIncludeSize.Checked = True
+        RenewIncludeSize.CheckState = CheckState.Indeterminate
         RenewIncludeSize.FlatStyle = FlatStyle.System
         RenewIncludeSize.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         RenewIncludeSize.Location = New Point(167, 186)
         RenewIncludeSize.Name = "RenewIncludeSize"
         RenewIncludeSize.Size = New Size(168, 24)
-        RenewIncludeSize.TabIndex = 16
+        RenewIncludeSize.TabIndex = 0
+        RenewIncludeSize.TabStop = False
         RenewIncludeSize.Text = "Include FolderSize"
         RenewIncludeSize.UseVisualStyleBackColor = True
         ' 
@@ -895,7 +931,8 @@ Partial Class Form1
         RDO_Parallel2.Location = New Point(16, 215)
         RDO_Parallel2.Name = "RDO_Parallel2"
         RDO_Parallel2.Size = New Size(135, 26)
-        RDO_Parallel2.TabIndex = 15
+        RDO_Parallel2.TabIndex = 0
+        RDO_Parallel2.TabStop = True
         RDO_Parallel2.Text = "Task.WhenAll"
         RDO_Parallel2.UseVisualStyleBackColor = True
         ' 
@@ -907,7 +944,7 @@ Partial Class Form1
         RDO_Parallel1.Location = New Point(16, 186)
         RDO_Parallel1.Name = "RDO_Parallel1"
         RDO_Parallel1.Size = New Size(135, 26)
-        RDO_Parallel1.TabIndex = 14
+        RDO_Parallel1.TabIndex = 0
         RDO_Parallel1.TabStop = True
         RDO_Parallel1.Text = "Parallel.Foreach"
         RDO_Parallel1.UseVisualStyleBackColor = True
@@ -938,21 +975,21 @@ Partial Class Form1
         ClearCache.Text = "清除快取"
         ClearCache.UseVisualStyleBackColor = False
         ' 
-        ' checkIncludeAllFolders
+        ' checkShowAllFolders
         ' 
-        checkIncludeAllFolders.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        checkIncludeAllFolders.Appearance = Appearance.Button
-        checkIncludeAllFolders.FlatStyle = FlatStyle.System
-        checkIncludeAllFolders.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        checkIncludeAllFolders.Location = New Point(16, 29)
-        checkIncludeAllFolders.Margin = New Padding(4)
-        checkIncludeAllFolders.Name = "checkIncludeAllFolders"
-        checkIncludeAllFolders.Padding = New Padding(10)
-        checkIncludeAllFolders.Size = New Size(129, 63)
-        checkIncludeAllFolders.TabIndex = 10
-        checkIncludeAllFolders.Text = "顯示全部資料夾"
-        checkIncludeAllFolders.TextAlign = ContentAlignment.MiddleCenter
-        checkIncludeAllFolders.UseVisualStyleBackColor = True
+        checkShowAllFolders.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        checkShowAllFolders.Appearance = Appearance.Button
+        checkShowAllFolders.FlatStyle = FlatStyle.System
+        checkShowAllFolders.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        checkShowAllFolders.Location = New Point(16, 29)
+        checkShowAllFolders.Margin = New Padding(4)
+        checkShowAllFolders.Name = "checkShowAllFolders"
+        checkShowAllFolders.Padding = New Padding(10)
+        checkShowAllFolders.Size = New Size(129, 63)
+        checkShowAllFolders.TabIndex = 10
+        checkShowAllFolders.Text = "顯示全部資料夾"
+        checkShowAllFolders.TextAlign = ContentAlignment.MiddleCenter
+        checkShowAllFolders.UseVisualStyleBackColor = True
         ' 
         ' LoadCache
         ' 
@@ -1072,7 +1109,7 @@ Partial Class Form1
         ProgressBar2.DisplayStyle = ToolStripItemDisplayStyle.Text
         ProgressBar2.ForeColor = Color.DimGray
         ProgressBar2.Name = "ProgressBar2"
-        ProgressBar2.Size = New Size(480, 24)
+        ProgressBar2.Size = New Size(520, 24)
         ProgressBar2.Text = "ProgressBar2"
         ProgressBar2.TextAlign = ContentAlignment.MiddleLeft
         ' 
@@ -1088,7 +1125,7 @@ Partial Class Form1
         StatusStrip1.Location = New Point(0, 1289)
         StatusStrip1.Name = "StatusStrip1"
         StatusStrip1.Padding = New Padding(1, 0, 18, 0)
-        StatusStrip1.Size = New Size(1006, 30)
+        StatusStrip1.Size = New Size(1062, 30)
         StatusStrip1.TabIndex = 6
         StatusStrip1.Text = "StatusStrip1"
         ' 
@@ -1101,7 +1138,7 @@ Partial Class Form1
         ' 
         AutoScaleDimensions = New SizeF(9F, 19F)
         AutoScaleMode = AutoScaleMode.Font
-        ClientSize = New Size(1006, 1319)
+        ClientSize = New Size(1062, 1319)
         Controls.Add(StatusStrip1)
         Controls.Add(TabControl1)
         DoubleBuffered = True
@@ -1117,6 +1154,7 @@ Partial Class Form1
         CType(SplitContainer1, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer1.ResumeLayout(False)
         TabPage2.ResumeLayout(False)
+        SplitContainer2.Panel1.ResumeLayout(False)
         SplitContainer2.Panel2.ResumeLayout(False)
         SplitContainer2.Panel2.PerformLayout()
         CType(SplitContainer2, ComponentModel.ISupportInitialize).EndInit()
@@ -1200,7 +1238,6 @@ Partial Class Form1
     Friend WithEvents Label2 As Label
 
     Friend WithEvents TabPage3 As TabPage
-    Friend WithEvents TreeView3 As TreeView
     Friend WithEvents ListView3 As ListView
     Friend WithEvents ColumnHeader31 As ColumnHeader
     Friend WithEvents ColumnHeader32 As ColumnHeader
@@ -1241,7 +1278,7 @@ Partial Class Form1
     Friend WithEvents lstEmails As ListBox
 
     Friend WithEvents TabPage6 As TabPage
-    Friend WithEvents checkIncludeAllFolders As CheckBox
+    Friend WithEvents checkShowAllFolders As CheckBox
     Friend WithEvents CheckDebug As CheckBox
     Friend WithEvents CheckRDO As CheckBox
     Friend WithEvents ClearCache As Button
@@ -1257,5 +1294,9 @@ Partial Class Form1
     Friend WithEvents RDO_Parallel1 As RadioButton
     Friend WithEvents RenewIncludeSize As CheckBox
     Friend WithEvents timerSaveCache As Timer
+    Friend WithEvents RenewAttachFilename As CheckBox
+    Friend WithEvents SimTree2 As SimTree
+    Friend WithEvents SimTree3 As SimTree
+    Friend WithEvents SimTree1 As SimTree
 
 End Class

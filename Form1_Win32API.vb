@@ -1,4 +1,5 @@
 ﻿Imports System.Collections.Concurrent
+Imports System.Globalization
 Imports Microsoft.Office.Interop
 
 Partial Class Form1
@@ -76,18 +77,20 @@ Partial Class Form1
         dwNewLong As Integer) As Integer
     End Function
 
+    ' ── 常數 ────────────────────────────────────────────────────────────────────
     Private Const GWL_STYLE As Integer = -16
     Private Const WS_TABSTOP As Integer = &H10000
-    ' ── 常數 ────────────────────────────────────────────────────────────────────
     Private Const SW_HIDE As Integer = 0
     Private Const WM_COMMAND As Integer = &H111
     Private Const WM_LBUTTONDOWN As Integer = &H201
     Private Const WM_LBUTTONUP As Integer = &H202
     Private Const BM_CLICK As Integer = &HF5
+
     ' TreeView 雙緩衝
     Private Const TV_FIRST As Integer = &H1100
     Private Const TVM_SETEXTENDEDSTYLE As Integer = TV_FIRST + 44
     Private Const TVS_EX_DOUBLEBUFFER As Integer = &H4
+
     ' ListView 雙緩衝
     Private Const LVM_SETEXTENDEDLISTVIEWSTYLE As Integer = &H1036
     Private Const LVS_EX_DOUBLEBUFFER As Integer = &H10000
@@ -100,6 +103,7 @@ Partial Class Form1
     Private Const RDW_ERASE As Integer = &H4                        ' 2026/03/28 by Gemini: 補上缺失定義
     Private Const RDW_FRAME As Integer = &H400                      ' 2026/03/28 by Gemini: 補上缺失定義
     Private Const WM_SETREDRAW As Integer = &HB                     ' 2026/3/26 by Gemini
+
     ' ↓ 新增 (2026-03-20) ListView1 進入資料夾用
     Private Const TVM_SELECTITEM As Integer = &H110B                ' = &H1100 + 11
     Private Const TVGN_CARET As Integer = &H9                       ' SendMessage 選取 Treeview 游標節點
@@ -108,13 +112,72 @@ Partial Class Form1
 #End Region
 
 #Region "■ 99 舊版備用 (勿刪)"
+
+    ' 定義排序方式的列舉
+    Private currentSortOrder As SortOrder = SortOrder.Ascending     ' 設置初始排序方式為升序
+    Private previousColumnIndex As Integer = -1                     ' 儲存上一次點選的列索引
+    Friend Class ListViewItemComparer ' 用於比較 ListView 項目並依Column 進行排序
+        Implements IComparer
+        Private ReadOnly columnIndex As Integer
+        Private ReadOnly order As SortOrder
+        Public Sub New(columnIndex As Integer, order As SortOrder)
+            Me.columnIndex = columnIndex
+            Me.order = order
+        End Sub
+        Public Function Compare(x As Object, y As Object) As Integer Implements IComparer.Compare
+            Dim itemX As ListViewItem = DirectCast(x, ListViewItem)
+            Dim itemY As ListViewItem = DirectCast(y, ListViewItem)
+            Dim compareResult As Integer
+            Select Case columnIndex
+                Case 1  ' 郵件大小: 從 Tag 讀 Long，O(1)，不解析字串
+                    Dim sizeX As Long = GetSizeFromTag(itemX)
+                    Dim sizeY As Long = GetSizeFromTag(itemY)
+                    compareResult = sizeX.CompareTo(sizeY)
+                Case 2  ' 日期
+                    Dim dateX As DateTime, dateY As DateTime
+                    If DateTime.TryParse(itemX.SubItems(2).Text, dateX) AndAlso
+                       DateTime.TryParse(itemY.SubItems(2).Text, dateY) Then
+                        compareResult = dateX.CompareTo(dateY)
+                    Else
+                        compareResult = 0
+                    End If
+                Case 4  ' 附件個數直接 TryParse (數量小，解析快)
+                    Dim countX As Integer = GetAttachCountFromTag(itemX)
+                    Dim countY As Integer = GetAttachCountFromTag(itemY)
+                    compareResult = countX.CompareTo(countY)
+                Case Else  ' 文字欄位 (Subject、SenderName、EntryID)
+                    compareResult = String.Compare(itemX.SubItems(columnIndex).Text,
+                                                   itemY.SubItems(columnIndex).Text,
+                                                   StringComparison.CurrentCultureIgnoreCase)
+            End Select
+            Return If(order = SortOrder.Ascending, compareResult, -compareResult)
+
+        End Function
+        Private Shared Function GetSizeFromTag(item As ListViewItem) As Long
+            ' Tag 存的是 Long (Phase1) 或 Long() (Phase2)
+            If TypeOf item.Tag Is Long Then Return CLng(item.Tag)
+            If TypeOf item.Tag Is Long() Then Return DirectCast(item.Tag, Long())(0)
+            Dim v As Long   ' Fallback: 萬一 Tag 沒設，解析字串
+            Long.TryParse(item.SubItems(1).Text, NumberStyles.AllowThousands, Nothing, v)
+            Return v
+
+        End Function
+        Private Shared Function GetAttachCountFromTag(item As ListViewItem) As Integer
+            If TypeOf item.Tag Is Long() Then Return CInt(DirectCast(item.Tag, Long())(1))
+            Dim v As Integer ' ">0" 或普通數字字串
+            If Integer.TryParse(item.SubItems(4).Text, v) Then Return v
+            Return 0  ' ">0" 的情況視為 1
+
+        End Function
+    End Class
+
     Private Function GetFolderByName(folderName As String) As Outlook.Folder
-        Dbg("開始", folderName)
+        _dbg("開始", folderName)
         Dim node As TreeNode = FindNodeByName(TreeView1.SelectedNode, folderName)
         Return If(node Is Nothing, Nothing, node.Tag)
     End Function
     Private Function FindNodeByName(selectedNode As TreeNode, ByVal findName As String) As TreeNode
-        Dbg("開始", selectedNode.Name)
+        _dbg("開始", selectedNode.Name)
         selectedNode.Expand()
         ' 目前的實現是每次比較都把 " - " 去掉再比對，
         ' 建議改成在一開始就把 findName 處理成 cleanName，然後在整個遞迴過程中都使用 cleanName 來比對，
@@ -131,21 +194,21 @@ Partial Class Form1
 
     End Function
     Private Function FindNodeOrItemByName(ByVal nodesOrItems As IEnumerable, ByVal itemName As String) As Object
-        Dbg("開始", itemName)
+        _dbg("開始", itemName)
         For Each item As Object In nodesOrItems
             Dim text As String = If(TypeOf item Is TreeNode, DirectCast(item, TreeNode).Text, DirectCast(item, ListViewItem).Text)
             If text.Replace(" - ", "") = itemName.Replace(" - ", "") Then
-                Dbg("結束", $"找到: {itemName}") ' by Gemini, 2026/04/04: 補上找到時的結束（Issue 2）
+                _dbg("結束", $"找到: {itemName}") ' by Gemini, 2026/04/04: 補上找到時的結束（Issue 2）
                 Return item
             End If
         Next
-        Dbg("結束", $"找不到: {itemName}") ' by Gemini, 2026/04/04: 補上找不到時的結束（Issue 2）
+        _dbg("結束", $"找不到: {itemName}") ' by Gemini, 2026/04/04: 補上找不到時的結束（Issue 2）
         Return Nothing
 
     End Function
 
     Private Function GetMailCountRecursiveLegacy(folder As Outlook.Folder) As Integer
-        Dbg("開始", folder.Name)
+        _dbg("開始", folder.Name)
         Dim value As Integer
         If _cacheMailCountAll.TryGetValue(folder, value) Then Return value ' 檢查快取中是否已存在值, 若有則直接返回
         ' 改成先用 Parallel.ForEach 遍歷子文件夾並且並行處理
@@ -155,7 +218,7 @@ Partial Class Form1
             ' 5/21記錄: 模仿GetFolderSizeLegacy那一句超快速的LINQ, 但測試結果沒有現在這個快, 所以決定保留這個
             ' 2026/3/20, 重寫了底層GetMailCountAll() 但是不知為何效能還是比不過現在下面這個遞迴版本?? (todo: 暫時先保留)
             ' 原因: 原版遞迴只走一遍 COM 資料夾樹，新版走了兩遍COM:
-            ' 第一遍: GetSubFolderList()    → BFS 遍歷，存取每個 folder.Folders
+            ' 第一遍: GetSubtreeToList()    → BFS 遍歷，存取每個 folder.Folders
             ' 第二遍: For Each allFolders   → GetMailCount() 再讀每個資料夾一次
             ' 2026/3/22, 導入Redemption, 應該可以刪掉這裡了? 還是讓Redemption 變成on-demand, 需要才啟動?
             'Parallel.ForEach(folder.Folders.Cast(Of Outlook.Folder),' 取得子資料夾的郵件數量並添加到 ConcurrentBag 中
@@ -178,7 +241,7 @@ Partial Class Form1
         ' GetMailCountAll_1: 讀取某資料夾及其整棵子樹的郵件總數
         ' 先RDO, 再BFS累加, 再遞迴
         '
-        ' 設計說明: 不自己遞迴，改用 GetSubFolderList() BFS 展開完整資料夾清單後逐一加總
+        ' 設計說明: 不自己遞迴，改用 GetSubtreeToList() BFS 展開完整資料夾清單後逐一加總
         '           ① 可以在任意點插入取消檢查 (_cancelRequested) ，遞迴做不到
         '           ② 知道總資料夾數，可以回報準確進度
         '           ③ 多個統計 (mail count + folder size) 可共用同一份清單，不用各跑一次 BFS ' todo: 有沒有地方可以用上這個好處??
@@ -197,8 +260,8 @@ Partial Class Form1
         '            直接回傳整棵子樹的郵件總數，MAPI 層面的快取彙總值，一次 COM call 結束，完全不需要 BFS 遍歷
         '            Redemption 可正確讀取 PST 上此屬性 (原生 OOM 無法取得)
         '            _rdoSession 未就緒時自動跳過此層
-        '   ① GetSubFolderList + GetMailCount(Layer3) 逐一加總, BFS 展開後逐一呼叫，清單與計算邏輯分離，支援取消和進度回報
-        '   ② 遞迴 fallback: GetSubFolderList 本身失敗時 (極少見) 的保險方案, 遞迴版本無法回報精確進度，但確保結果正確
+        '   ① GetSubtreeToList + GetMailCount(Layer3) 逐一加總, BFS 展開後逐一呼叫，清單與計算邏輯分離，支援取消和進度回報
+        '   ② 遞迴 fallback: GetSubtreeToList 本身失敗時 (極少見) 的保險方案, 遞迴版本無法回報精確進度，但確保結果正確
         '   ③ 兩層都失敗就回傳 Return -1 並記錄 DebugForm，不讓單一資料夾的讀取失敗影響整體加總。
         '
         ' cancelRequested 參數: ' todo: 如何使用??
@@ -216,7 +279,7 @@ Partial Class Form1
         '
         ' 2026-03-22 新增 ⓪ Redemption TotalItemCount，_rdoSession 就緒時完全跳過 BFS
         ' --------------------------------------------------------------
-        Dbg("開始", rootFolder.Name)
+        _dbg("開始", rootFolder.Name)
         ' ⓪ Redemption: TotalItemCount 直接回傳整棵子樹郵件總數
         '   MAPI 快取的彙總屬性，一次 call 結束，不需要 BFS 遍歷，也不需要平行處理
         '   原生 OOM 的 PR_MESSAGE_SIZE_EXTENDED 在 PST 上找不到，Redemption 可正確讀取
@@ -226,35 +289,35 @@ Partial Class Form1
             Try
                 rdoFolder = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
                 Dim total As Long = rdoFolder.TotalItemCount
-                Dbg("GetMailCountAll ⓪ RDO 成功", $"{rootFolder.Name} | TotalItemCount={total}")
+                _dbg("GetMailCountAll ⓪ RDO 成功", $"{rootFolder.Name} | TotalItemCount={total}")
                 Return total
             Catch ex As System.Exception
-                Dbg("GetMailCountAll ⓪ RDO 失敗，走BFS fallback", $"{rootFolder.Name} | {ex.Message}")
+                _dbg("GetMailCountAll ⓪ RDO 失敗，走BFS fallback", $"{rootFolder.Name} | {ex.Message}")
             Finally
                 TryMarshalRelease(rdoFolder)
             End Try
         End If
-        ' ① 標準路徑: GetSubFolderList BFS 展開 + GetMailCount(Layer3) 逐一加總
+        ' ① 標準路徑: GetSubtreeToList BFS 展開 + GetMailCount(Layer3) 逐一加總
         Try
             ' BFS 展開整棵子樹的資料夾清單 (復用現有函數，不重寫)
-            Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True)
+            Dim targetFolderList As List(Of Outlook.Folder) = Await GetSubtreeToList(rootFolder, includeSubF:=True)  ' by Gemini, 2026/04/11: Async 化後加 Await
             Dim grandTotal As Long = 0
             For i As Integer = 0 To targetFolderList.Count - 1
                 If _cancelRequested Then    ' ✅ 取消檢查: 任意點都可以乾淨中止，不像遞迴版難以插入
-                    Dbg("GetMailCountAll 被取消", $"已處理 {i}/{targetFolderList.Count}") : Return -1
+                    _dbg("GetMailCountAll 被取消", $"已處理 {i}/{targetFolderList.Count}") : Return -1
                 End If
                 Dim f As Outlook.Folder = targetFolderList(i)
                 Dim count As Integer = GetMailCount(f)
                 ' GetMailCount 的所有 fallback 都失敗才會到這個else，記錄但不中止整體加總
-                If count >= 0 Then grandTotal += CLng(count) Else Dbg("GetMailCountAll 略過失敗資料夾", f.Name)
+                If count >= 0 Then grandTotal += CLng(count) Else _dbg("GetMailCountAll 略過失敗資料夾", f.Name)
                 onProgress?.Invoke(i + 1, targetFolderList.Count) ' 進度回報 (optional callback，呼叫端不需要時傳 Nothing 即可) 因為知道 total，進度條可以準確顯示百分比 'todo: 這個進度回報如何使用?
                 If i Mod 10 = 0 Then Await Task.Yield()     ' 每掃瞄10個資料夾處理完就讓出一次，保持 UI 回應 (GetMailCount 本身是同步的，所以這裡的 Yield 是唯一的讓出點)
             Next
             Return grandTotal
         Catch ex As System.Exception
-            Dbg("GetMailCountAll ① BFS路徑失敗，走遞迴fallback", $"{rootFolder.Name} | {ex.Message}")
+            _dbg("GetMailCountAll ① BFS路徑失敗，走遞迴fallback", $"{rootFolder.Name} | {ex.Message}")
         End Try
-        ' ② 遞迴 fallback: GetSubFolderList 本身失敗時使用 (無法精確回報進度，但至少確保加總結果正確)
+        ' ② 遞迴 fallback: GetSubtreeToList 本身失敗時使用 (無法精確回報進度，但至少確保加總結果正確)
         '   注意: 遞迴層數受 PST 資料夾巢狀深度限制，實務上 PST 不會太深
         Try
             Dim totalCount As Long = 0
@@ -266,7 +329,7 @@ Partial Class Form1
             Next
             Return totalCount
         Catch ex As System.Exception ' ③ 全部失敗就傳回 -1 讓上層流程去處理
-            Dbg("GetMailCountAll ② 遞迴fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
+            _dbg("GetMailCountAll ② 遞迴fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
             Return -1   ' ③ 若前兩層都失敗，回傳 -1 讓 Layer2 知道這是「讀取失敗」而非「真的是 0 封」
         End Try
 
@@ -294,7 +357,7 @@ Partial Class Form1
         '      Task.Run 內的 GetMailCount(f) 若走 Redemption ⓪，是 free-threaded 安全的
         '      若 fallback 到 MAPI PropertyAccessor，仍有 STA 違規風險，需留意
         ' --------------------------------------------------------------
-        Dbg("開始", rootFolder.Name)
+        _dbg("開始", rootFolder.Name)
         ' ⓪ Redemption: TotalItemCount 直接回傳整棵子樹郵件總數
         '   就緒時完全跳過下方所有平行 BFS 邏輯，等同於 GetMailCountAll ⓪ 的行為
         '   2026-03-22 新增
@@ -303,17 +366,17 @@ Partial Class Form1
             Try
                 rdoFolder = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
                 Dim total As Long = rdoFolder.TotalItemCount
-                Dbg("GetMailCountAllParallel ⓪ RDO 成功", $"{rootFolder.Name} | TotalItemCount={total}")
+                _dbg("GetMailCountAllParallel ⓪ RDO 成功", $"{rootFolder.Name} | TotalItemCount={total}")
                 Return total
             Catch ex As System.Exception
-                Dbg("GetMailCountAllParallel ⓪ RDO 失敗，走平行BFS fallback", $"{rootFolder.Name} | {ex.Message}")
+                _dbg("GetMailCountAllParallel ⓪ RDO 失敗，走平行BFS fallback", $"{rootFolder.Name} | {ex.Message}")
             Finally
                 TryMarshalRelease(rdoFolder)
             End Try
         End If
         ' ① 標準路徑: BFS 展開 → 每個資料夾一個 Task → Task.WhenAll
         Try
-            Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True)
+            Dim targetFolderList As List(Of Outlook.Folder) = Await GetSubtreeToList(rootFolder, includeSubF:=True)  ' by Gemini, 2026/04/11: Async 化後加 Await
             Dim targetFolderCount As Integer = targetFolderList.Count
             Dim processedCount As Integer = 0   ' Interlocked 保證多 Task 同時更新的執行緒安全
             Dim folderTasks = targetFolderList.Select(
@@ -321,7 +384,7 @@ Partial Class Form1
                                          If _cancelRequested Then Return 0
                                          Dim count As Integer = GetMailCount(f)
                                          If count < 0 Then
-                                             Dbg("GetMailCountAllParallel 略過失敗資料夾", f.Name)
+                                             _dbg("GetMailCountAllParallel 略過失敗資料夾", f.Name)
                                              count = 0
                                          End If
                                          ''Dim done As Integer = Interlocked.Increment(processedCount)
@@ -329,16 +392,16 @@ Partial Class Form1
                                      End Function)).ToList()
             Dim results As Integer() = Await Task.WhenAll(folderTasks)
             If _cancelRequested Then
-                Dbg("GetMailCountAllParallel 已取消", $"總資料夾數: {targetFolderCount}") : Return -1
+                _dbg("GetMailCountAllParallel 已取消", $"總資料夾數: {targetFolderCount}") : Return -1
             End If
             Return results.Sum(Function(c) CLng(c))
         Catch ex As System.Exception
-            Dbg("GetMailCountAllParallel ① 平行路徑失敗，走循序fallback", $"{rootFolder.Name} | {ex.Message}")
+            _dbg("GetMailCountAllParallel ① 平行路徑失敗，走循序fallback", $"{rootFolder.Name} | {ex.Message}")
         End Try
         ' ② 循序 fallback: 平行路徑失敗時使用，退回單純的逐一加總
-        '   不用遞迴 (避免重複呼叫 GetSubFolderList) ，直接重跑 BFS 循序版
+        '   不用遞迴 (避免重複呼叫 GetSubtreeToList) ，直接重跑 BFS 循序版
         Try
-            Dim targetFolderList As List(Of Outlook.Folder) = GetSubFolderList(rootFolder, includeSubF:=True)
+            Dim targetFolderList As List(Of Outlook.Folder) = Await GetSubtreeToList(rootFolder, includeSubF:=True)  ' by Gemini, 2026/04/11: Async 化後加 Await
             Dim grandTotal As Long = 0
             For i As Integer = 0 To targetFolderList.Count - 1
                 If _cancelRequested Then Return -1
@@ -348,14 +411,14 @@ Partial Class Form1
             Next
             Return grandTotal
         Catch ex As System.Exception
-            Dbg("GetMailCountAllParallel ② 循序fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
+            _dbg("GetMailCountAllParallel ② 循序fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
             Return -1       ' ③ 若前兩層都失敗，回傳 -1 讓 Layer2 知道這是「讀取失敗」而非「真的是 0 封」
         End Try
 
     End Function
 
     Private Async Function GetTotalFolderCountAsync(folder As Outlook.Folder) As Task(Of Integer)
-        Dbg("開始", folder.Name)
+        _dbg("開始", folder.Name)
         Dim value As Integer
         Dim fPath As String = folder.FolderPath
         If _cacheFolderCountAll.TryGetValue(fPath, value) Then Return value ' 檢查快取中是否已存在值, 若有則直接返回
@@ -395,7 +458,7 @@ Partial Class Form1
         '   由 ListView1_ColumnClick 或右鍵選單「Show This Folder Size」觸發
         '   結果存入 folderSizeCache，BuildListViewItem_Tab1 下次組裝時自動顯示
         ' ==============================================================
-        Dbg("開始", folder.Name)
+        _dbg("開始", folder.Name)
         Dim value As Long   ' 快取命中直接回傳
         If _cacheFolderSize.TryGetValue(folder, value) Then Return value
         '' 已知有問題的資料夾走舊路徑 (不明 COM 例外物件，GetTable 也可能出問題)
@@ -423,10 +486,10 @@ Partial Class Form1
             _cacheFolderSize.TryAdd(folder, totalSize)
             Return totalSize
         Catch ex As OverflowException
-            Dbg("Error: GetFolderSizeLegacy overflow", folder.Name)
+            _dbg("Error: GetFolderSizeLegacy overflow", folder.Name)
             Return -1
         Catch ex As System.Exception
-            Dbg("Error: GetFolderSizeLegacy", folder.Name & " - " & ex.Message)
+            _dbg("Error: GetFolderSizeLegacy", folder.Name & " - " & ex.Message)
             Return -1
         Finally
             TryMarshalRelease(table)
@@ -434,7 +497,7 @@ Partial Class Form1
 
     End Function
     Private Function GetFolderSizeOld(folder As Outlook.Folder) As Long
-        Dbg("開始", folder.Name)
+        _dbg("開始", folder.Name)
         Dim totalSize As Long = 0
         Dim folderItems As Outlook.Items = Nothing
         Try

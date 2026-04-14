@@ -1,0 +1,3 @@
+- [ ] 修改 FilterByAttachDetailsAsync: 捕捉中斷並回傳部分結果
+- [ ] 修改 Button3_Click: 在清單收集迴圈加入局部中斷攔截
+- [ ] 驗證 Tab 3 中斷後的 UI 顯示行為

@@ -6,13 +6,13 @@ Imports System.Text.RegularExpressions
 ' DebugForm.vb  —  執行期除錯視窗
 ' ==============================================================
 ' 功能:
-'   即時顯示 Form1.Dbg() 呼叫的訊息 (訊息文字、呼叫者、時間戳記、間隔毫秒)
+'   即時顯示 Form1._dbg() 呼叫的訊息 (訊息文字、呼叫者、時間戳記、間隔毫秒)
 '   雙擊單行 → 複製該行完整文字到剪貼簿，並重算與配對 Begin/End 的時間差
 '   Ctrl+C   → 複製所有已選取的行 (Tab 分隔，每行一列)
 '   點選 End: 行 → 向前搜尋相符的 Begin: 行並以黃色標示
 '
 ' 設計說明:
-'   AddMessage3 由 Form1.Dbg() 呼叫，forcedCaller 由 Form1.WhoCallsMe() 填入
+'   AddMessage3 由 Form1._dbg() 呼叫，forcedCaller 由 Form1.WhoCallsMe() 填入
 '   WhoCallsMe() 為 fallback，正常情況下不會被走到 (Form1 已先解析好呼叫者)
 '   ListView 啟用 MultiSelect=True (於 Load 覆寫 Designer 設定) ，支援 Ctrl+C 多選複製
 '
@@ -34,7 +34,25 @@ Public Class DebugForm
         wParam As IntPtr,
         lParam As IntPtr) As IntPtr
     End Function
+    <Runtime.InteropServices.DllImport("gdi32.dll")>
+    Private Shared Function CreateRectRgn(x1 As Integer, y1 As Integer, x2 As Integer, y2 As Integer) As IntPtr : End Function
+    <Runtime.InteropServices.DllImport("gdi32.dll")>
+    Private Shared Function SelectClipRgn(hDC As IntPtr, hRgn As IntPtr) As Integer : End Function
+    <Runtime.InteropServices.DllImport("gdi32.dll")>
+    Private Shared Function DeleteObject(hObject As IntPtr) As Boolean : End Function
+
     Private Const WM_SETREDRAW As Integer = &HB  ' 2026/3/26 by Gemini
+    Private Const WM_SETFONT As Integer = &H30
+    Private Const WM_SIZE As Integer = &H5       ' by Claude Opus 4.6, 2026/04/11: 攔截視窗尺寸變更
+    Private Const SIZE_MAXIMIZED As Integer = 2
+    Private Const SIZE_RESTORED As Integer = 0
+    Private Const LVM_FIRST As Integer = &H1000
+    Private Const LVM_GETHEADER As Integer = LVM_FIRST + 31
+    Private Const LVM_SETEXTENDEDLISTVIEWSTYLE As Integer = LVM_FIRST + 54
+    Private Const LVM_GETEXTENDEDLISTVIEWSTYLE As Integer = LVM_FIRST + 55
+    Private Const LVM_SETTOOLTIPS As Integer = LVM_FIRST + 74            ' by Gemini 3 Flash, 2026/04/13: 用於切斷 ToolTip 控制項關聯
+    Private Const LVS_EX_LABELTIP As Integer = &H4000       ' by Claude Opus 4.6, 2026/04/11: 移除此樣式以修復 OwnerDraw 下的文字重疊殘影
+    Private Const LVS_EX_DOUBLEBUFFER As Integer = &H10000  ' by Claude, 2026/04/12: Native ListView 真正的雙緩衝 flag，解決 ScrollBar 消失時 OwnerDraw dirty region 只有右側條帶導致項目消失的 Bug
 #End Region
 
 #Region "■ 02 成員變數"
@@ -66,7 +84,47 @@ Public Class DebugForm
         _previousTimestamp = Now
         QueueTimer.Start()          ' .Interval = 100
 
+        ' 💡 2026/04/13 by Gemini 3 Flash: 註冊 HandleCreated，確保 ListView 重建時修復依然生效
+        AddHandler lvwDebug.HandleCreated, AddressOf OnLvwHandleCreated
+
     End Sub
+    ''' <summary>
+    ''' 2026/04/13 by Gemini 3 Flash: 當 ListView Handle 建立時，自動重新套用樣式修復與 ToolTip 隔離
+    ''' </summary>
+    Private Sub OnLvwHandleCreated(sender As Object, e As EventArgs)
+        ApplyListViewFixes()
+    End Sub
+
+    ''' <summary>
+    ''' 2026/04/13 by Gemini 3 Flash: 集中處理 Win32 樣式修復 (LabelTip 移除、隔離 ToolTip、原生雙緩衝)
+    ''' </summary>
+    Private Sub ApplyListViewFixes()
+        Try
+            ' 1. 移除 LVS_EX_LABELTIP (防止 OwnerDraw 時出現鬼影文字標籤)
+            '       💡 2026/04/11 by Claude Opus 4.6 移除 LVS_EX_LABELTIP 擴充樣式
+            '       在 OwnerDraw 模式下， ListView 內建的「文字超寬時浮出全文標籤」會跟自訂繪製衝突，
+            '       產生滑鼠移過時的文字重疊殘影。移除此樣式即可根治。
+            '       wParam = mask(指定要修改哪些位元), lParam = 0 (關閉這些位元)
+            ' by Gemini, 2026/04/13: 全部整合到 ApplyListViewFixes，確保 Handle 重建後依然生效
+            SendMessage(lvwDebug.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_LABELTIP), IntPtr.Zero)
+
+            ' 2. 徹底隔離 ToolTip 控制項 (切斷與系統調度器的關聯)
+            SendMessage(lvwDebug.Handle, LVM_SETTOOLTIPS, IntPtr.Zero, IntPtr.Zero)
+
+            ' 3. 啟用 LVS_EX_DOUBLEBUFFER (強化滾動與 Resize 時的渲染穩定性)
+            '       💡 2026/04/12 by Claude 啟用 LVS_EX_DOUBLEBUFFER
+            '       這是 Native Win32 ListView 的真正雙緩衝， 與.NET DoubleBuffered 屬性完全不同
+            '       啟用後 ListView 每次 WM_PAINT 都對整個 client area 做 offscreen buffer blit，
+            '       不再做 partial dirty-region paint， 從根本解決 ScrollBar 消失時 DrawSubItem 不被呼叫的問題
+            ' by Gemini, 2026/04/13: 全部整合到 ApplyListViewFixes，確保 Handle 重建後依然生效
+            SendMessage(lvwDebug.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE,
+                        New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+        Catch ex As Exception
+            ' 僅為 UI 修正，不應中斷程式
+        End Try
+
+    End Sub
+
     Private Sub DebugForm_Shown(sender As Object, e As EventArgs) Handles Me.Shown
         ' ==============================================================
         ' by Gemini, 2026/04/01: 將重型 UI 佈局校算移到 Shown 事件
@@ -115,7 +173,8 @@ Public Class DebugForm
             .Clear()
             .Add("Debug Message", 400, HorizontalAlignment.Left) ' 寬度會在 Load 時被 RecalcColumnWidths 調整，這裡先給個預設值
             .Add("Timestamp", 115, HorizontalAlignment.Center)
-            .Add("Time Span", 85, HorizontalAlignment.Right)
+            .Add("Step (ms)", 85, HorizontalAlignment.Right)      ' by Gemini 1.5 Pro, 2026/04/11: 原 Time Span，顯示物理步進間隔
+            .Add("Elapsed (ms)", 85, HorizontalAlignment.Right)   ' by Gemini 1.5 Pro, 2026/04/11: 新增，顯示函數從開始到結束的總耗時
             '.Insert(0, New ColumnHeader() With {.Text = "Debug Message", .Width = -2,    ' 2026/3/28 by Gemini: Width=-2 讓第一欄自動填滿剩餘空間，避免寫死寬度在 Load 時擠掉右側欄位
             '                                    .TextAlign = HorizontalAlignment.Left})
         End With
@@ -135,7 +194,37 @@ Public Class DebugForm
         ctx.Items.Add("清除所有項目", Nothing, Sub(s, ev) lvwDebug.Items.Clear())
         lvwDebug.ContextMenuStrip = ctx
 
+        ' 💡 2026/04/11 by Gemini: 原生 Header 粗體化優化 (不破壞 MouseOver 顏色變化)
+        ' 直接透過 Win32 套用字型，比 OwnerDraw 更穩定且保留原生互動。
+        Try
+            Dim hHeader As IntPtr = SendMessage(lvwDebug.Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero)
+            If hHeader <> IntPtr.Zero Then
+                Static boldFont As Font = New Font(lvwDebug.Font, FontStyle.Bold) ' 使用 Static 確保 Font 物件生命週期隨 Form 存在
+                SendMessage(hHeader, WM_SETFONT, boldFont.ToHfont(), New IntPtr(1))
+            End If
+        Catch ex As Exception
+            ' 僅為 UI 裝飾，失敗則跳過，不影響核心邏輯
+        End Try
+
+        ' 💡 2026/04/13 by Gemini 3 Flash: 執行 ListView 樣式修復 (原放在 Shown 的邏輯現已整合進 ApplyListViewFixes)
+        ApplyListViewFixes()
+
     End Sub
+    ' 💡 2026/04/11 by Claude Opus 4.6: 攔截 WM_SIZE 修復最大化/還原時 ListView 項目消失
+    ' 原因：雙擊標題列觸發的 WindowState 切換是瞬間完成的（不像拖動是漸進式），
+    ' OwnerDraw ListView 在項目不足以填滿視窗高度時，內部繪製管線會誤判不需要重繪。
+    ' 解法：在最大化/還原完成後，強制觸發一次 Invalidate() 讓 ListView 重新繪製所有可視項目。
+    Protected Overrides Sub WndProc(ByRef m As Message)
+        MyBase.WndProc(m)
+        If m.Msg = WM_SIZE Then
+            Dim sizeType As Integer = m.WParam.ToInt32()
+            If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
+                ' 在 base.WndProc 之後執行，確保佈局已完成結算
+                lvwDebug.Invalidate()
+            End If
+        End If
+    End Sub
+
     Private Sub DebugForm_FormClosed(sender As Object, e As FormClosedEventArgs) Handles Me.FormClosed
         Form1.CheckDebug.Checked = False
     End Sub
@@ -143,7 +232,7 @@ Public Class DebugForm
         ' 2026/04/01 by Gemini: 修正 ListView 項目在卷軸消失時跟著消失的致命 Bug
 
         ' 1. 加入門檻判定 (Threshold): 寬度變動極小時不觸發重設，避免拖動尺寸時的頻繁重發 (Throttle)
-        If lvwDebug.Columns.Count < 2 Then Return
+        If lvwDebug.Columns.Count < 3 Then Return
         If Math.Abs(lvwDebug.ClientSize.Width - _lastRecalcWidth) < 2 Then Return
 
         _lastRecalcWidth = lvwDebug.ClientSize.Width
@@ -157,8 +246,46 @@ Public Class DebugForm
         ' 💡 絕不可以在 ClientSizeChanged 期間呼叫 BeginUpdate/EndUpdate！
         ' 否則在「卷軸隱藏/顯示」的重算週期中會癱瘓底層訊息傳遞，導致所有項目全部消失。
         Dim newWidth As Integer = lvwDebug.ClientSize.Width - reservedWidth - 4
+
+        '' by Claude Opus 4.6, 2026/04/11: 修復卷軸消失時所有 ListView 項目消失的致命 Bug
+        '' ── 為什麼 Invalidate() 無效 ──
+        '' 在 ClientSizeChanged resize 訊息鏈進行中，Windows 會抑制 WM_PAINT 派發。
+        '' Invalidate() 只是排入 WM_PAINT 到佇列，等 resize 結束時 item bounds 快取早已壞掉。
+        '' ── 為什麼 BeginInvoke + Refresh() 有效 ──
+        '' BeginInvoke 將 delegate 排入訊息泵，保證在 resize 訊息鏈**完全結束後**才執行。
+        '' Refresh() = Invalidate() + Update()，Update() 同步處理 WM_PAINT，不會被延遲。
+        'If newWidth > 100 AndAlso lvwDebug.Columns(0).Width <> newWidth Then
+        '    lvwDebug.Columns(0).Width = newWidth
+        '    BeginInvoke(Sub() If lvwDebug IsNot Nothing AndAlso Not lvwDebug.IsDisposed AndAlso lvwDebug.Items.Count > 0 Then lvwDebug.Refresh())
+        'End If
+
+        '' 2026/04/12 by Claude: 修復 ScrollBar 消失時 ListView 項目消失的 Bug
+        '' 根本原因：Columns(0).Width 賦值會觸發 ListView 內部同步 repaint，
+        '' 此時 DoubleBuffer backbuffer 被清空，但 GDI 系統 clip 只有右側17px條帶，
+        '' 導致 TextRenderer.DrawText (GDI) 被 clip 住畫不出文字。
+        '' 解法：用 WM_SETREDRAW 壓住 column 改變觸發的內部 paint，
+        '' 改成寬度設定完後呼叫一次完整 Refresh()，此時 dirty region 是全區域。
+        'If newWidth > 100 AndAlso lvwDebug.Columns(0).Width <> newWidth Then
+        '    SendMessage(lvwDebug.Handle, WM_SETREDRAW, New IntPtr(0), IntPtr.Zero)
+        '    lvwDebug.Columns(0).Width = newWidth
+
+        '    SendMessage(lvwDebug.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero)
+        '    lvwDebug.Refresh()  ' Invalidate() + Update()，同步執行，此時 clip = 完整區域
+        '    ' 移除原本的 BeginInvoke(Refresh()) — 由上面的同步 Refresh() 取代
+        'End If
+
+        ' 2026/04/12 by Claude: ScrollBar 消失後 EnsureVisible 殘留的 scroll offset 未歸零
+        ' 導致 item(0).Bounds.Y 為負數，所有項目偏移至底部，Refresh 在錯誤座標執行也無效
+        ' 檢查 item(0).Bounds.Y：不等於 0 代表 scroll offset 殘留，強制設 TopItem 歸零
         If newWidth > 100 AndAlso lvwDebug.Columns(0).Width <> newWidth Then
             lvwDebug.Columns(0).Width = newWidth
+            BeginInvoke(Sub()
+                            If lvwDebug Is Nothing OrElse lvwDebug.IsDisposed OrElse lvwDebug.Items.Count = 0 Then Return
+                            Try
+                                If lvwDebug.Items(0).Bounds.Y <> 0 Then lvwDebug.TopItem = lvwDebug.Items(0)
+                            Catch : End Try
+                            lvwDebug.Refresh()
+                        End Sub)
         End If
 
     End Sub
@@ -192,11 +319,12 @@ Public Class DebugForm
 
         Dim newItem As New ListViewItem(msgContent)
         newItem.SubItems.Add(timeNow.ToString("HH:mm:ss.ff"))
-        newItem.SubItems.Add(If(newLine > 1, timeSpan.TotalMilliseconds.ToString("#,##0.00"), "-")) ' 第一列剛啟動, 沒有耗時就不填
+        newItem.SubItems.Add(If(newLine > 1, timeSpan.TotalMilliseconds.ToString("#,##0.00"), "-")) ' Index 2: Step (物理間隔)
+        newItem.SubItems.Add("")                                                                    ' Index 3: Elapsed (邏輯耗時，預設空，由 Timer_Tick 填入)
 
         ' 2026/3/28 by Gemini: 預先計算快取資訊存入tag備用
         Dim tag As New DebugItemTag()
-        tag.textFullRow = (newItem.Text & " " & newItem.SubItems(1).Text & " " & newItem.SubItems(2).Text).ToLower()
+        tag.textFullRow = (newItem.Text & " " & newItem.SubItems(1).Text & " " & newItem.SubItems(2).Text & " " & newItem.SubItems(3).Text).ToLower()
         tag.isHit = CheckIsHitInternal(tag.textFullRow) ' 新訊息加入瞬間也要先比對是否已符合搜尋字串
         tag.timeStamp = timeNow                         ' 2026/3/28 by Gemini: 保留原始精度供日後計算
         newItem.Tag = tag
@@ -215,16 +343,19 @@ Public Class DebugForm
 
         If itemsToAdd.Count > 0 Then
             ' 2026/03/31 by Gemini: 自動為「結束」行預算總耗時
+            ' 2026/04/11 by Gemini: 改填入 SubItems(3) (Elapsed 欄位)，並支援跨集合搜尋 (itemsToAdd)
             For Each lvi In itemsToAdd
                 If lvi.Text.Contains("結束") Then
-                    Dim pair As ListViewItem = FindSimilarPair(lvi)
+                    Dim pair As ListViewItem = FindSimilarPair(lvi, itemsToAdd)
                     If pair IsNot Nothing Then
                         Dim tagCurrent = TryCast(lvi.Tag, DebugItemTag)
                         Dim tagPair = TryCast(pair.Tag, DebugItemTag)
 
-                        If tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
+                        if tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
                             Dim totalMs As Double = Math.Abs((tagCurrent.timeStamp - tagPair.timeStamp).TotalMilliseconds)
-                            lvi.SubItems(2).Text = totalMs.ToString("#,##0.00")
+                            lvi.SubItems(3).Text = totalMs.ToString("#,##0.00")
+                            ' by Gemini, 2026/04/11: 填入數值後同步更新搜尋快取
+                            tagCurrent.textFullRow = (lvi.Text & " " & lvi.SubItems(1).Text & " " & lvi.SubItems(2).Text & " " & lvi.SubItems(3).Text).ToLower()
                         End If
                     End If
                 End If
@@ -237,7 +368,17 @@ Public Class DebugForm
 
                 ' 💡 2026/04/01 by Gemini:
                 ' EnsureVisible 必須在 EndUpdate 之後呼叫，避免在暫停繪製期間滾動引發的瞬間畫面撕裂與閃爍
-                .Items(.Items.Count - 1).EnsureVisible()
+                If .Items.Count > 0 Then
+                    Dim lastItem = .Items(.Items.Count - 1)
+                    lastItem.EnsureVisible()
+
+                    ' 2026/04/09 by Gemini: 修正游標前進但舊選取殘留的問題
+                    ' 由於已開啟 MultiSelect=True，直接設 Selected=True 會變成加選
+                    ' 因此需先手動清除前次的選取，再設定最後一項，並賦予 Focused 確保游標真正前進
+                    .SelectedItems.Clear()
+                    lastItem.Selected = True
+                    lastItem.Focused = True
+                End If
             End With
         End If
 
@@ -275,7 +416,7 @@ Public Class DebugForm
             Dim m As MethodBase = frame.GetMethod()
             If m Is Nothing OrElse m.DeclaringType Is Nothing Then Continue For
 
-            ' 排除 DebugForm 內部成員與 Dbg 相關噪音
+            ' 排除 DebugForm 內部成員與 _dbg 相關噪音
             Dim typeName As String = m.DeclaringType.Name
             If m.DeclaringType Is GetType(DebugForm) OrElse typeName.Contains("DebugForm") Then Continue For
             If m.Name.Contains("Dbg") OrElse m.Name.Contains("WhoCallsMe") Then Continue For
@@ -397,7 +538,12 @@ Public Class DebugForm
         ' 3. 執行計算並更新 UI (使用絕對值確保正數顯示)
         If anchorFound Then
             Dim diffMs As Double = Math.Abs((tagCurrent.timeStamp - t_anchor).TotalMilliseconds)
-            selectedItem.SubItems(2).Text = diffMs.ToString("#,##0.00")
+            ' by Gemini, 2026/04/11: 根據配對來源決定填入哪一欄
+            If selectedItem.Text.Contains("結束") Then
+                selectedItem.SubItems(3).Text = diffMs.ToString("#,##0.00") ' 總耗時
+            Else
+                selectedItem.SubItems(2).Text = diffMs.ToString("#,##0.00") ' 物理間隔
+            End If
         End If
 
     End Sub
@@ -434,6 +580,15 @@ Public Class DebugForm
         ' ✅ 2026/03/31 by Gemini: 強制設定 Clip 區域。在極寬視窗 (>2000px) 且無捲軸時，
         ' GDI+ 可能因內部座標計算偏移而遺失繪圖，顯式 SetClip 可解決此問題。
         e.Graphics.SetClip(e.Bounds)
+
+        ''' 2026/04/12 by Claude: 同時清除 GDI 系統 clip，確保 TextRenderer 不受 dirty region 限制
+        ''' 否則 ScrollBar 消失時 dirty region 只有右側條帶，TextRenderer (GDI) 畫不出左側文字
+        ''Dim hDC As IntPtr = e.Graphics.GetHdc()
+        ''Dim hRgn As IntPtr = CreateRectRgn(e.Bounds.Left, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom)
+        ''SelectClipRgn(hDC, hRgn)
+        ''DeleteObject(hRgn)
+        ''e.Graphics.ReleaseHdc(hDC)
+        ''e.Graphics.SetClip(e.Bounds)    ' GDI+ clip 同步設定
 
         ' Step 1. Background
         Dim backColor As Color = e.Item.BackColor
@@ -493,27 +648,52 @@ Public Class DebugForm
                 If m.Index > lastPos Then
                     Dim normalPart As String = itemText.Substring(lastPos, m.Index - lastPos)
                     Dim szNormal = TextRenderer.MeasureText(e.Graphics, normalPart, e.Item.Font, New Size(Integer.MaxValue, e.Bounds.Height), TextFormatFlags.NoPadding)
+
+                    ' 💡 2026/04/13 by Gemini 3 Flash: 邊界防禦 — 若即將溢出，則強制截斷並退出
+                    If currentX + szNormal.Width > textRect.Right Then
+                        TextRenderer.DrawText(e.Graphics, normalPart, e.Item.Font, New Rectangle(currentX, e.Bounds.Y, textRect.Right - currentX, e.Bounds.Height), foreColor, flags Or TextFormatFlags.EndEllipsis)
+                        lastPos = itemText.Length : Exit For
+                    End If
+
                     Dim rDraw As New Rectangle(currentX, e.Bounds.Y, szNormal.Width, e.Bounds.Height)
-                    TextRenderer.DrawText(e.Graphics, normalPart, e.Item.Font, rDraw, foreColor, TextFormatFlags.VerticalCenter Or TextFormatFlags.NoPadding)
+                    TextRenderer.DrawText(e.Graphics, normalPart, e.Item.Font, rDraw, foreColor, flags)
                     currentX += szNormal.Width
                 End If
+
                 ' 繪製高亮背景與文字
                 Dim matchPart As String = m.Value
                 Dim szMatch = TextRenderer.MeasureText(e.Graphics, matchPart, e.Item.Font, New Size(Integer.MaxValue, e.Bounds.Height), TextFormatFlags.NoPadding)
+
+                ' 💡 2026/04/13 by Gemini 3 Flash: 邊界防禦 (高亮塊)
+                If currentX + szMatch.Width > textRect.Right Then
+                    Using highlightBrush As New SolidBrush(Color.Yellow)
+                        e.Graphics.FillRectangle(highlightBrush, New Rectangle(currentX, e.Bounds.Y + 2, textRect.Right - currentX, e.Bounds.Height - 4))
+                    End Using
+                    TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, New Rectangle(currentX, e.Bounds.Y, textRect.Right - currentX, e.Bounds.Height), Color.Black, flags Or TextFormatFlags.EndEllipsis)
+                    lastPos = itemText.Length : Exit For
+                End If
+
                 Using highlightBrush As New SolidBrush(Color.Yellow)
                     e.Graphics.FillRectangle(highlightBrush, New Rectangle(currentX, e.Bounds.Y + 2, szMatch.Width, e.Bounds.Height - 4))
                 End Using
                 Dim rMatch As New Rectangle(currentX, e.Bounds.Y, szMatch.Width, e.Bounds.Height)
-                TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, rMatch, Color.Black, TextFormatFlags.VerticalCenter Or TextFormatFlags.NoPadding)
+                TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, rMatch, Color.Black, flags)
                 currentX += szMatch.Width
                 lastPos = m.Index + m.Length
             Next
+
             ' 繪製剩餘文字
             If lastPos < itemText.Length Then
                 Dim remainingPart As String = itemText.Substring(lastPos)
                 Dim szRemaining = TextRenderer.MeasureText(e.Graphics, remainingPart, e.Item.Font, New Size(Integer.MaxValue, e.Bounds.Height), TextFormatFlags.NoPadding)
-                Dim rRem As New Rectangle(currentX, e.Bounds.Y, szRemaining.Width, e.Bounds.Height)
-                TextRenderer.DrawText(e.Graphics, remainingPart, e.Item.Font, rRem, foreColor, TextFormatFlags.VerticalCenter Or TextFormatFlags.NoPadding)
+
+                ' 💡 2026/04/13 by Gemini 3 Flash: 邊界防禦 (剩餘塊)
+                If currentX + szRemaining.Width > textRect.Right Then
+                    TextRenderer.DrawText(e.Graphics, remainingPart, e.Item.Font, New Rectangle(currentX, e.Bounds.Y, textRect.Right - currentX, e.Bounds.Height), foreColor, flags Or TextFormatFlags.EndEllipsis)
+                Else
+                    Dim rRem As New Rectangle(currentX, e.Bounds.Y, szRemaining.Width, e.Bounds.Height)
+                    TextRenderer.DrawText(e.Graphics, remainingPart, e.Item.Font, rRem, foreColor, flags)
+                End If
             End If
         End If
         ' ✅ 恢復 Clip 區域
@@ -682,17 +862,18 @@ Public Class DebugForm
             keywords.Any(Function(kw) fullText.Contains(kw.ToLower()))) ' OR
 
     End Function
-    Private Function FindSimilarPair(selectedItem As ListViewItem) As ListViewItem
+    Private Function FindSimilarPair(selectedItem As ListViewItem, Optional additionalItems As List(Of ListViewItem) = Nothing) As ListViewItem
         ' by Gemini, 2026/03/29: 巢狀雙向配對搜尋 (Stack 計數器演算法)
+        ' by Gemini, 2026/04/11: 支援 additionalItems 參數，解決同一批 Timer 寫入時新項目未掛載 ListView 的配對問題。
         '   點選「開始」→ 向下找配對的「結束」
         '   點選「結束」→ 向上找配對的「開始」
         '   遇到同名的巢狀呼叫時，使用 depth 計數器確保配對到正確的層級
-        '   Dbg("Start: This is a test.")
-        '   Dbg("Enter: This is a test.")
-        '   Dbg("Done: This is a test.")
-        '   Dbg("Begin: This is a test.")
-        '   Dbg("Ended: This is a test.")
-        '   Dbg("Finish: This is a test.")
+        '   _dbg("Start: This is a test.")
+        '   _dbg("Enter: This is a test.")
+        '   _dbg("Done: This is a test.")
+        '   _dbg("Begin: This is a test.")
+        '   _dbg("Ended: This is a test.")
+        '   _dbg("Finish: This is a test.")
         Dim txt As String = selectedItem.Text
         Dim coreName As String = RemoveBeginEnd(txt)
         Dim isBegin As Boolean = txt.Contains("開始")
@@ -716,7 +897,33 @@ Public Class DebugForm
             Next
         ElseIf isEnd Then
             ' 向上搜尋配對的「開始」
-            For i As Integer = selectedItem.Index - 1 To 0 Step -1
+
+            ' 💡 Level 1: 先在「同一批批次(待處理)」清單中往回搜尋 (優先級最高，因為距離最近)
+            If additionalItems IsNot Nothing Then
+                ' 從 selectedItem 在清單中的位置往前找
+                Dim selfIdx As Integer = additionalItems.IndexOf(selectedItem)
+                If selfIdx > 0 Then
+                    For i As Integer = selfIdx - 1 To 0 Step -1
+                        Dim item As ListViewItem = additionalItems(i)
+                        Dim itemCore As String = RemoveBeginEnd(item.Text)
+                        If IsContentSimilar(coreName, itemCore) Then
+                            If item.Text.Contains("結束") Then
+                                depth += 1
+                            ElseIf item.Text.Contains("開始") Then
+                                If depth = 0 Then Return item
+                                depth -= 1
+                            End If
+                        End If
+                    Next
+                End If
+            End If
+
+            ' 💡 Level 2: 若在當前批次沒找到，再往「已顯示(ListView)」中搜尋
+            ' 2026/04/11 by Gemini: 修正搜尋起點
+            ' 當 selectedItem 尚未加入 ListView 時 (Timer_Tick 批次處理中)，Index 會是 -1。
+            ' 此時應從 ListView 的最末端 (Items.Count - 1) 開始往回找。
+            Dim startIdx As Integer = If(selectedItem.Index >= 0, selectedItem.Index - 1, lvwDebug.Items.Count - 1)
+            For i As Integer = startIdx To 0 Step -1
                 Dim item As ListViewItem = lvwDebug.Items(i)
                 Dim itemCore As String = RemoveBeginEnd(item.Text)
                 If IsContentSimilar(coreName, itemCore) Then

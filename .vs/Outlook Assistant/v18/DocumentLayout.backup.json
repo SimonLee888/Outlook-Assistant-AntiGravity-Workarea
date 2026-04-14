@@ -3,24 +3,28 @@
   "WorkspaceRootPath": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
-      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_maintabs.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
-      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1_maintabs.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}|Form",
-      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}|Form"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_sqlite2.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
       "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1_sqlite2.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_outlook.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
       "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1_outlook.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_maintabs.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
+      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1_maintabs.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
+      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1_win32api.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}",
+      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1_win32api.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|d:\\users\\simon\\dropbox\\\u79C1\u4EBA\u6587\u4EF6\\visual studio\\visual studio 18 (2026)\\outlook assistant - (antigravity\u6E2C\u8A66\u5340)\\form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}|Form",
+      "RelativeMoniker": "D:0:0:{A446BD5D-1C97-4BB3-A7C8-AE77D9A40927}|Outlook Assistant.vbproj|solutionrelative:form1.vb||{2C015C70-C72C-11D0-88C3-00A0C9110049}|Form"
     }
   ],
   "DocumentGroupContainers": [
@@ -29,62 +33,61 @@
       "VerticalTabListWidth": 256,
       "DocumentGroups": [
         {
-          "DockedWidth": 289,
-          "SelectedChildIndex": 0,
+          "DockedWidth": 347,
+          "SelectedChildIndex": 3,
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 0,
+              "DocumentIndex": 3,
               "Title": "Form1.vb",
               "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1.vb",
               "RelativeDocumentMoniker": "Form1.vb",
               "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1.vb",
               "RelativeToolTip": "Form1.vb",
-              "ViewState": "AgIAAFQAAAAAAAAAAAAMwJYBAAAZAAAAAAAAAA==",
+              "ViewState": "AgIAAI8CAAAAAAAAAAApwL8CAAAPAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
-              "WhenOpened": "2026-04-06T09:04:54.095Z",
-              "IsPinned": true,
-              "EditorCaption": ""
+              "WhenOpened": "2026-04-11T17:26:40.014Z",
+              "IsPinned": true
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 2,
               "Title": "Form1_MainTabs.vb",
               "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_MainTabs.vb",
               "RelativeDocumentMoniker": "Form1_MainTabs.vb",
               "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_MainTabs.vb",
               "RelativeToolTip": "Form1_MainTabs.vb",
-              "ViewState": "AgIAABwAAAAAAAAAAAAQwBUDAAALAAAAAAAAAA==",
+              "ViewState": "AgIAAAkBAAAAAAAAAADgvzYBAABLAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
-              "WhenOpened": "2026-04-06T09:04:46.33Z",
-              "IsPinned": true,
-              "EditorCaption": ""
+              "WhenOpened": "2026-04-11T17:26:45.243Z",
+              "IsPinned": true
             },
             {
               "$type": "Document",
-              "DocumentIndex": 4,
+              "DocumentIndex": 1,
               "Title": "Form1_Outlook.vb",
               "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_Outlook.vb",
               "RelativeDocumentMoniker": "Form1_Outlook.vb",
               "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_Outlook.vb",
               "RelativeToolTip": "Form1_Outlook.vb",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAC0AAAAjAAAAAAAAAA==",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABkAAAASAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
-              "WhenOpened": "2026-04-06T09:04:24.864Z",
+              "WhenOpened": "2026-04-11T17:26:47.636Z",
               "IsPinned": true
             },
             {
               "$type": "Document",
-              "DocumentIndex": 3,
+              "DocumentIndex": 0,
               "Title": "Form1_SQLite2.vb",
               "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_SQLite2.vb",
               "RelativeDocumentMoniker": "Form1_SQLite2.vb",
               "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_SQLite2.vb",
               "RelativeToolTip": "Form1_SQLite2.vb",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABcAAABHAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
-              "WhenOpened": "2026-04-06T10:32:59.703Z",
-              "IsPinned": true
+              "WhenOpened": "2026-04-11T17:26:49.837Z",
+              "IsPinned": true,
+              "EditorCaption": ""
             },
             {
               "$type": "Bookmark",
@@ -116,19 +119,45 @@
             },
             {
               "$type": "Bookmark",
+              "Name": "ST:0:0:{c6f34f0d-7ae5-4f3a-be61-fe0c21ae9eb8}"
+            },
+            {
+              "$type": "Bookmark",
               "Name": "ST:0:0:{aa2115a1-9712-457b-9047-dbb71ca2cdd2}"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
+              "DocumentIndex": 5,
               "Title": "Form1.vb [\u8A2D\u8A08]",
               "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1.vb",
               "RelativeDocumentMoniker": "Form1.vb",
               "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1.vb [\u8A2D\u8A08]",
               "RelativeToolTip": "Form1.vb [\u8A2D\u8A08]",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
-              "WhenOpened": "2026-04-08T12:55:34.562Z",
+              "WhenOpened": "2026-04-13T13:23:25.388Z",
               "EditorCaption": " [\u8A2D\u8A08]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "Form1_Win32API.vb",
+              "DocumentMoniker": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_Win32API.vb",
+              "RelativeDocumentMoniker": "Form1_Win32API.vb",
+              "ToolTip": "D:\\Users\\Simon\\Dropbox\\\u79C1\u4EBA\u6587\u4EF6\\Visual Studio\\Visual Studio 18 (2026)\\Outlook Assistant - (AntiGravity\u6E2C\u8A66\u5340)\\Form1_Win32API.vb",
+              "RelativeToolTip": "Form1_Win32API.vb",
+              "ViewState": "AgIAAP0AAAAAAAAAAIAwwC4BAABUAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003361|",
+              "WhenOpened": "2026-04-14T04:34:32.181Z"
+            }
+          ]
+        },
+        {
+          "DockedWidth": 159,
+          "SelectedChildIndex": -1,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{1c64b9c2-e352-428e-a56d-0ace190b99a6}"
             }
           ]
         },
@@ -156,6 +185,10 @@
     }
   ],
   "FramesPinnedWhenTheyWereClosed": [
-    -1702924625
+    -1702924625,
+    -1220298549,
+    237818939,
+    -1275347523,
+    123556560
   ]
 }

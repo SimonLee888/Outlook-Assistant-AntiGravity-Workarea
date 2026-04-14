@@ -34,6 +34,10 @@
   <ItemGroup>
     <Compile Remove="Form1_bak.vb" />
     <Compile Remove="Form1_SQLite.vb" />
+    <Compile Remove="Form1_SQLite2 %28by Claude, 拿掉sz%29.vb" />
+    <Compile Remove="Form1_SQLite2 %28by Gemini%29.vb" />
+    <Compile Remove="Form1_SQLite2 %28by Gemini, 處理fn%29.vb" />
+    <Compile Remove="Form1_SQLite2 %28原始內容%29.vb" />
     <Compile Remove="SelectColorTheme.vb" />
   </ItemGroup>
 

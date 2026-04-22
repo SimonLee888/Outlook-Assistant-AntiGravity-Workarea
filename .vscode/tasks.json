@@ -1,0 +1,26 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Outlook Assistant (Debug)",
+            "type": "shell",
+            "command": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Outlook Assistant.vbproj",
+                "/p:Configuration=Debug",
+                "/p:Platform=Any CPU",
+                "/t:Build",
+                "/v:minimal"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$msCompile"
+        }
+    ]
+}

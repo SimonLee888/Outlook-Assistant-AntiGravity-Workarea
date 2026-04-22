@@ -1,0 +1,2 @@
+libpff-python-windows>=20231205; platform_system == "Windows" and python_version < "3.14"
+tkinterweb>=4.24.1; platform_system == "Windows" and python_version < "3.14"

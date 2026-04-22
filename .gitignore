@@ -1,0 +1,36 @@
+# .gitignore for Outlook Assistant Project
+# by AntiGravity, 2026/04/22
+
+# Visual Studio temp and user-specific files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docattachments.res
+*.cache
+*.opendb
+
+# Build outputs
+bin/
+obj/
+
+# SQLite Databases (Preventing large binary changes in git)
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+
+# Outlook Data Files (Too large for standard GitHub)
+*.ost
+*.pst
+
+# Dropbox and Sync temporary files
+sync.ffs_db
+.dropbox
+.dropbox.cache
+
+# General Temp Files
+*.log
+*.tmp
+[Tt]emp/
+_ReSharper*/

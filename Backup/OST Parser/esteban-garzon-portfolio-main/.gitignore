@@ -1,0 +1,21 @@
+node_modules
+.next
+out
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.dll
+*.env
+*.env.*
+moraware_project/
+slab_project/
+Outlook extractor project/
+livedataproj/
+livedataproj.zip
+!public/**/*.pdf

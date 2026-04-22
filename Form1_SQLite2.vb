@@ -1,8 +1,8 @@
 ﻿Imports System.Collections.Concurrent
-Imports System.Runtime.Intrinsics.X86
 Imports System.Text.Json
 Imports Microsoft.Data.Sqlite
 Imports Microsoft.Office.Interop
+'Imports System.Runtime.Intrinsics.X86
 
 ' ==============================================================
 ' Form1_SQLite2.vb  —  SQLite 持久化快取層
@@ -15,37 +15,41 @@ Imports Microsoft.Office.Interop
 '   - CloseDatabase()                           ' FormClosing 呼叫
 '   - LoadCachesFromSQLiteAsync()               ' LoadCache 按鈕手動讀出：Bulk Load，輸出詳細 _dbg 分項
 '   - SaveCachesToSQLiteAsync()                 ' SaveCache 按鈕手動存入：① CleanupOrphanFolderPath → ② 批次寫入四張表
-'   - CleanupOrphanFolderPath(livePaths)        ' 清除 DB 中已不存在的 folder_path（原 PurgeStaleFolders），SaveCache 時順帶呼叫
-'   - RenewCacheAsync(includeSize As Boolean)   ' RenewCache 按鈕：Phase1~6 完整更新（2026-04-09 新增）
-'   - RenewAttachMailListAsync(folder, fPath)   ' 三路比對更新 attach_maillist（2026-04-09 新增）
+'   - CleanupOrphanFolderPath(livePaths)        ' 清除 DB 中已不存在的 folder_path (原 PurgeStaleFolders)，SaveCache 時順帶呼叫
+'   - RenewCacheAsync(includeSize As Boolean)   ' RenewCache 按鈕：Phase1~6 完整更新 (2026-04-09 新增) 
+'   - RenewAttachMailListAsync(folder, fPath:=fPath)   ' 三路比對更新 attach_maillist (2026-04-09 新增) 
 '
 '   - DbGetFolderStats(folderPath)              ' folder_stats 單行查詢
 '   - DbGetMailBasic(folderPath)                ' mail_basic WHERE folder_path=? 全部行
 '   - DbGetAttachFilenames(entryId)             ' mail_attachments 單行查詢
 '   - DbGetYearCountsForFolder(folderPath)      ' year_counts WHERE folder_path=? 全部行
 '   - DbGetMonthCountsForFolder(cacheKey)       ' 2026-04-09 新增，cacheKey = FolderPath_year
-'   - GetDatabaseSummary() → (fc, mb, at, yc, kb)   ' DB 統計摘要（四張表行數 + 檔案 KB）
+'   - GetDatabaseSummary() → (fc, mb, at, yc, mc, basic, kb) ' DB 統計摘要 (六張表行數 + 檔案 KB) 
 ' ---------------------------------------------------------------
 '
-'   五張表結構（2026-04-09 新增 month_counts）合一個 cache.db (LocalAppData)
+'   五張表結構 (2026-04-09 新增 month_counts) 合一個 cache.db (LocalAppData)
+'   六張表結構 (2026-04-22 新增 basic_maillist) 合一個 cache.db (LocalAppData)
 '       folder_stats        (folder_path PK, mail_count, mail_count_all, folder_count, folder_count_all,
 '                            folder_size, folder_size_all, content_count_snapshot, updated_at)
-'       mail_basic          (entry_id PK, folder_path, subject, msg_size, received_time, sender_name,
-'                            attach_count, item_count_snap, updated_at)
-'       mail_attachments    (entry_id PK, folder_path, filenames TEXT JSON, msg_size, updated_at)
-'       year_counts         (folder_path+year PK, count, updated_at)        ← 2026-04-08 新增
-'       month_counts        (folder_path+year+month PK, count, updated_at)  ← 2026-04-08 新增
-'                           (folder_path+year+month PK, count, updated_at)  ← 2026-04-09 修正 PK 設計
+'       year_counts         (folder_path+year PK, count, updated_at)        
+'       month_counts        (folder_path+year+month PK, count, updated_at)  
+'       attach_maillist     (entry_id PK, folder_path, subject, msg_size, received_time, sender_name,
+'                            attach_count, item_count_snap, updated_at)  ← 專供 Tab3 尋找附件使用
+'       attach_filenames    (entry_id PK, folder_path, filenames TEXT JSON, msg_size, updated_at)
+'       basic_maillist      (entry_id PK, folder_path, subject, msg_size, received_time, sender_name,
+'                            topic, item_count_snap, updated_at)         ← 專供 Tab4/Tab5 系列與重複郵件使用
+'                           
 ' 設計決策 (2026-04-06):
-'   1. 三張表合一個 cache.db，跨表 Transaction 保證原子性，一個 Connection 管理最簡單
+'   1. 跨表 Transaction 保證原子性，一個 Connection 管理最簡單
 '   2. 手動控制 (SaveCache / LoadCache 按鈕)，Debug 階段方便目視確認正確性
 '      正式版再切換成 Layer2.5 lazy SELECT + 增量寫入
 '   3. content_count_snapshot 存 _cacheMailCount[path] 的值 (即 PR_CONTENT_COUNT 的讀取結果)
 '      Load 後可快速判斷快取是否仍有效，完全不需要呼叫任何 COM
 '   4. MailItemInfo 欄位以文字儲存；List(Of String) 附件名稱序列化為 JSON array
-'   5. _cacheFolderTree / _cacheSubFolderList 含 COM 物件，永遠不寫入 SQLite
+'   5. _cacheFolderTree / _cacheSubTreeList 含 COM 物件，永遠不寫入 SQLite
 '   6. LoadFolderStatsInner 使用 TryAdd：若記憶體已有值 (Layer2.5 已讀過)，保留記憶體版本
 '      若想強制以 DB 為準 (完整重置)，改用直接賦值 _cacheMailCount(path) = ...
+'   7. (2026-04-22) 拆分 attach_maillist 與 basic_maillist：保持 Tab3 與 Tab4/5 邏輯與資料邊界獨立。
 ' ==============================================================
 ' ---------------------------------------------------------------
 Partial Class Form1
@@ -66,6 +70,7 @@ Partial Class Form1
         Public fs As Long = -1          ' folder_size
         Public fsa As Long = -1         ' folder_size_all
         Public snap As Integer = -1     ' content_count_snapshot (= PR_CONTENT_COUNT at save time)
+        Public path As String = ""      ' folder_path        ' by Gemini 3.0 flash, 2026/04/16: 新增路徑標識，供 GetSubtreeToList Tuple 重建使用
 
         ' by Gemini, 2026/04/10: 新增身分標識與排序標籤，供 TreeView/BFS 持久化優化使用
         Public eid As String = ""       ' entry_id
@@ -112,7 +117,7 @@ Partial Class Form1
 
             _dbg("", "資料表確認完成")
 
-            timerSaveCache.Interval = 1 * 60 * 1000 ' 每分鐘自動保存一次快取資料到磁碟
+            timerSaveCache.Interval = 1 * 60 * 1000 ' 每60sec自動保存一次快取資料到磁碟
             timerSaveCache.Start()                  ' 啟動定時快取保存
 
         Catch ex As System.Exception
@@ -177,7 +182,19 @@ Partial Class Form1
                     item_count_snap INTEGER,
                     updated_at      TEXT
                                                         );
+                CREATE TABLE IF NOT EXISTS basic_maillist (
+                    entry_id        TEXT    PRIMARY KEY,
+                    folder_path     TEXT    NOT NULL,
+                    subject         TEXT,
+                    msg_size        INTEGER,
+                    received_time   TEXT,
+                    sender_name     TEXT,
+                    topic           TEXT,
+                    item_count_snap INTEGER,
+                    updated_at      TEXT
+                                                        );
                 CREATE INDEX IF NOT EXISTS idx_mb_folder ON attach_maillist(folder_path);
+                CREATE INDEX IF NOT EXISTS idx_basic_folder ON basic_maillist(folder_path);
                 CREATE TABLE IF NOT EXISTS attach_filenames (
                     entry_id        TEXT    PRIMARY KEY,
                     folder_path     TEXT    NOT NULL,
@@ -206,19 +223,21 @@ Partial Class Form1
         ' 不在此處 DROP TABLE，避免每次啟動都清空已存資料。
 
     End Function
-    Private Function GetDatabaseSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, mc As Integer, kb As Long, lastTs As String)
+    Private Function GetDatabaseSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, mc As Integer, basic As Integer, kb As Long, lastTs As String)
         ' ---------------------------------------------------------------
         ' GetDatabaseSummary — 取得 DB 統計摘要，供按鈕顯示
-        ' 回傳 (folder_stats 行數, attach_maillist 行數, attach_filenames 行數, year_counts 行數, month_counts 行數, 檔案大小 KB, 最後紀錄日期)
+        ' 回傳 (folder_stats, attach_maillist, attach_filenames, year_counts, month_counts, basic_maillist, KB, lastTs)
         ' 2026/04/09 新增 mc = month_counts 行數
         ' 2026/04/10 新增 lastTs = 最後 updated_at 時間
+        ' 2026/04/22 by Gemini 3 Flash: 新增 basic = basic_maillist 行數
         ' ---------------------------------------------------------------
-        If _db Is Nothing Then Return (0, 0, 0, 0, 0, 0, "N/A")
+        If _db Is Nothing Then Return (0, 0, 0, 0, 0, 0, 0L, "N/A")
 
         Try
-            Dim fc, mb, at, yc, mcount As Integer : Dim lastTs As String = "N/A"
+            Dim fc, mb, at, yc, mcount, basicCount As Integer : Dim lastTs As String = "N/A"
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM folder_stats", _db) : fc = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_maillist", _db) : mb = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM basic_maillist", _db) : basicCount = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_filenames", _db) : at = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM year_counts", _db) : yc = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM month_counts", _db) : mcount = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
@@ -230,11 +249,11 @@ Partial Class Form1
             End Using
 
             Dim fi As New IO.FileInfo(_dbPath)
-            Return (fc, mb, at, yc, mcount, If(fi.Exists, fi.Length \ 1024L, 0L), lastTs)
+            Return (fc, mb, at, yc, mcount, basicCount, If(fi.Exists, fi.Length \ 1024L, 0L), lastTs)
 
         Catch ex As System.Exception
             _dbg("       ├ 錯誤", ex.Message) ' by Gemini, 2026/04/11: Level 3
-            Return (0, 0, 0, 0, 0, 0, "Err")
+            Return (0, 0, 0, 0, 0, 0, 0L, "Err")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
 
@@ -296,12 +315,12 @@ Partial Class Form1
         If _db Is Nothing Then _dbg("", "DB 未初始化") : Return
 
         Dim sw As New Diagnostics.Stopwatch : sw.Start()
-        Dim savedFolders, savedAttachMailList, savedAttachFilenames As Integer
+        Dim savedFolders, savedAttachMailList, savedAttachFilenames, savedBasic As Integer
         Try
             ProgressBar1.Text = "正在存入快取..." : Cursor = Cursors.WaitCursor
 
             ' ① 先清孤兒：收集目前記憶體快取中所有仍存在的 folder_path，清除 DB 中已不存在的行
-            ' 用記憶體快取的 key 聯集代表「目前已知 live 的資料夾」（比重新 BFS 掃 COM 快得多）
+            ' 用記憶體快取的 key 聯集代表「目前已知 live 的資料夾」 (比重新 BFS 掃 COM 快得多) 
             Dim livePaths As New HashSet(Of String)()
             For Each k In _cacheMailCount.Keys : livePaths.Add(k) : Next
             For Each k In _cacheFolderCount.Keys : livePaths.Add(k) : Next
@@ -317,23 +336,23 @@ Partial Class Form1
                                                Dim a = SaveAttachFilenamesInner(txn)
                                                Dim y = SaveYearCountsInner(txn)
                                                Dim m = SaveMonthCountsInner(txn)   ' 2026/04/09 新增
+                                               Dim basic = SaveFolderBasicMailInfosInner(txn)
                                                txn.Commit()
-                                               Return (f, b, a, y, m)
+                                               Return (f, b, a, y, m, basic)
                                            Catch ex As System.Exception
                                                txn.Rollback() : Throw
                                            End Try
                                        End Using
                                    End Function)
 
-            savedFolders = r.Item1 : savedAttachMailList = r.Item2 : savedAttachFilenames = r.Item3
-            Dim savedYears As Integer = r.Item4
-            Dim savedMonths As Integer = r.Item5
+            savedFolders = r.f : savedAttachMailList = r.b : savedAttachFilenames = r.a
+            Dim savedYears As Integer = r.y, savedMonths As Integer = r.m : savedBasic = r.basic
             sw.Stop()
 
             ' ③ 統計：各快取字典目前的 entry 數
             Dim statLine1 = $"① [記憶體] MailCount: {_cacheMailCount.Count} / MailCountAll: {_cacheMailCountAll.Count} / FolderCount: {_cacheFolderCount.Count} / FolderCountAll: {_cacheFolderCountAll.Count}"
             Dim statLine2 = $"② [記憶體] FolderSize: {_cacheFolderSize.Count} / FolderSizeAll: {_cacheFolderSizeAll.Count} / AttachPreScan: {_cacheAttachMailList.Count} / AttachFilename: {_cacheAttachFilename.Count}"
-            Dim statLine3 = $"③ [寫入DB] folder_stats: {savedFolders} 筆 / attach_maillist: {savedAttachMailList} 筆 / attach_filenames: {savedAttachFilenames} 筆 / year_counts: {savedYears} 筆 / month_counts: {savedMonths} 筆 / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
+            Dim statLine3 = $"③ [寫入DB] folder_stats: {savedFolders} 筆 / basic_maillist: {savedBasic} 筆 / attach_maillist: {savedAttachMailList} 筆 / attach_filenames: {savedAttachFilenames} 筆 / year_counts: {savedYears} 筆 / month_counts: {savedMonths} 筆 / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
             Dim st = GetDatabaseSummary()
             Dim statLine4 = $"④ [DB現況] folder_stats: {st.fc} 筆 / attach_maillist: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / month_counts: {st.mc} 筆 / 檔案: {st.kb} KB"
 
@@ -355,7 +374,7 @@ Partial Class Form1
     End Function
     Private Async Function LoadCachesFromSQLiteAsync() As Task
         ' ---------------------------------------------------------------
-        ' LoadCachesFromSQLiteAsync — 從 SQLite 讀回所有快取（Bulk Load）
+        ' LoadCachesFromSQLiteAsync — 從 SQLite 讀回所有快取 (Bulk Load) 
         ' 對應 Setting 頁 LoadCache 按鈕，Debug 階段使用
         ' 完成後輸出詳細 _dbg 分項：每個快取字典各自載入了幾筆
         ' ---------------------------------------------------------------
@@ -381,13 +400,14 @@ Partial Class Form1
                                        Dim b = LoadAttachMailListInner()
                                        Dim a = LoadAttachFilenamesInner()
                                        Dim y = LoadYearCountsInner()
-                                       Dim m = LoadMonthCountsInner()   ' 2026/04/09 新增
-                                       Return (f, b, a, y, m)
+                                       Dim m = LoadMonthCountsInner()               ' 2026/04/09 新增
+                                       Dim basic = LoadFolderBasicMailInfosInner()  ' 2026/04/22 by Gemini 3.1 Pro 新增
+                                       Return (f, b, a, y, m, basic)
                                    End Function)
             sw.Stop()
 
             ' 詳細 _dbg：各快取字典 Load 後的增量
-            Dim statLine1 = $"① [folder_stats] 讀入 {r.Item1} 筆 — " &
+            Dim statLine1 = $"① [folder_stats] 讀入 {r.f} 筆 — " &
                             $"MailCount +{_cacheMailCount.Count - beforeMC} / " &
                             $"MailCountAll +{_cacheMailCountAll.Count - beforeMCA} / " &
                             $"FolderCount +{_cacheFolderCount.Count - beforeFC} / " &
@@ -395,21 +415,23 @@ Partial Class Form1
             Dim statLine2 = $"② [folder_stats cont.] " &
                             $"FolderSize +{_cacheFolderSize.Count - beforeFS} / " &
                             $"FolderSizeAll +{_cacheFolderSizeAll.Count - beforeFSA}"
-            Dim statLine3 = $"③ [attach_maillist] 讀入 {r.Item2} 筆 → AttachPreScan +{_cacheAttachMailList.Count - beforePS} 個資料夾"
-            Dim statLine4 = $"④ [attach_filenames] 讀入 {r.Item3} 筆 → AttachFilename +{_cacheAttachFilename.Count - beforeAF} 筆"
-            Dim statLine_yc = $"⑤ [year_counts] 讀入 {r.Item4} 筆 → _yearCountsCache {_cacheYearCounts.Count} 個資料夾"
-            Dim statLine_mc = $"⑥ [month_counts] 讀入 {r.Item5} 筆 → _monthCountsCache {_cacheMonthCounts.Count} 個 cache_key"
+            Dim statLine3 = $"③ [attach_maillist] 讀入 {r.b} 筆 → AttachPreScan +{_cacheAttachMailList.Count - beforePS} 個資料夾"
+            Dim statLine4 = $"④ [attach_filenames] 讀入 {r.a} 筆 → AttachFilename +{_cacheAttachFilename.Count - beforeAF} 筆"
+            Dim statLine_yc = $"⑤ [year_counts] 讀入 {r.y} 筆 → _yearCountsCache {_cacheYearCounts.Count} 個資料夾"
+            Dim statLine_mc = $"⑥ [month_counts] 讀入 {r.m} 筆 → _monthCountsCache {_cacheMonthCounts.Count} 個 cache_key"
+            Dim statLine_basic = $"⑦ [basic_maillist] 讀入 {r.basic} 筆 → BasicPreScan {_cacheFolderBasicMailInfos.Count} 個資料夾" ' 2026/04/22 by Gemini 3.1 Pro
             Dim st = GetDatabaseSummary()
-            Dim statLine5 = $"⑦ [DB現況] folder_stats: {st.fc} 筆 / attach_maillist: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / month_counts: {st.mc} 筆 / 檔案: {st.kb} KB / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
+            Dim statLine5 = $"⑧ [DB現況] folder_stats: {st.fc} 筆 / basic_maillist: {st.basic} 筆 / attach_maillist: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / month_counts: {st.mc} 筆 / 檔案: {st.kb} KB / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒" ' 2026/04/22 by Gemini 3.1 Pro: 加入 basic 統計
 
-            ProgressBar1.Text = $"LoadCache 完成 — DB: {st.fc}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆，{st.kb} KB，耗時 {sw.Elapsed.TotalSeconds:0.000} 秒"
-            ProgressBar2.Text = $"記憶體增量 — mailCount+{_cacheMailCount.Count - beforeMC} / attachFilename+{_cacheAttachFilename.Count - beforeAF} / yearCounts:{_cacheYearCounts.Count} 資料夾 / monthCounts:{_cacheMonthCounts.Count} keys"
+            ProgressBar1.Text = $"LoadCache 完成 — DB: {st.fc}/{st.basic}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆，{st.kb} KB，耗時 {sw.Elapsed.TotalSeconds:0.000} 秒" ' 2026/04/22 by Gemini 3.1 Pro
+            ProgressBar2.Text = $"記憶體增量 — mailCount+{_cacheMailCount.Count - beforeMC} / attachFilename+{_cacheAttachFilename.Count - beforeAF} / basicMailInfo:{_cacheFolderBasicMailInfos.Count} 資料夾" ' 2026/04/22 by Gemini 3.1 Pro
             _dbg(" ├ ", statLine1)
             _dbg(" ├ ", statLine2)
             _dbg(" ├ ", statLine3)
             _dbg(" ├ ", statLine4)
             _dbg(" ├ ", statLine_yc)
             _dbg(" ├ ", statLine_mc)
+            _dbg(" ├ ", statLine_basic) ' 2026/04/22 by Gemini 3.1 Pro
             _dbg(" ├ ", statLine5)
 
         Catch ex As System.Exception
@@ -423,99 +445,116 @@ Partial Class Form1
     End Function
     Private Async Function RenewCacheAsync(includeSize As Boolean) As Task
         ' ---------------------------------------------------------------
-        ' RenewCacheAsync — 完整更新 DB 快取（對應 Setting 頁 RenewCache 按鈕）
+        ' RenewCacheAsync — 完整更新 DB 快取 (對應 Setting 頁 RenewCache 按鈕) 
         '
         ' 與 SaveCachesToSQLiteAsync 的差異：
-        '   SaveCache  = 把目前記憶體快取照單全收寫入 DB（不更新過期的值）
+        '   SaveCache  = 把目前記憶體快取照單全收寫入 DB (不更新過期的值) 
         '   RenewCache = 先用 COM 比對 snapshot → 只對有變動的資料夾重新計算 → 寫入 DB
         '
         ' 流程：
-        '   Phase 1. BFS 掃出所有 live folders（COM，~1ms/資料夾）
-        '   Phase 2. 每個 folder 讀 GetLiveFolderSnap vs DB snapshot → 找 dirty folders
+        '   Phase 1. BFS 掃出所有 live folders (COM，~1ms/資料夾) 
+        '   Phase 2. 每個 folder 讀 GetLiveFolderSnapL3 vs DB snapshot → 找 dirty folders
         '   Phase 3. 對每個 dirty folder 重新計算：
-        '              mc/fc（快，~1ms）
-        '              year_counts（GetTable + GetArray，~10-50ms/資料夾）
-        '              month_counts（清記憶體， Phase5 清 DB， 展開時 lazy 重算）
-        '              attach_maillist（GetTable 三路比對，~5ms/資料夾）
-        '              folder_size（選擇性，依 includeSize，GetTable 遍歷，~10-30s/大資料夾）
-        '              清除 mca/fca/fsa 聚合快取（讓下次點選重算）
-        '              清除此 folder 的 month_counts 記憶體快取（不重算，展開年份時 lazy）
+        '              mc/fc (快，~1ms) 
+        '              year_counts (GetTable + GetArray，~10-50ms/資料夾) 
+        '              month_counts (清記憶體， Phase5 清 DB， 展開時 lazy 重算) 
+        '              attach_maillist (GetTable 三路比對，~5ms/資料夾) 
+        '              folder_size (選擇性，依 includeSize，GetTable 遍歷，~10-30s/大資料夾) 
+        '              清除 mca/fca/fsa 聚合快取 (讓下次點選重算) 
+        '              清除此 folder 的 month_counts 記憶體快取 (不重算，展開年份時 lazy) 
         '   Phase 4. 清除所有 dirty folders 的 ancestor 聚合快取
-        '   Phase 5. 批次 DELETE dirty folders 的 month_counts DB rows（不是孤兒，不靠 Cleanup）
+        '   Phase 5. 批次 DELETE dirty folders 的 month_counts DB rows (不是孤兒，不靠 Cleanup) 
         '   Phase 6. CleanupOrphanFolderPath → SaveCachesToSQLiteAsync
         '
-        ' 不更新項目（設計邊界）：
+        ' 不更新項目 (設計邊界) ：
         '   attach_filenames — 最耗時，留給使用者搜尋附件時 lazy 觸發
         '   month_counts     — 清記憶體 + 清 DB，展開年份時 lazy 重算
         ' 2026/04/09 by Claude
         ' ---------------------------------------------------------------
+        ' 2026/04/16 by Simon/Claude: 加入 cToken (OkayNowYouHaveToken)，取代 _cancelRequested + GoTo Cancelled 模式
+        '   Phase1 改用 Dictionary(Of String, Outlook.Folder) liveDict，每個資料夾只讀一次 FolderPath COM 屬性，
+        '   Phase2/3/4 迭代 dict 的 Key/Value，完全省去重複的 folder.FolderPath COM 呼叫（~500 資料夾省 ~250ms）
+        '   Phase2/3 節流改用 ThrottledYieldAsync(sw, cToken, ThrottleFreq.Low)，取代 Mod N + Task.Delay(1)
+        '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
+        ' ---------------------------------------------------------------
+
+        Dim cToken As Threading.CancellationToken = OkayNowYouHaveToken()  ' ✅ 取得新 Token，同時取消上一次未完成的操作
         _dbg("開始", $"includeSize={includeSize}")
         If _db Is Nothing Then _dbg("", "DB 未初始化") : Return
 
         Dim sw As New Diagnostics.Stopwatch : sw.Start()
         Try
             ' ── Phase 1: BFS 掃出所有 live folders ──
+            ' 2026/04/16: 改用 Dictionary(Of String, Outlook.Folder) liveDict
+            '   key = FolderPath (一次 COM 呼叫)，value = Folder 物件
+            '   後續 Phase2/3/4 直接用 kvp.Key 作 fPath，不再打 folder.FolderPath
             ProgressBar1.Text = "RenewCache Phase1: 掃描資料夾清單..." : Cursor = Cursors.WaitCursor
-            Await Task.Delay(1)
+            Await Task.Yield
 
-            Dim liveFolders As New List(Of Outlook.Folder)()
-            Dim livePaths As New HashSet(Of String)()
+            Dim liveDict As New Dictionary(Of String, Outlook.Folder)()
             For Each store As Outlook.Store In _pstStoreList
                 Dim root As Outlook.Folder = TryCast(store.GetRootFolder(), Outlook.Folder)
                 If root Is Nothing Then Continue For
-                For Each f As Outlook.Folder In Await GetSubtreeToList(root, includeSubF:=True)  ' by Claude, 2026/04/11: Async 化後加 Await
-                    liveFolders.Add(f) : livePaths.Add(f.FolderPath)
+
+                ' 2026/04/16 by Gemini: GetSubtreeToList 現在直接回傳 Tuple (Folder, FolderPath)
+                ' 直接將計算好的路徑存入 liveDict，完成 0 COM Call 的清單建立
+                For Each item In Await GetSubtreeToList(root, includeSubF:=True, cToken:=cToken)
+                    If Not liveDict.ContainsKey(item.fPath) Then liveDict.Add(item.fPath, item.Folder)
                 Next
             Next
-            _dbg("Phase1 完成", $"{liveFolders.Count} 個 live folder")
+            Dim livePaths As New HashSet(Of String)(liveDict.Keys)  ' 供 Phase6 CleanupOrphan 使用
+            _dbg("Phase1 完成", $"{liveDict.Count} 個 live folder")
 
             ' ── Phase 2: 比對 snapshot → 找出 dirty folders ──
-            ProgressBar1.Text = $"RenewCache Phase2: 比對 snapshot（共 {liveFolders.Count} 個）..." : Await Task.Delay(1)
-            Dim dirtyFolders As New List(Of Outlook.Folder)()
-            Dim dirtyPaths As New HashSet(Of String)()
+            ' 2026/04/16: 迭代 liveDict，kvp.Key 直接當 fPath，省去 folder.FolderPath COM 呼叫
+            '   節流改用 ThrottledYieldAsync(swThrottle2, cToken, ThrottleFreq.Low)，取代 Mod 100 + Task.Delay(1)
+            ProgressBar1.Text = $"RenewCache Phase2: 比對 snapshot (共 {liveDict.Count} 個) ..."
+            Dim dirtyDict As New Dictionary(Of String, Outlook.Folder)()
             Dim processed As Integer = 0
-            For Each folder As Outlook.Folder In liveFolders
-                If _cancelRequested Then GoTo Cancelled
-                Dim fPath = folder.FolderPath
-                Dim liveSnap = GetLiveFolderSnap(folder)   ' ~0.5ms，PropertyAccessor 單次呼叫
+            Dim swThrottle2 As New Stopwatch : swThrottle2.Start()
+            For Each kvp In liveDict
+                cToken.ThrowIfCancellationRequested()  ' 2026/04/16: 取代 _cancelRequested + GoTo Cancelled
+                Dim fPath As String = kvp.Key : Dim folder As Outlook.Folder = kvp.Value
+                Dim liveSnap As Integer = GetLiveFolderSnapL3(folder, fPath:=fPath)   ' ~0.5ms，PropertyAccessor 單次呼叫 by Gemini 3.0 flash, 2026/04/16
                 Dim row = DbGetFolderStats(fPath)
-                ' dirty 條件：DB 無此路徑（新資料夾）OR snapshot 不一致（有信件增減）
-                If row Is Nothing OrElse row.snap <> liveSnap Then
-                    dirtyFolders.Add(folder) : dirtyPaths.Add(fPath)
-                End If
+                ' dirty 條件：DB 無此路徑 (新資料夾) OR snapshot 不一致 (有信件增減)
+                If row Is Nothing OrElse row.snap <> liveSnap Then dirtyDict.Add(fPath, folder)
                 processed += 1
-                If processed Mod 100 = 0 Then ' todo: 這裡改成throttle, 不要用mod
-                    ProgressBar1.Text = $"RenewCache Phase2: {processed}/{liveFolders.Count}，dirty={dirtyFolders.Count}..."
-                    Await Task.Delay(1)
-                End If
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + ThrottledYieldAsync 與 onThrottled 委派
+                Await ThrottledYieldAsync(swThrottle2, cToken:=cToken, ThrottleFreq.Low,
+                                          Sub() ProgressBar1.Text = $"RenewCache Phase2: {processed}/{liveDict.Count}，dirty={dirtyDict.Count}...")
             Next
-            _dbg("Phase2 完成", $"dirty={dirtyFolders.Count}/{liveFolders.Count}")
+            _dbg("Phase2 完成", $"dirty={dirtyDict.Count}/{liveDict.Count}")
 
             ' ── Phase 3: 對每個 dirty folder 重新計算 ──
-            ProgressBar1.Text = $"RenewCache Phase3: 更新 {dirtyFolders.Count} 個 dirty 資料夾..." : Await Task.Delay(1)
+            ' 2026/04/16: 迭代 dirtyDict，省去 folder.FolderPath COM 呼叫
+            '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
+            '   節流改用 ThrottledYieldAsync(swThrottle3, cToken, ThrottleFreq.Low)，取代 Mod 10 + Task.Delay(1)
+            ProgressBar1.Text = $"RenewCache Phase3: 更新 {dirtyDict.Count} 個 dirty 資料夾..." : Await Task.Delay(1, cToken)
             processed = 0
-            For Each folder As Outlook.Folder In dirtyFolders
-                If _cancelRequested Then GoTo Cancelled
-                Dim fPath = folder.FolderPath
+            Dim swThrottle3 As New Stopwatch : swThrottle3.Start()
+            For Each kvp In dirtyDict
+                cToken.ThrowIfCancellationRequested()  ' 2026/04/16: 取代 _cancelRequested + GoTo Cancelled
+                Dim fPath As String = kvp.Key : Dim folder As Outlook.Folder = kvp.Value
 
                 ' mc / fc — 快，~1ms，直接覆蓋記憶體快取
-                _cacheMailCount(fPath) = GetMailCount(folder)
-                _cacheFolderCount(fPath) = GetFolderCount(folder)
+                _cacheMailCount(fPath) = GetMailCountL3(folder, fPath:=fPath)
+                _cacheFolderCount(fPath) = GetFolderCountL3(folder, fPath:=fPath)
 
                 ' year_counts — 清記憶體強制 L3 重算，結果回寫快取
                 _cacheYearCounts.TryRemove(fPath, Nothing)
-                _cacheYearCounts(fPath) = Await GetYearCountsForFolder(folder)
+                _cacheYearCounts(fPath) = Await GetYearCountsForFolderL3(folder, fPath:=fPath, cToken:=cToken)  ' 2026/04/16: 補 cToken
 
-                ' month_counts — 只清記憶體（Phase5 再清 DB），展開年份時 lazy 重算
+                ' month_counts — 只清記憶體 (Phase5 再清 DB)，展開年份時 lazy 重算
                 For Each mk In _cacheMonthCounts.Keys.Where(Function(k) k.StartsWith(fPath & "_")).ToList()
                     _cacheMonthCounts.TryRemove(mk, Nothing)
                 Next
 
-                ' attach_maillist — 三路比對，更新記憶體快取（不碰 attach_filenames）
-                Await RenewAttachMailListAsync(folder, fPath)
+                ' attach_maillist — 三路比對，更新記憶體快取 (不碰 attach_filenames)
+                Await RenewAttachMailListAsync(folder, fPath:=fPath)
 
-                ' folder_size — 選擇性（GetTable 遍歷 PR_MESSAGE_SIZE，大資料夾需 10~30s）
-                If includeSize Then _cacheFolderSize(fPath) = Await GetFolderSize(folder)
+                ' folder_size — 選擇性 (GetTable 遍歷 PR_MESSAGE_SIZE，大資料夾需 10~30s)
+                If includeSize Then _cacheFolderSize(fPath) = Await GetFolderSizeL3(folder, fPath:=fPath, cToken:=cToken)  ' 2026/04/16: 補 cToken
 
                 ' 聚合快取清除 — 讓 parent 在下次點選時重新 BFS 加總
                 _cacheMailCountAll.TryRemove(fPath, Nothing)
@@ -523,18 +562,18 @@ Partial Class Form1
                 _cacheFolderSizeAll.TryRemove(fPath, Nothing)
 
                 processed += 1
-                If processed Mod 10 = 0 Then ' todo: 這裡改成throttle, 不要用mod
-                    ProgressBar1.Text = $"RenewCache Phase3: {processed}/{dirtyFolders.Count} 個處理中..."
-                    Await Task.Delay(1)
-                End If
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + ThrottledYieldAsync 與 onThrottled 委派
+                Await ThrottledYieldAsync(swThrottle3, cToken:=cToken, ThrottleFreq.Low,
+                                          Sub() ProgressBar1.Text = $"RenewCache Phase3: {processed}/{dirtyDict.Count} 個處理中...")
             Next
             _dbg("Phase3 完成", $"{processed} 個 dirty folder 重新計算完畢")
 
             ' ── Phase 4: 清除 dirty folders 的 ancestor 聚合快取 ──
             ' 任何 dirty leaf 都讓所有 ancestor 的 mca/fca/fsa 失效
+            ' 2026/04/16: 改迭代 liveDict.Keys，直接用 key 作 fPath，省去 fs.FolderPath COM 呼叫
+            Dim dirtyPaths As New HashSet(Of String)(dirtyDict.Keys)  ' 供 Phase4/5 使用
             If dirtyPaths.Count > 0 Then
-                For Each f As Outlook.Folder In liveFolders
-                    Dim fPath = f.FolderPath
+                For Each fPath As String In liveDict.Keys
                     If dirtyPaths.Contains(fPath) Then Continue For    ' Phase3 已清過
                     ' ancestor 判斷：dirtyPaths 中有以 fPath+"\" 開頭的路徑
                     If dirtyPaths.Any(Function(dp) dp.StartsWith(fPath & "\")) Then
@@ -568,20 +607,19 @@ Partial Class Form1
             End If
 
             ' ── Phase 6: 孤兒清除 + 批次寫入 ──
-            ProgressBar1.Text = "RenewCache Phase6: 清孤兒 + 寫入 DB..." : Await Task.Delay(1)
+            ProgressBar1.Text = "RenewCache Phase6: 清孤兒 + 寫入 DB..." : Await Task.Delay(1, cToken)
             CleanupOrphanFolderPath(livePaths)
             Await SaveCachesToSQLiteAsync()    ' 內部會顯示 SaveCache 的進度訊息
 
             sw.Stop()
             Dim st = GetDatabaseSummary()
-            ProgressBar1.Text = $"RenewCache 完成 ✔ dirty:{dirtyFolders.Count}/{liveFolders.Count} 個 / 耗時:{sw.Elapsed.TotalSeconds:0.0}s — DB:{st.fc}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆"
-            _dbg("完成", $"dirty={dirtyFolders.Count}, total={liveFolders.Count}, elapsed={sw.Elapsed.TotalSeconds:0.0}s")
-            Return
+            ProgressBar1.Text = $"RenewCache 完成 ✔ dirty:{dirtyDict.Count}/{liveDict.Count} 個 / 耗時:{sw.Elapsed.TotalSeconds:0.0}s — DB:{st.fc}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆"
+            _dbg("完成", $"dirty={dirtyDict.Count}, total={liveDict.Count}, elapsed={sw.Elapsed.TotalSeconds:0.0}s")
 
-Cancelled:
-            ProgressBar1.Text = "RenewCache 已中斷（ESC）"
+        Catch ex As OperationCanceledException
+            ' 2026/04/16: cToken 取消時 (ESC)，取代原本的 _cancelRequested + GoTo Cancelled 模式
+            ProgressBar1.Text = "RenewCache 已中斷 (ESC)"
             _dbg("中斷", "使用者按 ESC")
-
         Catch ex As System.Exception
             ProgressBar1.Text = $"RenewCache 失敗: {ex.Message}"
             _dbg("錯誤", ex.Message)
@@ -597,40 +635,41 @@ Cancelled:
         '
         ' 三路比對邏輯：
         '   新郵件   (live 有、DB 沒有) → 進入新的 mailList，SaveCache 時 INSERT
-        '   已刪郵件 (DB 有、live 沒有) → 從 _cacheAttachFilename 清除（DB row 留 CleanupOrphan 處理）
+        '   已刪郵件 (DB 有、live 沒有) → 從 _cacheAttachFilename 清除 (DB row 留 CleanupOrphan 處理) 
         '   未變郵件 (live ∩ DB)        → 原有 filenames 快取保留，不重掃附件
         '
-        ' attach_filenames 永不重掃（設計邊界，最耗時步驟留給 Tab3 搜尋時 lazy 觸發）
+        ' attach_filenames 永不重掃 (設計邊界，最耗時步驟留給 Tab3 搜尋時 lazy 觸發) 
         ' 2026/04/09 by Claude
         ' ---------------------------------------------------------------
-        If _iLikeNoisy Then _dbg("開始", folder.Name)
+        Dim fName As String = ExtractFolderName(fPath) ' by Gemini 3.1 Pro 2026/04/16: 透過 fPath 取名，省下 COM 呼叫
+        If _iLikeNoisy Then _dbg("開始", fName)
 
-        ' 取 live 含附件郵件清單（L3 GetTable 重掃，~2-5ms/資料夾）
-        Dim newMailList = Await GetAttachMailList(folder, Nothing)
+        ' 取 live 含附件郵件清單 (L3 GetTable 重掃，~2-5ms/資料夾) 
+        Dim newMailList = Await GetAttachMailListL3(folder, Nothing)
         Dim liveEntrySet As New HashSet(Of String)(newMailList.Select(Function(m) m.EntryID))
 
-        ' 取 DB 中已有的 EntryIDs（供三路比對找已刪郵件）
+        ' 取 DB 中已有的 EntryIDs (供三路比對找已刪郵件) 
         Dim dbResult = DbGetAttachMailList(fPath)
         If dbResult IsNot Nothing Then
-            ' 已刪郵件：從 _cacheAttachFilename 清除（下次 Tab3 掃描時不會再用到）
+            ' 已刪郵件：從 _cacheAttachFilename 清除 (下次 Tab3 掃描時不會再用到) 
             For Each mail In dbResult.Mails
                 If Not liveEntrySet.Contains(mail.EntryID) Then _cacheAttachFilename.TryRemove(mail.EntryID, Nothing)
             Next
         End If
 
-        ' 更新記憶體快取（新清單直接覆蓋，ItemCountSnap 用 live snap）
+        ' 更新記憶體快取 (新清單直接覆蓋，ItemCountSnap 用 live snap) 
         _cacheAttachMailList(fPath) = New FolderCacheTab3 With {.AttachMailList = newMailList,
-                                                               .ItemCountSnap = GetLiveFolderSnap(folder)}
+                                                               .ItemCountSnap = GetLiveFolderSnapL3(folder, fPath:=fPath)}
 
-        If _iLikeNoisy Then _dbg("結束", $"{folder.Name}: live={newMailList.Count}, db_was={If(dbResult?.Mails.Count, 0)}")
+        If _iLikeNoisy Then _dbg("結束", $"{fName}: live={newMailList.Count}, db_was={If(dbResult?.Mails.Count, 0)}")
 
     End Function
     Private Sub CleanupOrphanFolderPath(liveFolderPaths As HashSet(Of String))
         ' ---------------------------------------------------------------
         ' CleanupOrphanFolderPath — 刪除已不存在於 Outlook 的資料夾孤兒行
         ' liveFolderPaths = 目前仍有效的資料夾路徑集合
-        '   呼叫來源 A: SaveCachesToSQLiteAsync 開頭（用記憶體快取 key 聯集）
-        '   呼叫來源 B: RenewCache_Click（用 GetSubtreeToList BFS 掃 COM 取得完整清單）
+        '   呼叫來源 A: SaveCachesToSQLiteAsync 開頭 (用記憶體快取 key 聯集) 
+        '   呼叫來源 B: RenewCache_Click (用 GetSubtreeToList BFS 掃 COM 取得完整清單) 
         ' ---------------------------------------------------------------
         _dbg("    ├ 開始", $"live 資料夾數: {liveFolderPaths.Count}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
         If _db Is Nothing Then Return
@@ -652,7 +691,7 @@ Cancelled:
                 If _iLikeNoisy Then _dbg(" 孤兒", stale)
             Next
 
-            Dim dF, dB, dA, dM As Integer
+            Dim dF, dB, dA, dM, dBasic As Integer
             Using txn As SqliteTransaction = _db.BeginTransaction()
                 For Each stale In stalePaths
                     Using c1 As New SqliteCommand("DELETE FROM folder_stats WHERE folder_path=@p", _db, txn)
@@ -664,14 +703,17 @@ Cancelled:
                     Using c3 As New SqliteCommand("DELETE FROM attach_filenames WHERE folder_path=@p", _db, txn)
                         c3.Parameters.AddWithValue("@p", stale) : dA += c3.ExecuteNonQuery()
                     End Using
-                    ' 2026/04/09: month_counts 以 folder_path 欄位清除（cache_key 含 year 後綴，不可直接比對）
+                    ' 2026/04/09: month_counts 以 folder_path 欄位清除 (cache_key 含 year 後綴，不可直接比對) 
                     Using c4 As New SqliteCommand("DELETE FROM month_counts WHERE folder_path=@p", _db, txn)
                         c4.Parameters.AddWithValue("@p", stale) : dM += c4.ExecuteNonQuery()
+                    End Using
+                    Using c5 As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_path=@p", _db, txn)
+                        c5.Parameters.AddWithValue("@p", stale) : dBasic += c5.ExecuteNonQuery()
                     End Using
                 Next
                 txn.Commit()
             End Using
-            _dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / 刪除 folder_stats:{dF} 行 / attach_maillist:{dB} 行 / attach_filenames:{dA} 行 / month_counts:{dM} 行")
+            _dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / folder_stats:{dF} 行 / basic_maillist:{dBasic} 行 / attach_maillist:{dB} 行 / attach_filenames:{dA} 行 / month_counts:{dM} 行")
 
         Catch ex As System.Exception
             _dbg("    ├ 錯誤", ex.Message) ' by Gemini, 2026/04/10
@@ -699,6 +741,8 @@ Cancelled:
         For Each k In _cacheFolderCountAll.Keys : allPaths.Add(k) : Next
         For Each k In _cacheFolderSize.Keys : allPaths.Add(k) : Next
         For Each k In _cacheFolderSizeAll.Keys : allPaths.Add(k) : Next
+        ' by Gemini 3.0 flash, 2026/04/18: 額外聯集身分標識字典的 Key，確保僅掃描過但未統計的資料夾也能存入 SSD
+        For Each k In _cacheFolderIDs.Keys : allPaths.Add(k) : Next
 
         Dim count As Integer = 0
         Dim ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
@@ -720,7 +764,7 @@ Cancelled:
             For Each path In allPaths
                 ' 2026/04/07 修正 v2: 初始值設 -1 仍然不夠，因為 -1 是整數值會被寫入 DB，
                 ' LoadFolderStatsInner 讀回 -1 後直接塞入記憶體快取，
-                ' GetCachedFolderCount 命中記憶體回傳 -1 → LoadSubFolderToTreeView 判斷 -1 > 0 為 False → 不顯示 "+"。
+                ' GetFolderCount 命中記憶體回傳 -1 → LoadSubFolderToTreeView 判斷 -1 > 0 為 False → 不顯示 "+"。
                 ' 正確做法：沒有測量過的欄位一律寫 DBNull.Value (SQL NULL)，
                 ' 這樣 LoadFolderStatsInner 的 IsDBNull 保護才能正確跳過，不污染記憶體快取。
                 Dim mc, mca, fc, fca As Integer : Dim fs, fsa As Long
@@ -765,7 +809,7 @@ Cancelled:
     End Function
     Private Function SaveYearCountsInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
-        ' SaveYearCountsInner — Transaction 內批次寫入 year_counts（Tab2 年份分布）
+        ' SaveYearCountsInner — Transaction 內批次寫入 year_counts (Tab2 年份分布) 
         ' _cacheYearCounts: ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
         '   key = folder_path, value = { year → count }
         ' 每筆寫入 (folder_path, year, count)，PRIMARY KEY = (folder_path, year)
@@ -799,7 +843,7 @@ Cancelled:
     End Function
     Private Function SaveMonthCountsInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
-        ' SaveMonthCountsInner — Transaction 內批次寫入 month_counts（Tab2 月份分布）
+        ' SaveMonthCountsInner — Transaction 內批次寫入 month_counts (Tab2 月份分布) 
         ' _cacheMonthCounts key = FolderPath_year，value = { month → count }
         ' 欄位設計: (folder_path, year, month) 三欄 PK，語意清晰且符合 ForFolder() 查詢
         '   ├ month_counts 新增函數群 (2026/04/09 by Claude)
@@ -843,7 +887,7 @@ Cancelled:
     End Function
     Private Function SaveAttachMailListInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
-        ' SaveAttachMailListInner — Transaction 內批次寫入 attach_maillist（Tab3 Phase1）
+        ' SaveAttachMailListInner — Transaction 內批次寫入 attach_maillist (Tab3 Phase1) 
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim sql = "INSERT OR REPLACE INTO attach_maillist" &
@@ -885,10 +929,52 @@ Cancelled:
         _dbg("結束")
 
     End Function
+    Private Function SaveFolderBasicMailInfosInner(txn As SqliteTransaction) As Integer
+        ' ---------------------------------------------------------------
+        ' SaveFolderBasicMailInfosInner — Transaction 內批次寫入 basic_maillist (Tab4/Tab5) 
+        ' ---------------------------------------------------------------
+        _dbg("開始")
+        Dim sql = "INSERT OR REPLACE INTO basic_maillist" &
+                  " (entry_id,folder_path,subject,msg_size,received_time,sender_name,topic,item_count_snap,updated_at)" &
+                  " VALUES (@eid,@fp,@subj,@sz,@rt,@sn,@tpc,@snap,@ts)"
+
+        Dim count As Integer = 0
+        Dim ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+        Using cmd As New SqliteCommand(sql, _db, txn)
+            cmd.Parameters.Add("@eid", SqliteType.Text)
+            cmd.Parameters.Add("@fp", SqliteType.Text)
+            cmd.Parameters.Add("@subj", SqliteType.Text)
+            cmd.Parameters.Add("@sz", SqliteType.Integer)
+            cmd.Parameters.Add("@rt", SqliteType.Text)
+            cmd.Parameters.Add("@sn", SqliteType.Text)
+            cmd.Parameters.Add("@tpc", SqliteType.Text)
+            cmd.Parameters.Add("@snap", SqliteType.Integer)
+            cmd.Parameters.Add("@ts", SqliteType.Text)
+
+            For Each kvp In _cacheFolderBasicMailInfos
+                Dim fp = kvp.Key : Dim snap = kvp.Value.Snap
+                For Each item In kvp.Value.Mails
+                    cmd.Parameters("@eid").Value = item.Mail.EntryID
+                    cmd.Parameters("@fp").Value = fp
+                    cmd.Parameters("@subj").Value = If(item.Mail.Subject, "")
+                    cmd.Parameters("@sz").Value = item.Mail.Size
+                    cmd.Parameters("@rt").Value = item.Mail.ReceivedTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    cmd.Parameters("@sn").Value = If(item.Mail.SenderName, "")
+                    cmd.Parameters("@tpc").Value = If(item.Topic, "")
+                    cmd.Parameters("@snap").Value = snap
+                    cmd.Parameters("@ts").Value = ts
+                    cmd.ExecuteNonQuery() : count += 1
+                Next
+            Next
+        End Using
+        Return count
+        _dbg("結束")
+
+    End Function
     Private Function SaveAttachFilenamesInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
-        ' SaveAttachFilenamesInner — Transaction 內批次寫入 attach_filenames（Tab3 Phase2）
-        ' folder_path 透過反查 _cacheAttachMailList 取得（_cacheAttachFilename key 是 EntryID）
+        ' SaveAttachFilenamesInner — Transaction 內批次寫入 attach_filenames (Tab3 Phase2) 
+        ' folder_path 透過反查 _cacheAttachMailList 取得 (_cacheAttachFilename key 是 EntryID) 
         ' 2026/04/09 修正: 移除 msg_size 欄位 (Phase2 永遠是 NULL，保留在 INSERT 造成
         '   SqliteType.Integer + DBNull.Value 不相容，丟 "Value must be set" InvalidOperationException)
         '   SQLite 未列出的欄位自動填 NULL，不需要明確傳入。
@@ -900,7 +986,7 @@ Cancelled:
         Dim count As Integer = 0
         Dim ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
 
-        ' 反查 EntryID → folder_path（從 Phase1 快取中建立對應表）
+        ' 反查 EntryID → folder_path (從 Phase1 快取中建立對應表) 
         Dim entryToFolder As New Dictionary(Of String, String)()
         For Each kvp In _cacheAttachMailList
             For Each mail In kvp.Value.AttachMailList
@@ -931,15 +1017,16 @@ Cancelled:
     Private Function LoadFolderStatsInner() As Integer
         ' ---------------------------------------------------------------
         ' LoadFolderStatsInner — 讀回六個數字快取
-        ' 使用 TryAdd：記憶體已有值時保留記憶體版本（不覆蓋 Layer2.5 剛讀進來的較新值）
+        ' 使用 TryAdd：記憶體已有值時保留記憶體版本 (不覆蓋 Layer2.5 剛讀進來的較新值) 
         ' 2026/04/07 修正: 每個欄位加 IsDBNull 保護，NULL 代表「從未測量過」，
-        '   不可塞入記憶體快取，否則 GetCachedFolderCount 命中 -1 → LoadSubFolderToTreeView
-        '   判斷 -1 > 0 為 False → 不顯示 TreeView "+" 加號（bug）。
+        '   不可塞入記憶體快取，否則 GetFolderCount 命中 -1 → LoadSubFolderToTreeView
+        '   判斷 -1 > 0 為 False → 不顯示 TreeView "+" 加號 (bug) 。
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim count As Integer = 0
         Using cmd As New SqliteCommand(
-            "SELECT folder_path,mail_count,mail_count_all,folder_count,folder_count_all,folder_size,folder_size_all FROM folder_stats", _db)
+            "SELECT folder_path,mail_count,mail_count_all,folder_count,folder_count_all,folder_size,folder_size_all," &
+            "entry_id,store_id,is_mail,has_chinese FROM folder_stats", _db)
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim path = reader.GetString(0)
@@ -950,6 +1037,16 @@ Cancelled:
                     If Not reader.IsDBNull(4) Then _cacheFolderCountAll.TryAdd(path, reader.GetInt32(4))
                     If Not reader.IsDBNull(5) Then _cacheFolderSize.TryAdd(path, reader.GetInt64(5))
                     If Not reader.IsDBNull(6) Then _cacheFolderSizeAll.TryAdd(path, reader.GetInt64(6))
+
+                    ' by Gemini 3.0 flash, 2026/04/18: 批量讀取時回填身分標識與標籤字典，確保 LoadCache 後狀態完整
+                    Dim eid As String = If(Not reader.IsDBNull(7), reader.GetString(7), "")
+                    Dim sid As String = If(Not reader.IsDBNull(8), reader.GetString(8), "")
+                    Dim isMail As Integer = If(Not reader.IsDBNull(9), reader.GetInt32(9), -1)
+                    Dim hasCh As Integer = If(Not reader.IsDBNull(10), reader.GetInt32(10), -1)
+
+                    If eid <> "" Then _cacheFolderIDs.TryAdd(path, (eid, sid, isMail = 1, hasCh = 1))
+                    If isMail >= 0 Then _cacheIsMailFolder.TryAdd(path, isMail = 1)
+
                     count += 1
                 End While
             End Using
@@ -961,7 +1058,7 @@ Cancelled:
     Private Function LoadYearCountsInner() As Integer
         ' ---------------------------------------------------------------
         ' LoadYearCountsInner — 從 year_counts 重建 _cacheYearCounts
-        ' 先按 folder_path 分組收集，最後一次性寫入（TryAdd 保留記憶體已有版本）
+        ' 先按 folder_path 分組收集，最後一次性寫入 (TryAdd 保留記憶體已有版本) 
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始")
         Dim count As Integer = 0
@@ -1026,7 +1123,7 @@ Cancelled:
     End Function
     Private Function LoadAttachMailListInner() As Integer
         ' ---------------------------------------------------------------
-        ' LoadAttachMailListInner — 重建 _cacheAttachMailList（按 folder_path 分組）
+        ' LoadAttachMailListInner — 重建 _cacheAttachMailList (按 folder_path 分組) 
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim count As Integer = 0
@@ -1050,6 +1147,7 @@ Cancelled:
                     DateTime.TryParse(dtStr, mail.ReceivedTime)
                     mail.SenderName = If(reader.IsDBNull(5), "", reader.GetString(5))
                     mail.AttachCount = reader.GetInt32(6)
+                    mail.FolderPath = fp ' 確保讀取快取時填入路徑
                     tempDict(fp).mails.Add(mail) : count += 1
                 End While
             End Using
@@ -1065,9 +1163,10 @@ Cancelled:
         _dbg("結束")
 
     End Function
+    ' 註：Tab4/5 基本郵件快取因為資料量較大，不放在 LoadCachesFromSQLiteAsync 中預載，而是採用 Lazy Load (DbGetFolderBasicMailInfos)
     Private Function LoadAttachFilenamesInner() As Integer
         ' ---------------------------------------------------------------
-        ' LoadAttachFilenamesInner — 重建 _cacheAttachFilename（JSON 反序列化）
+        ' LoadAttachFilenamesInner — 重建 _cacheAttachFilename (JSON 反序列化) 
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim count As Integer = 0
@@ -1089,6 +1188,51 @@ Cancelled:
         _dbg("結束")
 
     End Function
+    Private Function LoadFolderBasicMailInfosInner() As Integer
+        ' ---------------------------------------------------------------
+        ' LoadFolderBasicMailInfosInner — 重建 _cacheFolderBasicMailInfos (Tab4/5 專用)
+        ' 2026/04/22 by Gemini 3.1 Pro: 補齊載入邏輯，解決重啟後重複掃描問題
+        ' ---------------------------------------------------------------
+        _dbg("開始")
+        Dim count As Integer = 0
+        ' 由於此表資料量可能較大，我們按 folder_path 分組收集到記憶體中
+        Dim tempDict As New Dictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer))()
+
+        Using cmd As New SqliteCommand(
+            "SELECT entry_id,folder_path,subject,msg_size,received_time,sender_name,topic,item_count_snap" &
+            " FROM basic_maillist", _db)
+
+            Using reader = cmd.ExecuteReader()
+                While reader.Read()
+                    Dim eid = reader.GetString(0)
+                    Dim fp = reader.GetString(1)
+                    Dim subj = If(reader.IsDBNull(2), "", reader.GetString(2))
+                    Dim sz = reader.GetInt64(3)
+                    Dim rtStr = If(reader.IsDBNull(4), "", reader.GetString(4))
+                    Dim sn = If(reader.IsDBNull(5), "", reader.GetString(5))
+                    Dim tpc = If(reader.IsDBNull(6), "", reader.GetString(6))
+                    Dim snap = If(reader.IsDBNull(7), -1, reader.GetInt32(7))
+
+                    If Not tempDict.ContainsKey(fp) Then
+                        tempDict(fp) = (New List(Of (Mail As MailItemInfo, Topic As String))(), snap)
+                    End If
+
+                    Dim mail As New MailItemInfo With {.EntryID = eid, .Subject = subj, .Size = sz, .SenderName = sn, .FolderPath = fp}
+                    DateTime.TryParse(rtStr, mail.ReceivedTime)
+                    tempDict(fp).Mails.Add((mail, tpc))
+                    count += 1
+                End While
+            End Using
+        End Using
+
+        For Each kvp In tempDict
+            _cacheFolderBasicMailInfos.TryAdd(kvp.Key, kvp.Value)
+        Next
+
+        Return count
+        _dbg("結束")
+
+    End Function
 
     ' ==============================================================
     ' Phase 2 — Layer2.5 lazy SELECT 用的 DB read helper 群
@@ -1099,7 +1243,7 @@ Cancelled:
     '   3. 這些函數從 UI 執行緒呼叫，SQLite keyed lookup < 1ms，不需要 Async。
     '   4. FolderStatsDbRow / AttachMailListDbResult 定義在本檔，Partial Class 跨檔可見。
     ' ==============================================================
-    Friend Function DbGetFolderStats(folderPath As String) As FolderStatsDbRow
+    Friend Function DbGetFolderStats(fPath As String) As FolderStatsDbRow
         ' ---------------------------------------------------------------
         ' DbGetFolderStats — 讀取 folder_stats 單一 folder_path 的一行
         ' 回傳 Nothing 表示 DB 中無此路徑
@@ -1114,7 +1258,7 @@ Cancelled:
                 "       entry_id,store_id,is_mail,has_chinese" &
                 " FROM folder_stats WHERE folder_path=@p", _db)
 
-                cmd.Parameters.AddWithValue("@p", folderPath)
+                cmd.Parameters.AddWithValue("@p", fPath)
                 Using reader = cmd.ExecuteReader()
                     If Not reader.Read() Then Return Nothing
                     Return New FolderStatsDbRow With {.mc = If(reader.IsDBNull(0), -1, reader.GetInt32(0)),
@@ -1131,13 +1275,13 @@ Cancelled:
                 End Using
             End Using
         Catch ex As System.Exception
-            _dbg(" ├ 錯誤", $"{folderPath}: {ex.Message}")
+            _dbg(" ├ 錯誤", $"{fPath}: {ex.Message}")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
         Return Nothing
 
     End Function
-    Friend Function DbGetAttachMailList(folderPath As String) As AttachMailListDbResult
+    Friend Function DbGetAttachMailList(fPath As String) As AttachMailListDbResult
         ' ---------------------------------------------------------------
         ' DbGetAttachMailList — 讀取 attach_maillist WHERE folder_path=? 的所有行
         ' 回傳 Nothing 表示 DB 中無此資料夾的郵件記錄
@@ -1151,7 +1295,7 @@ Cancelled:
                 "SELECT entry_id,subject,msg_size,received_time,sender_name,attach_count,item_count_snap" &
                 " FROM attach_maillist WHERE folder_path=@p", _db)
 
-                cmd.Parameters.AddWithValue("@p", folderPath)
+                cmd.Parameters.AddWithValue("@p", fPath)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read() ' item_count_snap 整個 folder 共用同一值，每行都一樣，讀最後一次即可
                         result.Snap = If(reader.IsDBNull(6), -1, reader.GetInt32(6))
@@ -1163,6 +1307,7 @@ Cancelled:
                         DateTime.TryParse(dtStr, mail.ReceivedTime)
                         mail.SenderName = If(reader.IsDBNull(4), "", reader.GetString(4))
                         mail.AttachCount = reader.GetInt32(5)
+                        mail.FolderPath = fPath ' 確保填入路徑
                         result.Mails.Add(mail)
                     End While
                 End Using
@@ -1170,7 +1315,51 @@ Cancelled:
             Return If(result.Mails.Count > 0, result, Nothing)
 
         Catch ex As System.Exception
-            _dbg(" ├ 錯誤", $"{folderPath}: {ex.Message}")
+            _dbg(" ├ 錯誤", $"{fPath}: {ex.Message}")
+        Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
+        End Try
+        Return Nothing
+
+    End Function
+    Friend Function DbGetFolderBasicMailInfos(fPath As String) As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer)?
+        ' ---------------------------------------------------------------
+        ' DbGetFolderBasicMailInfos — 讀取 basic_maillist WHERE folder_path=? 的所有行
+        ' 回傳 Nothing 表示 DB 中無此資料夾的郵件記錄
+        ' ---------------------------------------------------------------
+        If _iLikeNoisy Then _dbg(" ├ 開始")
+        If _db Is Nothing Then Return Nothing
+
+        Try
+            Dim result As New List(Of (Mail As MailItemInfo, Topic As String))()
+            Dim snap As Integer = -1
+            Using cmd As New SqliteCommand(
+                "SELECT entry_id,subject,msg_size,received_time,sender_name,topic,item_count_snap" &
+                " FROM basic_maillist WHERE folder_path=@p", _db)
+
+                cmd.Parameters.AddWithValue("@p", fPath)
+                Using reader = cmd.ExecuteReader()
+                    While reader.Read()
+                        snap = If(reader.IsDBNull(6), -1, reader.GetInt32(6))
+                        Dim mail As New MailItemInfo()
+                        mail.EntryID = reader.GetString(0)
+                        mail.Subject = If(reader.IsDBNull(1), "", reader.GetString(1))
+                        mail.Size = reader.GetInt64(2)
+                        Dim dtStr = If(reader.IsDBNull(3), "", reader.GetString(3))
+                        DateTime.TryParse(dtStr, mail.ReceivedTime)
+                        mail.SenderName = If(reader.IsDBNull(4), "", reader.GetString(4))
+                        mail.FolderPath = fPath ' 確保填入路徑
+                        Dim topic = If(reader.IsDBNull(5), "", reader.GetString(5))
+                        result.Add((mail, topic))
+                    End While
+                End Using
+            End Using
+            If result.Count > 0 Then
+                _dbg(" ├ 命中 SSD", $"{ExtractFolderName(fPath)} | 取得 {result.Count} 筆 | Snap={snap}")
+                Return (result, snap)
+            End If
+
+        Catch ex As System.Exception
+            _dbg(" ├ 錯誤", $"{fPath}: {ex.Message}")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
         Return Nothing
@@ -1201,7 +1390,7 @@ Cancelled:
         Return Nothing
 
     End Function
-    Friend Function DbGetYearCountsForFolder(folderPath As String) As ConcurrentDictionary(Of Integer, Integer)
+    Friend Function DbGetYearCountsForFolder(fPath As String) As ConcurrentDictionary(Of Integer, Integer)
         ' ---------------------------------------------------------------
         ' DbGetYearCountsForFolder — 讀取 year_counts WHERE folder_path=? 的所有行
         ' 供 ComputeYearCountsAsync 在記憶體 miss 時先查 DB，避免 COM 呼叫
@@ -1213,7 +1402,7 @@ Cancelled:
         Try
             Dim result As New ConcurrentDictionary(Of Integer, Integer)()
             Using cmd As New SqliteCommand("SELECT year,count FROM year_counts WHERE folder_path=@p", _db)
-                cmd.Parameters.AddWithValue("@p", folderPath)
+                cmd.Parameters.AddWithValue("@p", fPath)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read()
                         result(reader.GetInt32(0)) = reader.GetInt32(1)
@@ -1222,16 +1411,16 @@ Cancelled:
             End Using
             Return If(result.Count > 0, result, Nothing)
         Catch ex As System.Exception
-            _dbg(" ├ 錯誤", $"{folderPath}: {ex.Message}")
+            _dbg(" ├ 錯誤", $"{fPath}: {ex.Message}")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
         Return Nothing
 
     End Function
-    Friend Function DbGetMonthCountsForFolder(folderPath As String, year As Integer) As ConcurrentDictionary(Of Integer, Integer)
+    Friend Function DbGetMonthCountsForFolder(fPath As String, year As Integer) As ConcurrentDictionary(Of Integer, Integer)
         ' ---------------------------------------------------------------
         ' DbGetMonthCountsForFolder — 讀取 month_counts WHERE folder_path=? AND year=?
-        ' 供 GetMonthCountsForYear 在記憶體 miss 時先查 DB，避免 COM 呼叫
+        ' 供 GetMonthCountsForYearL3 在記憶體 miss 時先查 DB，避免 COM 呼叫
         ' 回傳 Nothing 表示 DB 中無此 (folder_path, year) 組合
         '   ├ month_counts 新增函數群 (2026/04/09 by Claude)
         '   ├ 2026/04/09 修正：改用三欄 PK，接收 (folderPath, year) 兩個參數
@@ -1241,7 +1430,7 @@ Cancelled:
         Try
             Dim result As New ConcurrentDictionary(Of Integer, Integer)()
             Using cmd As New SqliteCommand("SELECT month,count FROM month_counts WHERE folder_path=@fp AND year=@yr", _db)
-                cmd.Parameters.AddWithValue("@fp", folderPath)
+                cmd.Parameters.AddWithValue("@fp", fPath)
                 cmd.Parameters.AddWithValue("@yr", year)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read() : result(reader.GetInt32(0)) = reader.GetInt32(1) : End While
@@ -1250,7 +1439,7 @@ Cancelled:
             Return If(Not result.IsEmpty, result, Nothing)
 
         Catch ex As System.Exception
-            _dbg(" ├ 錯誤", $"{folderPath} {year}: {ex.Message}")
+            _dbg(" ├ 錯誤", $"{fPath} {year}: {ex.Message}")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
         Return Nothing
@@ -1273,7 +1462,8 @@ Cancelled:
                 cmd.Parameters.AddWithValue("@p", rootPath)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read()
-                        result.Add(New FolderStatsDbRow With {.eid = reader.GetString(1),
+                        result.Add(New FolderStatsDbRow With {.path = reader.GetString(0),
+                                                              .eid = reader.GetString(1),
                                                               .sid = reader.GetString(2),
                                                               .isMail = reader.GetInt32(3),
                                                               .hasCh = reader.GetInt32(4)})
@@ -1297,7 +1487,7 @@ Cancelled:
             Dim result As New List(Of FolderStatsDbRow)()
             ' SQL 邏輯: 
             ' 1. 找出 folder_path 以 parentPath + "\" 開頭。
-            ' 2. 且不包含更深層的 "\"（代表是直屬子項）。注意: 此邏輯在路徑分隔符不一致時需調整。
+            ' 2. 且不包含更深層的 "\" (代表是直屬子項) 。注意: 此邏輯在路徑分隔符不一致時需調整。
             ' 3. 按照 has_chinese ASC (0=英, 1=中, 故英優先) 排序。
             Dim filter = If(isIncludeAll, "", " AND is_mail=1")
 
@@ -1327,10 +1517,10 @@ Cancelled:
         End Try
         Return Nothing
     End Function
-    Friend Sub DbSaveMonthCountsSingle(folderPath As String, year As Integer, monthCounts As ConcurrentDictionary(Of Integer, Integer))
+    Friend Sub DbSaveMonthCountsSingle(fPath As String, year As Integer, monthCounts As ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' DbSaveMonthCountsSingle — 增量寫入單一 (folder_path, year) 的月份分布
-        ' 在 GetMonthCountsForYear 完成 L3 COM 計算後立刻呼叫，不等待 SaveCache 按鈕。
+        ' 在 GetMonthCountsForYearL3 完成 L3 COM 計算後立刻呼叫，不等待 SaveCache 按鈕。
         ' 使用獨立 Transaction 包住最多 12 筆，確保原子性。
         '   ├ 2026/04/09 新增 by Claude：解決月份快取只在記憶體、SaveCache 才寫 DB 的問題
         '   ├ 根本原因：若該 session 沒點過月份視圖就不 SaveCache，下次仍打 COM
@@ -1343,7 +1533,7 @@ Cancelled:
             Using txn = _db.BeginTransaction()
                 Using cmd As New SqliteCommand(
                     "INSERT OR REPLACE INTO month_counts (folder_path,year,month,count,updated_at) VALUES (@fp,@yr,@mo,@cnt,@ts)", _db, txn)
-                    cmd.Parameters.Add("@fp", SqliteType.Text).Value = folderPath
+                    cmd.Parameters.Add("@fp", SqliteType.Text).Value = fPath
                     cmd.Parameters.Add("@yr", SqliteType.Integer).Value = year
                     cmd.Parameters.Add("@mo", SqliteType.Integer)
                     cmd.Parameters.Add("@cnt", SqliteType.Integer)
@@ -1356,10 +1546,10 @@ Cancelled:
                 End Using
                 txn.Commit()
             End Using
-            _dbg(" ├ 更新", $"{folderPath} {year} → {monthCounts.Count} 個月寫入 DB")
+            _dbg(" ├ 更新", $"{fPath} {year} → {monthCounts.Count} 個月寫入 DB")
 
         Catch ex As System.Exception
-            _dbg(" ├ 錯誤", $"{folderPath} {year}: {ex.Message}")
+            _dbg(" ├ 錯誤", $"{fPath} {year}: {ex.Message}")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
 

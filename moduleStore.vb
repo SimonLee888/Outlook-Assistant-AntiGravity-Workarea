@@ -188,32 +188,7 @@ Module moduleStore
         Return totalCount
 
     End Function
-    Private Function GetTotalFolderCount_Old(folder As Outlook.Folder) As Task(Of Integer)
-        '    ''2026/3/5重新檢查, 把GetTotalFolderCount_Old跟GetMailCountByMAPI_Old都註解掉停止使用
-        '    ''只使用GetTotalFolderCountAsync跟GetMailCountByMAPINew這二個函數, 穩定性提升比較不會有偶爾會出現的快取例外問題, 但不知為何有時會慢一點點, todo: 有空再來測試看看是為什麼了, 先這樣用著了
-        DebugForm.AddMessage3("Begin: ", folder.Name)
-        '    '' 5/2記錄: 花了一天把GetTotalFolderCount跟GetTotalMailCount全部計時測試優化完成
-        '    'Dim value As Integer
-        '    'If folderCountCache.TryGetValue(folder, value) Then Return value ' 檢查快取中是否已存在值, 若有則直接返回
-        '    'Dim totalSubfolderCount As Integer = folder.Folders.Count
-        '    'Dim tasks As New List(Of Task(Of Integer)) ' 定義用於儲存每個子資料夾遞迴結果的集合
-        '    '' 改用多線程平行處理每個子資料夾的遞迴, 遍歷每個子資料夾
-        '    ''For Each subFolder As Outlook.Folder In folder.Folders
-        '    ''    tasks.Add(Task.Run(Function() GetTotalFolderCount_Old(subFolder)))
-        '    ''Next
-        '    ''sw2.Start()
-        '    'Parallel.ForEach(folder.Folders.Cast(Of Outlook.Folder),
-        '    '                 Sub(subFolder)
-        '    '                     tasks.Add(GetTotalFolderCount_Old(subFolder))
-        '    '                 End Sub)
-        '    'For Each subTask As Task(Of Integer) In tasks
-        '    '    totalSubfolderCount += Await subTask
-        '    'Next ' 等待所有子資料夾的遞迴結果完成並累加總數
-        '    'sw2.Stop()
-        '    'folderCountCache.Add(folder, totalSubfolderCount) ' 第一次計算後就存入快取
-        '    'Return totalSubfolderCount
 
-    End Function
     Private Function GetMailCountLINQ(folder As Outlook.Folder) As Integer
         ' 5/21記錄: 程式很短很簡潔, 速度雖快但很不穩定, 很容易造成執行緒打結慢下來, 先擺著不用
         Dim totalCount As Integer
@@ -759,7 +734,7 @@ Module moduleStore
         '    lblStatus1.Text = $"{processedCount} / {totalCount}"
 
     End Sub
-    ' 舊的 Button3_Click 事件處理器，保留以供參考，已被改寫為上面新的版本
+    ' 舊的 Bt3_Click 事件處理器，保留以供參考，已被改寫為上面新的版本
     Private Async Sub Button8_Click(sender As Object, e As EventArgs) ' Handles Button8.Click
         DebugForm.AddMessage3("Begin: ")
         'Dim stopwatch As New Stopwatch() : stopwatch.Start()
@@ -780,10 +755,10 @@ Module moduleStore
         '' todo: 3. for each item + for each attach 的迴圈, 是否改用items.setColumn 來限制欄位加快速度?
         '' todo: 4. 有無檔名+有無大小限制, 各種組合, 是否有更好的邏輯判斷式, 或是判斷順序?
         'If Not CheckAttachName.Checked OrElse TextBox3.Text.Length = 0 Then
-        '    Await ShowResultTab3(filteredBySize) '不管附件檔名, 只篩附件和大小
+        '    Await ShowResultToLv3(filteredBySize) '不管附件檔名, 只篩附件和大小
         'Else ' 進一步篩選附件檔名, 及指定關鍵字
         '    Dim filteredByKeyword As List(Of MailItem) = Await FilterAttachByKeywordAsync3(filteredBySize, TextBox3.Text)
-        '    Await ShowResultTab3(filteredByKeyword)
+        '    Await ShowResultToLv3(filteredByKeyword)
         'End If
         '' todo: 5. 試試以下幾個DASL 屬性 (是MAPI Extention??)
         ''DASL Name http: //schemas.microsoft.com/mapi/proptag/0x3707001F

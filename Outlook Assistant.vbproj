@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -118,6 +118,13 @@
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.vb</LastGenOutput>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 修復 NU1105: 備份專案不在方案中導致還原失敗，改為直接引用編譯好的 DLL by Gemini 3 Flash, 2026/04/18 -->
+    <Reference Include="ost2pst">
+      <HintPath>Backup\OST Parser\Niv2023 ost2pst\bin\Debug\net8.0-windows\ost2pst.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

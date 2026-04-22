@@ -1,0 +1,6 @@
+- [/] 拆分 ListView KeyPress 事件處理器到獨立 Handles 事件
+    - [ ] 在 `Form1_MainTabs.vb` 建立 `ListView1_KeyPress`
+    - [ ] 在 `Form1_MainTabs.vb` 建立 `ListView2_KeyPress`
+    - [ ] 在 `Form1_MainTabs.vb` 建立 `ListView3_KeyPress`
+- [ ] 修改 `Form1.vb`: 移除 `InitListView` 中的 `AddHandler` 並刪除 `HandleListViewKeyPress`
+- [ ] 驗證各分頁 KeyPress 功能正常

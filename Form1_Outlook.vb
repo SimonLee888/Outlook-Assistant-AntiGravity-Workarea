@@ -1,16 +1,16 @@
 ﻿Imports System.Collections.Concurrent
-Imports System.Net
 Imports System.Runtime.InteropServices
 Imports System.Threading
 Imports Microsoft.Office.Interop
 Imports Microsoft.Office.Interop.Outlook
+'Imports System.Net
 Imports Redemption
 
 ' === 從頭重新設計 Layer3 / Layer2.5 底層計數函數 ===
 ' 目的: 提供一個純粹的 COM 資料層函數，專注於讀取資料，不做任何流程控制或快取邏輯
 '       取代目前散落在各處的 GetMailCountByMAPINew、GetFolderSizeLegacy 等函數，統一為一個簡單的 GetXxxLayer3 函數
 ' 架構: Layer3 純資料層，Layer2 流程協調層，Layer2.5 快取代理層，Layer1 UI 事件層
-'       Layer3 只負責讀取資料夾的本層郵件數 (GetDirectMailCountLayer3) ，不遞迴、不展開子資料夾，最小化 COM 呼叫量
+'       Layer3 只負責讀取資料夾的本層郵件數 (GetDirectMailCountLayer3)，不遞迴、不展開子資料夾，最小化 COM 呼叫量
 '       上層流程 (如 ComputeFolderStatsAsync) 負責決定何時呼叫、如何使用結果、快取管理等
 ' ==============================================================
 ' === Layer3 底層 COM 資料層函數群 ===
@@ -19,7 +19,7 @@ Imports Redemption
 '   2. 不做快取、不做遞迴、不做 BFS 展開——這些全部交給 Layer2 流程協調層
 '   3. Fallback 鏈: RDO → MAPI GetArray → OOM最後手段
 '                   parallel.foreach → BFS → Recursive，每層不論成功失敗都丟 Debug message
-'   4. 失敗統一回傳 -1 (不回 0) ，讓 Layer2 能區分「真的是 0」或「讀取失敗」
+'   4. 失敗統一回傳 -1 (不回 0)，讓 Layer2 能區分「真的是 0」或「讀取失敗」
 '   5. 在 Finally 中使用 TryMarshalRelease() 統一釋放所有 COM 物件，確保 RCW 不殘留
 ' ==============================================================
 
@@ -28,8 +28,8 @@ Partial Class Form1
 #Region "■ 01 全域宣告"
     Private WithEvents _olApp As Outlook.Application = Nothing
     Private _olNS As Outlook.NameSpace = Nothing
-    Private _rdo As Redemption.RDOSession = Nothing ' _rdoSession 就等同是outlook.namespace 的意思, 就是Redemption的MAPI session
     Private _pstStoreList As List(Of Outlook.Store) = Nothing
+    Private _rdo As Redemption.RDOSession = Nothing ' _rdoSession 就等同是outlook.namespace 的意思, 就是Redemption的MAPI session
     ' 2026-03-22 新增: 用於測試 Redemption.dll 整合 (注意: session.MAPIOBJECT 必須在 Outlook MAPI 連線建立後才能設定 (Form1_Load 尾端)
     '------------------------------------------------------------------------------------------------
     ' Outlook 物件(OOM)	    Redemption 物件 (RDO)     說明
@@ -40,6 +40,7 @@ Partial Class Form1
     ' Outlook.MailItem	    Redemption.RDOMail	    對應單封郵件層級。
     ' Outlook.Store	        Redemption.RDOStore	    對應 PST 或 Exchange 帳戶。
 
+    Private Shared _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)       ' 資料夾是否為郵件類型
     Private Shared _cacheMailCount As New ConcurrentDictionary(Of String, Integer)          ' 自身資料夾的郵件個數
     Private Shared _cacheMailCountAll As New ConcurrentDictionary(Of String, Integer)       ' 整支子樹的所有郵件總數
     Private Shared _cacheFolderCount As New ConcurrentDictionary(Of String, Integer)        ' 自身資料夾的子目錄個數
@@ -47,18 +48,20 @@ Partial Class Form1
     Private Shared _cacheFolderSize As New ConcurrentDictionary(Of String, Long)            ' 自身資料夾的郵件大小加總
     Private Shared _cacheFolderSizeAll As New ConcurrentDictionary(Of String, Long)         ' 整支子樹的所有子目錄郵件大小加總
 
-    Private Shared _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)                   ' 資料夾是否為郵件類型
-    Private Shared _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))     ' GetSortedSubFolders() 已排序的子資料夾清單
-    Private Shared _cacheSubFolderList As New ConcurrentDictionary(Of String, List(Of Outlook.Folder))  ' GetSubtreeToList() 的樹狀展開平坦化清單
-    Private Shared _cacheAttachMailList As New ConcurrentDictionary(Of String, FolderCacheTab3)         ' 包含附件的郵件預掃描結果 (速度很快, 不用存入SSD?)
-    Private Shared _cacheAttachFilename As New ConcurrentDictionary(Of String, List(Of String))         ' 所有附件檔名清單
-
-    ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
-    Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))
-
+    Private Shared _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Outlook.Folder)) ' GetSortedSubFolders() 已排序的子資料夾清單
+    Private Shared _cacheAttachMailList As New ConcurrentDictionary(Of String, FolderCacheTab3)     ' 包含附件的郵件預掃描結果 (速度很快, 不用存入SSD?)
+    Private Shared _cacheAttachFilename As New ConcurrentDictionary(Of String, List(Of String))     ' 所有附件檔名清單
     Private Shared _cacheYearCounts As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
     Private Shared _cacheMonthCounts As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
 
+    ' GetSubtreeToList() 的樹狀展開平坦化清單 (by Gemini, 2026/04/10: 帶路徑優化)
+    Private Shared _cacheSubTreeList As New ConcurrentDictionary(Of String, List(Of (Folder As Outlook.Folder, fPath As String)))
+    ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
+    Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))
+    ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
+    Private Shared _cacheFolderBasicMailInfos As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer))
+
+    Const BATCH_SIZE As Integer = 500  ' 2026/3/24 by Gemini: GetTable.GetArray() 的時候每次批量讀取的筆數
     Private Structure FolderSortInfo
         ' by Gemini, 2026/03/29: 用於 GetSortedSubFolders 排序優化，減少 COM 屬性讀取次數 (O(N) vs O(N log N))
         Dim FolderObj As Outlook.Folder
@@ -73,6 +76,8 @@ Partial Class Form1
         Dim ReceivedTime As DateTime
         Dim SenderName As String
         Dim AttachCount As Integer
+        ' by Gemini 3 Flash, 2026/04/19: 加入路徑資訊，用於 ListView ToolTip 顯示
+        Dim FolderPath As String
     End Structure
     Private Structure FolderCacheTab3
         Dim AttachMailList As List(Of MailItemInfo) ' 所有 hasAttachment 候選 (無大小篩選)
@@ -84,12 +89,14 @@ Partial Class Form1
 #Region "  ├ 初始化載入函數"
     Private Sub InitOutlookNamespace()
         _dbg(" ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
+
         ' by Gemini, 2026/04/01: 從 Form1_Load 抽離出 Outlook 初始化邏輯，優化結構並加入 TryMarshalRelease 以防內存洩漏
         ' 1. 檢查系統中是否已經啟動 Outlook
         Dim processes() As Process = Process.GetProcessesByName("OUTLOOK")
         If processes.Length = 0 Then    ' 如果 Outlook 尚未啟動，顯示訊息並關閉應用程式
             MessageBox.Show("請先啟動 Outlook", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information) : End
         End If
+
         ' 2. 初始化 Outlook 核心物件模型與 MAPI Namespace
         Try
             _olApp = New Outlook.Application
@@ -99,6 +106,7 @@ Partial Class Form1
             Else
                 Throw New System.Exception("無法取得 Outlook Application 或 MAPI Namespace。")
             End If
+
         Catch ex As System.Exception
             _dbg(" ├ Outlook App OR NameSpace init FAIL", ex.Message) ' by Gemini, 2026/04/10
             TryMarshalRelease(_olNS)
@@ -108,6 +116,7 @@ Partial Class Form1
         End Try
         _dbg(" ├ 結束") ' by Gemini, 2026/04/10
 
+
     End Sub
     Private Sub InitRdoSession()
         ' 3. 初始化 Redemption Session (目前停用，保留開發記錄)
@@ -116,6 +125,7 @@ Partial Class Form1
             ' _rdo = New Redemption.RDOSession()  ' _rdoSession 就等同是outlook.namespace 的意思, 就是Redemption的MAPI session
             ' _rdo.MAPIOBJECT = _olNS.MAPIOBJECT  ' 直接 attach 到現有 Outlook MAPI session, 就不會另開視窗 (必須在 objNameSpace 已建立之後才呼叫)
             ' _dbg("Redemption init OK", $"Version={_rdo.Version}") ' 關鍵: 不建新連線，這樣就不會彈出第二個 Outlook 視窗，也不需要登入
+
             ' 2026/3/27 總算全部寫好RDO的導入,
             ' 但過程中優化了很多東西之後發現, 好像對效能沒有幫助到太多, 反而是演算法的改進才快更多
             ' RDO 的部份好像反而增加了程式碼複雜度跟拖慢啟動速度而已, 所以先關閉不使用
@@ -158,7 +168,7 @@ Partial Class Form1
     Private Sub AutoDismissRedemptionDialog(threadStarted As System.Threading.ManualResetEventSlim)
         ' 自動點掉 Redemption EULA dialog
         ' 使用 WinSpy++ 確認的視窗結構 (2026-03-23) :
-        '   視窗 class    = TEULAForm (Delphi VCL 表單) ，title = "Outlook Redemption"
+        '   視窗 class    = TEULAForm (Delphi VCL 表單)，title = "Outlook Redemption"
         '   "I agree"     = TRadioButton，text = "I agree"
         '   "I do NOT..." = TRadioButton，text = "I do NOT agree"
         '   "Ok"          = TButton，    text = "Ok"
@@ -249,16 +259,15 @@ Partial Class Form1
         t.Start()
 
     End Sub
-#End Region
-#Region "  ├ 資料樹展開 & BFS"
+
     Private Function GetSortedStores(space As Outlook.NameSpace) As List(Of Outlook.Store)
         ' ==========================================
         ' 取得排序後的 NameSpace 下所有Outlook.Store
         ' 包含目前config內的所有帳號和所有開啟的PST檔
         '
         ' ⚠️ 注意: 不在這裡 ReleaseComObject(space)
-        '           space 就是外層的 objNameSpace，釋放後其他地方 (Tab2/Tab3 等) 再用 objNameSpace 會觸發 RCW 已釋放的例外
-        '           objNameSpace 的生命週期就只由 Form1_FormClosing 統一管理
+        '     space 就是外層的 objNameSpace，釋放後其他地方 (Tab2/Tab3 等) 再用 objNameSpace 會觸發 RCW 已釋放的例外
+        '     objNameSpace 的生命週期就只由 Form1_FormClosing 統一管理
         ' ==========================================
         _dbg(" ├ 開始", space.CurrentProfileName) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (由 InitOutlookNamespace 呼叫)
 
@@ -270,90 +279,78 @@ Partial Class Form1
         Return stores
 
     End Function
-    Private Function GetSortedSubFolders(folder As Outlook.Folder) As List(Of Outlook.Folder)
+    Private Function GetSortedSubFolders(pFolder As Outlook.Folder, Optional fPath As String = "") As List(Of Outlook.Folder)
         ' ==========================================
-        ' 取得引數folder下的所有subFolders並排序後傳回
+        ' 取得引數pFolder下的所有subFolders並排序後傳回
         ' 優化紀錄: 2026/03/29 by Gemini 3.1 Pro
         ' 1. 加入 Layer3 過濾: 只保留郵件目錄 (olMailItem)，排除行事曆/聯絡人等
         ' 2. 單次屬性讀取: 先快取 Name 後排序，避開 LINQ 重複打 COM 的 N log N 效能陷阱
+        ' 2026/04/15: 支援傳入 fPath，並透過字串拼接子路徑，減少內部 COM 呼叫
+        ' 2026/04/16: 整合記憶體與 SSD 快取機制 (修復損補遺失) by Gemini 3.0 flash
         ' ==========================================
-        If _iLikeNoisy Then _dbg(" ├ 開始", folder.Name)
-        Dim fPath As String = folder.FolderPath, value As List(Of Outlook.Folder) = Nothing
-        If _cacheFolderTree.TryGetValue(fPath, value) Then Return value
+        If String.IsNullOrEmpty(fPath) Then fPath = pFolder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg(" ├ 開始", fName)
 
-        ' ② DB lazy load: 優先從 SSD 載入 ID 並點對點取回物件 (by Gemini, 2026/04/10)
-        ' ----------------------------------------------------------------------
-        Dim dbIDs = DbGetOrderedSubFolderIDs(fPath, _showAllFolders) ' by Gemini, 2026/04/10: 改用全域變數以提升效能，避免頻繁讀取 UI 狀態
-        If dbIDs IsNot Nothing Then
-            Dim dbFolders As New List(Of Outlook.Folder)
-            For Each row In dbIDs
-                Try ' GetFolderFromID 是點對點查詢，不需遞迴，極快
-                    Dim f = TryCast(_olNS.GetFolderFromID(row.eid, row.sid), Outlook.Folder)
-                    If f IsNot Nothing Then dbFolders.Add(f)
-                Catch : End Try ' 若 EntryID 變更或路徑已不存在，默默跳過就好
-            Next
-            If dbFolders.Count > 0 Then
-                _cacheFolderTree(fPath) = dbFolders
-                If _iLikeNoisy Then _dbg("    ├ SSD Hit", $"{folder.Name}: 已從資料庫載入 {dbFolders.Count} 個子目錄") ' by Gemini, 2026/04/10: 調整路徑判斷
-                Return dbFolders
+        ' ① 記憶體快取檢查: 命中則直接回傳，0ms
+        ' by Gemini 3.0 flash, 2026/04/17: 引入鍵值分支，避免全顯/過濾模式交錯污染
+        Dim cacheKey As String = fPath & "|" & _showAllFolders
+        Dim cachedFolders As List(Of Outlook.Folder) = Nothing
+        If _cacheFolderTree.TryGetValue(cacheKey, cachedFolders) Then Return cachedFolders
+
+        ' ② SSD / DB 讀取分支 (Lazy Load): TreeView 展開時的主要加速點
+        If _db IsNot Nothing Then
+            Dim dbIDs = DbGetOrderedSubFolderIDs(fPath, _showAllFolders)
+            If dbIDs IsNot Nothing Then
+                Dim dbResults As New List(Of Outlook.Folder)
+                For Each row In dbIDs
+                    Try
+                        ' DbGetSubFolderIDList 回傳的是 (eid, sid, path) 的具名 Tuple 列表 by Gemini 3.0 flash, 2026/04/16
+                        Dim f = TryCast(_olNS.GetFolderFromID(row.eid, row.sid), Outlook.Folder)
+                        If f IsNot Nothing Then dbResults.Add(f)
+                    Catch
+                    End Try
+                Next
+                If dbResults.Count > 0 Then
+                    _cacheFolderTree(cacheKey) = dbResults
+                    If _iLikeNoisy Then _dbg("    ├ SSD Hit", $"{fName}: 已從資料庫載入 {dbResults.Count} 個子目錄")
+                    Return dbResults
+                End If
             End If
         End If
 
-        ' ③ 傳統 COM 掃描: 快取未命中或 SSD 無紀錄時走原路徑 (OOM 遍歷)
-        ' ----------------------------------------------------------------------
+        ' ③ 傳統 OOM 分支 (Fallback): 快取未命中時才打 COM 掃描
+        ' 收集子資料夾並快取屬性 (減少 COM 屬性重複呼叫)
         Dim infoList As New List(Of FolderSortInfo)
+        Dim subs As Outlook.Folders = pFolder.Folders
         Try
-            ''' 2024/5/13記錄: 已經試過很多種優化, 好像很難再比現在下面這二行LINQ還快了??
-            ''' Dim subFolders As List(Of Outlook.Folder) = folder.Folders.Cast(Of Outlook.Folder)().ToList()
-            ''' subFolders = subFolders.OrderBy(Function(subF) If(TextHasChineseChar(subF.Name), 1, 0)).
-            '''                         ThenBy(Function(subF) subF.Name).ToList()
-            ''' [上面是舊版紀錄] 原本使用 LINQ 直接 Cast().ToList() 後排序，缺點是 OrderBy 會重複觸發 COM 讀取屬性
-            ''' 
-            ' [下面是新版優化] by Gemini, 2026/03/29:
-            ' 1. 動態過濾: 根據 checkShowAllFolders.Checked 決定是否顯示非郵件目錄
-            ' 2. 單次屬性讀取: 先快取 Name 後排序，避開 LINQ 重複打 COM 的 N log N 效能陷阱
+            For Each subF As Outlook.Folder In subs
+                ' 修復過濾：若未勾選「顯示全部」，且該資料夾非郵件類，則跳過 (by Gemini 3.0 flash, 2026/04/17)
+                ' 利用現有 fPath 拼接路徑傳入 IsMailFolder，實現零額外 COM 屬性讀取
+                Dim sName As String = subF.Name
+                Dim childPath As String = fPath & "\" & sName
+                If Not _showAllFolders AndAlso Not IsMailFolder(subF, childPath) Then Continue For
 
-            For Each subF As Outlook.Folder In folder.Folders
-                Dim isMail As Boolean = IsMailFolder(subF) ' 這裡已具備記憶體快取
-                ' 🔥 核心過濾: 正常若「沒勾選顯示全部」且「不是郵件資料夾」時就排除
-                If Not _showAllFolders AndAlso Not isMail Then Continue For ' by Gemini, 2026/04/10: 合併為 AndAlso 邏輯以簡化結構
-
-                Dim fName As String = subF.Name
-                Dim hasCh As Boolean = TextHasChineseChar(fName)
-                infoList.Add(New FolderSortInfo With {.FolderObj = subF, .Name = fName, .HasChinese = hasCh})
-
-                ' by Gemini, 2026/04/10: 登記身分標識與屬性標記，供 Save Cache 時持久化到 SSD 以繞過 COM OOM 遍歷
-                _cacheFolderIDs.TryAdd(subF.FolderPath, (subF.EntryID, subF.StoreID, isMail, hasCh))
+                infoList.Add(New FolderSortInfo With {.FolderObj = subF, .Name = sName, .HasChinese = TextHasChineseChar(sName)})
+                ' 這裡 subF 被加入 infoList 成為物件清單，所以不能在這裡 TryRelease 它
             Next
-        Catch ex As System.Exception
-            _dbg(" ├ GetSortedSubFolders 遍歷失敗", ex.Message) ' by Gemini, 2026/04/10
+        Finally
+            TryMarshalRelease(subs) ' 存到變數後可以TryRelease subs，避免後續 COM 呼叫時 RCW 已釋放的例外
         End Try
 
-        ' ② 純記憶體排序: 完全不觸發 COM 呼叫 (快速且不卡 UI)
+        ' 純記憶體排序: 完全不觸發 COM 呼叫
         Dim sortedFolders = infoList.OrderBy(Function(i) If(i.HasChinese, 1, 0)).
                                      ThenBy(Function(i) i.Name, StringComparer.OrdinalIgnoreCase).
                                      Select(Function(i) i.FolderObj).ToList()
         ' 2026/4/7 進一步優化 by Gemini: 加入 StringComparer.OrdinalIgnoreCase 略過語系分析，爆發性提速
 
-        _cacheFolderTree(fPath) = sortedFolders
-        If _iLikeNoisy Then _dbg(" ├ 結束", $"{folder.Name} | 子資料夾數: {sortedFolders.Count}") ' by Gemini, 2026/04/10
+        _cacheFolderTree(cacheKey) = sortedFolders
+        If _iLikeNoisy Then _dbg(" ├ 結束", $"{fName} (BFS) | 子資料夾數: {sortedFolders.Count}")
         Return sortedFolders
 
     End Function
     Private Sub LoadStoreToTreeView(storeList As List(Of Outlook.Store), tv As TreeView)
         _dbg(" ├ 開始", tv.Name) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
-
-        ''' 2024/5/17全部重寫, 只先動態載入一層的rootFolder, 不花時間遍歷所有的subFolders
-        ''' 2024/5/19試過Task.Run(), Parallel.Foreach跟LINQ擴充方法了, 都沒有比較快, 別再試了, 就算virtual mode也沒有比我現在的lazy load還快
-        ''tv.BeginUpdate()
-        ''For Each st In storeList
-        ''    Dim root As Outlook.Folder = st.GetRootFolder
-        ''    'Dim node As TreeNode = Await Task.Run(Function() Me.Invoke(Function() tv.Nodes.Add(root.Name)))
-        ''    Dim node As TreeNode = tv.Nodes.Add(root.Name)
-        ''    node.Tag = root
-        ''    If root.Folders.Count > 0 Then node.Nodes.Add(":::") '若發現底下還有subFolders也不讀取, 只先填入一個假的":::"暫代, 才能出現"+"號
-        ''Next
-        ''tv.EndUpdate()
 
         ' 2024/5/20昨天才說不會更快了, 今天改用Nodes.AddRange(), 又更快了一點, 連BeginUpdate/EndUpdate都不需要了
         ' 遍歷 storeList 並創建節點, 加進List而不是直接加到Treeview.Nodes
@@ -363,7 +360,7 @@ Partial Class Form1
             Dim node As New TreeNode(root.Name) With {.Tag = root}
             node.Nodes.Add(":::")  ' ✅ 無條件加佔位節點，省掉判斷 root.Folders.Count 這一次多餘的 COM 往返
             nodeList.Add(node)
-            ' PST root folder 幾乎 100% 都有子資料夾，這個假設安全；
+            ' PST root pFolder 幾乎 100% 都有子資料夾，這個假設安全；
             ' 就算 PST 真的空了，展開時 LoadSubFolderToTreeView 清除 ":::" 後不加任何子節點，節點就會自動收起 "+" 號，行為正確
         Next
 
@@ -372,6 +369,9 @@ Partial Class Form1
 
     End Sub
     Private Sub LoadSubFolderToTreeView(sender As Object, e As TreeViewCancelEventArgs)
+        ' ✅ 2026/04/20 by Gemini 2.0 Flash: 若 Tab4 處於搜尋結果顯示模式，則不執行自動資料夾載入
+        If sender Is SimTree4 AndAlso _isTab4ShowingResults Then Exit Sub
+
         _dbg(" ├ 開始", sender.Name) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
         ' 2024/5/17全部重寫, 把現在要點開的資料夾, 讀出其子資料夾並加載進treeview
         ' 5/19試過Task.Run(), Parallel.Foreach跟LINQ擴充方法了, 都沒有比較快, 別再試了, 就算virtual mode也沒有比我現在的lazy load還快
@@ -386,7 +386,7 @@ Partial Class Form1
             For Each folder As Outlook.Folder In sortedFolders
                 Dim node As New TreeNode(folder.Name) With {.Tag = folder}
                 Try
-                    'If GetCachedFolderCount(folder) > 0 Then node.Nodes.Add(":::")
+                    'If GetFolderCount(pFolder) > 0 Then node.Nodes.Add(":::")
                     If HasSubFoldersFast(folder) Then node.Nodes.Add(":::") ' 2026/4/7 by Gemini, 光速版子資料夾加號預測 (專為 TreeView 展開設計)
                 Catch ex As System.Exception : End Try
                 nodeList.Add(node) ' 先加進List在記憶體中快速操作, 而不是直接加到Treeview.Nodes
@@ -396,118 +396,331 @@ Partial Class Form1
         _dbg(" ├ 結束", $"{selectedFolder.Name} 展開 {sortedFolders.Count} 個子資料夾") ' by Gemini, 2026/04/10
 
     End Sub
+#End Region
+#Region "  ├ Layer2.5 快取存取點 (Cache Proxy Layer)"
+    ' 2026/03/27 by Gemini: 新增 Layer2.5 快取存取點 (Cache Proxy Layer)，保護 Layer3 不被頻繁呼叫
+    ' ---------------------------------------------------------------
+    '   - GetMailCount(pFolder)             ' 單一資料夾郵件數，有 DB lazy + snapshot 驗證
+    '   - GetFolderCount(pFolder)           ' 單一資料夾子資料夾數，有 DB lazy + snapshot 驗證
+    '   - GetMailCountAllAsync(pFolder)     ' 整棵子樹郵件總數，有 DB lazy
+    '   - GetFolderCountAllAsync(pFolder)   ' 整棵子樹資料夾總數，有 DB lazy
+    '   - GetFolderSizeAsync(pFolder)       ' 單一資料夾大小，有 DB lazy
+    '   - GetFolderSizeAllAsync(pFolder)    ' 整棵子樹大小，有 DB lazy
+    '   - GetAttachMailList(pFolder)        ' Tab3 Phase1，有 DB lazy (attach_maillist)
+    '   - GetAttachFilename(mail)           ' Tab3 Phase2，有 DB lazy (attach_filenames)
+    '   - GetSubtreeToList(rootFolder)      ' 整棵子資料夾清單，有 DB lazy (2026/04/17)
+    '   - GetYearCountsForFolder(folder, fPath:=fPath) ' 單一資料夾年份分佈，有 DB lazy (2026/04/17)
+    '   - GetMonthCountsForYear(folder, year)   ' 單一資料夾月份分佈，有 DB lazy + 提前過濾 (2026/04/17)
+    ' ---------------------------------------------------------------
+    ' 2026/04/07: Phase 2 — 在記憶體 miss 時加入 SQLite lazy SELECT，命中後一次填滿所有欄位
+    '             寫入仍由 SaveCachesToSQLiteAsync (SaveCache 按鈕) 批次處理，本層不做即時寫入
+    '
+    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
+    '             讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
+    ' ---------------------------------------------------------------
+    ' 呼叫順序 (每個 Layer2.5 函數):
+    '   ① 記憶體命中 → 直接回傳 (最快，0 COM call) 
+    '   ② DB 命中 + snapshot 驗證通過 → 填滿記憶體快取 → 回傳 (快，0 COM call) 
+    '   ③ DB miss 或 snapshot 不符 → 呼叫 Layer3 → 填入記憶體快取 → 回傳 (慢，有 COM call) 
+    '
+    ' snapshot 驗證: DB 儲存的 content_count_snapshot = save 時的 PR_CONTENT_COUNT 值
+    '   用 GetLiveFolderSnapL3 (單次 PropertyAccessor call) 與 snapshot 比對
+    '   相同 → 快取仍有效；不同 → 資料夾內容已變，跳過 DB，呼叫 Layer3
+    ' ---------------------------------------------------------------
+    Private Function GetMailCount(folder As Outlook.Folder, Optional fPath As String = "") As Integer
+        ' ---------------------------------------------------------------
+        ' GetMailCount — 單一資料夾本層郵件數 (PR_CONTENT_COUNT)
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 mc 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' 2026/04/15 by Gemini 3.1 Pro, 加入 optional fPath 參數，若有傳入則可省去 pFolder.FolderPath 1ms 耗時
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim count As Integer
+        If _cacheMailCount.TryGetValue(fPath, count) Then Return count  ' ① 記憶體命中
 
-    Private Async Function GetSubtreeToList(rootFolder As Outlook.Folder, includeSubF As Boolean, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of List(Of Outlook.Folder))    ' by Claude, 2026/04/11: 改為 Async，加 cToken 參數以支援 ESC 中斷
-        ' --------------------------------------------------------------
-        ' GetSubtreeToList: 取得目標資料夾下, 整個資料夾子樹清單 (BFS，含子資料夾)
-        ' ① OOM BFS: 目前唯一的路徑，使用 Outlook Object Model 廣度優先搜尋
-        ' by Gemini, 2026/04/02: 導入 IProgress 支援
-        ' --------------------------------------------------------------
-        If _iLikeNoisy Then _dbg(" ├ 開始", rootFolder.Name) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
-        Dim sw As New Stopwatch() : sw.Start()
-        Dim swThrottle As New Stopwatch() : swThrottle.Start()
-
-        Dim result As New List(Of Outlook.Folder)
-        If includeSubF Then
-            Dim cachedList As List(Of Outlook.Folder) = Nothing
-            If _cacheSubFolderList.TryGetValue(rootFolder.FolderPath, cachedList) Then
-                sw.Stop()
-                _dbg(" ├ 結束", $"{rootFolder.Name} (Cache Hit) | 資料夾總計: {cachedList.Count} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
-                Return cachedList
-            End If
-
-            ' ② DB lazy load: 利用 LIKE 一取回整棵樹的 ID 並重建物件 (by Gemini, 2026/04/10)
-            Dim dbIDs = DbGetSubFolderIDList(rootFolder.FolderPath, _showAllFolders)
-            If dbIDs IsNot Nothing Then
-                Dim dbFolders As New List(Of Outlook.Folder)
-                For Each row In dbIDs
-                    Try
-                        ' 更正命名空間變數: _mapiNameSpace -> _olNS
-                        Dim f = TryCast(_olNS.GetFolderFromID(row.eid, row.sid), Outlook.Folder)
-                        If f IsNot Nothing Then dbFolders.Add(f)
-                    Catch
-                    End Try
-                Next
-                If dbFolders.Count > 0 Then
-                    _cacheSubFolderList(rootFolder.FolderPath) = dbFolders
-                    sw.Stop()
-                    If _iLikeNoisy Then _dbg("    ├ SSD Hit (Tree)", $"{rootFolder.Name}: 已從資料庫載入 {dbFolders.Count} 個子目錄") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
-                    Return dbFolders
-                End If
-            End If
+        ' ② DB lazy load：命中且 mc 有效且 snapshot 吻合 → 一次填滿所有欄位
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.mc >= 0 AndAlso GetLiveFolderSnapL3(folder) = row.snap Then
+            FillFolderCacheFromDbRow(fPath, row) : Return row.mc
         End If
 
-        ' ③ 傳統 OOM BFS 掃描: 快取未命中或 SSD 無紀錄時走原路徑
-        result.Add(rootFolder)
-        If Not includeSubF Then
-            sw.Stop()
-            _dbg(" ├ 結束", $"{rootFolder.Name} (Single) | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
-            Return result     ' 若不包含子資料夾，直接回傳只有 rootFolder 的清單
-        End If
-
-        ' 取得目標資料夾清單 (BFS，含子資料夾)
-        Dim queue As New Queue(Of Outlook.Folder)
-        queue.Enqueue(rootFolder)
-        Try
-            While queue.Count > 0
-                Dim current As Outlook.Folder = queue.Dequeue()
-                Try
-                    For Each subF As Outlook.Folder In current.Folders
-                        Dim isMail As Boolean = IsMailFolder(subF) ' 這裡已具備記憶體快取
-                        ' 🔥 核心過濾: 正常若「沒勾選顯示全部」且「不是郵件資料夾」時就排除
-                        If Not _showAllFolders AndAlso Not isMail Then Continue For ' by Gemini, 2026/04/10: 合併為 AndAlso 邏輯以簡化結構
-
-                        ' by Gemini, 2026/04/10: 登記子資料夾 ID 進 Layer 2.5 ID 快取，供 SSD 持久化使用
-                        Dim fPath As String = subF.FolderPath
-                        Dim eID As String = subF.EntryID
-                        Dim sID As String = subF.StoreID
-                        Dim fName As String = subF.Name
-                        ' ✅ 優化 by Gemini, 2026/04/10: 先將常用 COM 屬性取成區域變數，避免同一行內重複讀取 (simon: 但這個好像跟速度優化沒什麼關係?)
-                        _cacheFolderIDs.TryAdd(fPath, (eID, sID, isMail, TextHasChineseChar(fName)))
-                        result.Add(subF)       ' 把子資料夾加入結果清單
-                        queue.Enqueue(subF)    ' 把子資料夾加入佇列，繼續往下搜尋
-                    Next
-
-                Catch ex As System.Exception
-                    _dbg("    ├ ① OOM 失敗", current.Name & " - " & ex.Message) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (迴圈內)
-                End Try
-
-                ' by Gemini, 2026/04/02: 100ms 節流回報已發現的資料夾數
-                ' by Claude, 2026/04/11: 函數已改為 Async，移除舊 _cancelRequested 旗標，改用 Task.Delay(1,cToken) 統一處理 ESC 中斷
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    progress?.Report(New ProgressReport With {.CurrentCount = result.Count, .Message = $"正在展開資料夾結構: 已發現 {result.Count} 個資料夾..."})
-                    swThrottle.Restart()
-                    Await Task.Delay(1, cToken)  ' by Claude, 2026/04/11: Async 化後可用 Await 讓消息泵有機會處理 ESC 中斷
-                End If
-            End While
-        Catch ex As OperationCanceledException
-            ' 2026/04/11 by Claude: 改為 re-throw，確保 folderList 不完整時上層的 for loop 能即時中止，
-            ' 不繼續用殘缺的清單計算 totalMailCount 或 CollectYearCounts。
-            ' (原本 catch 後直接 End Try 再 Return result，回傳殘缺清單繼續被使用)
-            _dbg(" ├ 中斷", $"GetSubFolderList 已由使用者中斷，已發現 {result.Count} 個")
-            Throw
-        Catch ex As System.Exception
-            _dbg(" ├ ② OOM BFS 失敗", ex.Message) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1 (外層 Try)
-        End Try
-        sw.Stop()
-
-        If includeSubF AndAlso Not cToken.IsCancellationRequested AndAlso result.Count > 0 Then  ' by Claude, 2026/04/11: 改用 cToken 判斷
-            _cacheSubFolderList.TryAdd(rootFolder.FolderPath, result)
-        End If
-
-        _dbg(" ├ 結束", $"{rootFolder.Name} (BFS) | 資料夾總計: {result.Count} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
-        Return result
+        ' ③ fallback: Layer3 呼叫
+        count = GetMailCountL3(folder, fPath:=fPath)
+        _cacheMailCount.TryAdd(fPath, count)
+        Return count
 
     End Function
-    Private Async Function GetUniqueFolderList(selectedNodes As List(Of TreeNode), includeSub As Boolean, cToken As CancellationToken) As Task(Of List(Of Outlook.Folder))
+    Private Function GetFolderCount(folder As Outlook.Folder, Optional fPath As String = "") As Integer
+        ' ---------------------------------------------------------------
+        ' GetFolderCount — 單一資料夾直屬子資料夾數
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 fc 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim count As Integer
+        If _cacheFolderCount.TryGetValue(fPath, count) Then Return count  ' ①
+
+        ' ② DB lazy load (fc 欄位) 
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fc >= 0 AndAlso GetLiveFolderSnapL3(folder) = row.snap Then
+            FillFolderCacheFromDbRow(fPath, row) : Return row.fc
+        End If
+
+        ' ③ fallback: Layer3 呼叫
+        count = GetFolderCountL3(folder, fPath:=fPath)
+        _cacheFolderCount.TryAdd(fPath, count)
+        Return count
+
+    End Function
+    Private Async Function GetMailCountAllAsync(folder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of Long)
+        ' ---------------------------------------------------------------
+        ' GetMailCountAllAsync — 整棵子樹的郵件總數
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 mca 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標
+        ' 2026/04/15 by Gemini: 加入 optional fPath
+        ' ---------------------------------------------------------------
+        ' 2026/4/28 by simon: 目前GetxxxCountAll系列函數已成死碼, 沒有任何呼叫端與進入點
+        ' 原始設計意圖:
+        ' 	呼叫端 → GetMailCountAllAsync (L2.5) → GetMailCountAllL3 (L3)
+        ' 	呼叫端 → GetFolderCountAllAsync (L2.5) → GetFolderCountAllL3 (L3)
+        '
+        ' 後來使用了BFS剪枝速度更快:
+        ' 	Compute → BFS → SummarizeSubTreeBottomUp → UpdateFolderStatsCache
+        ' 	(自己計算並直接寫入 _cacheMailCountAll / _cacheFolderCountAll，完全繞過 AllAsync系列函數)
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        If _iLikeNoisy Then _dbg(" ├ 開始", ExtractFolderName(fPath))
+        Dim count As Integer
+        If _cacheMailCountAll.TryGetValue(fPath, count) Then Return count  ' ①
+
+        ' ② DB lazy load (mca 欄位) 
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.mca >= 0 AndAlso GetLiveFolderSnapL3(folder) = row.snap Then
+            FillFolderCacheFromDbRow(fPath, row) : Return row.mca
+        End If
+
+        ' ③ fallback: Layer3 呼叫
+        Dim total As Long = Await GetMailCountAllL3(folder, progress, cToken:=cToken)
+        If total >= 0 Then _cacheMailCountAll.TryAdd(fPath, CInt(total))  ' 2026/04/15: 改用 cToken 判斷，取代 _cancelRequested
+        Return total
+
+    End Function
+    Private Async Function GetFolderCountAllAsync(folder As Outlook.Folder, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of Integer)
+        ' ---------------------------------------------------------------
+        ' GetFolderCountAllAsync — 整棵子樹的資料夾總數
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 fca 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標
+        ' ---------------------------------------------------------------
+        ' 2026/4/28 by simon: 目前GetxxxCountAll系列函數已成死碼, 沒有任何呼叫端與進入點
+        ' 原始設計意圖:
+        ' 	呼叫端 → GetMailCountAllAsync (L2.5) → GetMailCountAllL3 (L3)
+        ' 	呼叫端 → GetFolderCountAllAsync (L2.5) → GetFolderCountAllL3 (L3)
+        '
+        ' 後來使用了BFS剪枝速度更快:
+        ' 	Compute → BFS → SummarizeSubTreeBottomUp → UpdateFolderStatsCache
+        ' 	(自己計算並直接寫入 _cacheMailCountAll / _cacheFolderCountAll，完全繞過 AllAsync系列函數)
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        If _iLikeNoisy Then _dbg(" ├ 開始", ExtractFolderName(fPath))
+        Dim count As Integer
+        If _cacheFolderCountAll.TryGetValue(fPath, count) Then Return count  ' ①
+
+        ' ② DB lazy load (fca 欄位) 
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fca >= 0 AndAlso GetLiveFolderSnapL3(folder) = row.snap Then
+            FillFolderCacheFromDbRow(fPath, row) : Return row.fca
+        End If
+
+        ' ③ fallback: Layer3 呼叫
+        count = Await GetFolderCountAllL3(folder, cToken:=cToken)
+        If count >= 0 Then _cacheFolderCountAll.TryAdd(fPath, count)  ' 2026/04/15: 改用 cToken 判斷
+        Return count
+    End Function
+    Private Async Function GetFolderSizeAsync(folder As Outlook.Folder, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of Long)
+        ' ---------------------------------------------------------------
+        ' GetFolderSizeAsync — 單一資料夾本層大小 (GetTable 加總)
+        ' 2026/3/29 by Gemini: Layer2.5 快取代理層 - 取得單一資料夾本層的大小 (含快取機制)
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 fs 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim size As Long
+        If _cacheFolderSize.TryGetValue(fPath, size) Then Return size  ' ①
+
+        ' ② DB lazy load (fs 欄位) 
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fs >= 0 AndAlso GetLiveFolderSnapL3(folder) = row.snap Then
+            FillFolderCacheFromDbRow(fPath, row) : Return row.fs
+        End If
+
+        ' ③ Layer3
+        size = Await GetFolderSizeL3(folder, fPath:=fPath, cToken:=cToken)
+        If size >= 0 Then _cacheFolderSize.TryAdd(fPath, size)
+        Return size
+
+    End Function
+    Private Async Function GetFolderSizeAllAsync(folder As Outlook.Folder, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of Long)
+        ' ---------------------------------------------------------------
+        ' GetFolderSizeAllAsync — 整棵子樹大小總計
+        ' 2026/3/29 by Gemini: Layer2.5 快取代理層 - 取得整棵子樹的大小總計 (含快取機制)
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 fsa 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        If _iLikeNoisy Then _dbg(" ├ 開始", ExtractFolderName(fPath))
+        Dim size As Long
+        If _cacheFolderSizeAll.TryGetValue(fPath, size) Then Return size  ' ①
+
+        ' ② DB lazy load (fsa 欄位) 
+        Dim row = DbGetFolderStats(fPath)
+        If row IsNot Nothing AndAlso row.fsa >= 0 AndAlso GetLiveFolderSnapL3(folder) = row.snap Then
+            FillFolderCacheFromDbRow(fPath, row) : Return row.fsa
+        End If
+
+        ' ③ fallback: Layer3 呼叫
+        size = Await GetFolderSizeAllL3(folder, cToken:=cToken)
+        If size >= 0 Then _cacheFolderSizeAll.TryAdd(fPath, size)  ' 2026/04/15: 改用 cToken 判斷
+        Return size
+
+    End Function
+
+    Private Async Function GetYearCountsForFolder(folder As Outlook.Folder, fPath As String, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+        ' ---------------------------------------------------------------
+        ' GetYearCountsForFolder — 單一資料夾年份郵件分佈 (Layer2.5 快取代理)
+        ' 2026/04/17 by Claude: 從 CollectYearCounts (L2) 拆出，對齊其他 Layer2.5 快取函數架構
+        ' 呼叫順序: ① 記憶體命中 → ② DB lazy load → ③ Layer3 GetYearCountsForFolderL3
+        ' OCE 不在此攔截，直接 re-throw 讓 CollectYearCounts (L2) 的 Catch OCE 接住
+        ' ---------------------------------------------------------------
+        Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
+        If _cacheYearCounts.TryGetValue(fPath, value) Then     ' ① 記憶體命中
+            If _iLikeNoisy Then _dbg("    ├ Cache Hit: ", ExtractFolderName(fPath))
+            Return value
+        End If
+
+        Dim dbResult = DbGetYearCountsForFolder(fPath)          ' ② DB lazy load
+        If dbResult IsNot Nothing Then
+            _cacheYearCounts(fPath) = dbResult
+            If _iLikeNoisy Then _dbg("    ├ DB Hit: ", ExtractFolderName(fPath))
+            Return dbResult
+        End If
+
+        If _iLikeNoisy Then _dbg("    ├ Cache miss: ", ExtractFolderName(fPath))
+        Dim folderResult = Await GetYearCountsForFolderL3(folder, fPath:=fPath, cToken:=cToken) ' ③ Layer3 COM；OCE re-throw 至 L2
+        _cacheYearCounts(fPath) = folderResult                  ' ✅ OCE 時走不到此行，快取僅在完整計算後寫入
+        Return folderResult
+
+    End Function
+    Private Async Function GetMonthCountsForYear(folder As Outlook.Folder, year As Integer, fPath As String, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+        ' ---------------------------------------------------------------
+        ' GetMonthCountsForYear — 單一資料夾指定年份月份分佈 (Layer2.5 快取代理)
+        ' 2026/04/17 by Claude: 從 GetMonthCountsForYearL3 拆出快取與提前過濾邏輯
+        '   原來的快取/過濾邏輯混在 L3 裡，現在統一到此 L2.5 層，L3 只剩純 COM
+        ' 呼叫順序:
+        '   提前過濾 1 — GetMailCount=0   → 直接回傳空，不打 COM
+        '   提前過濾 2 — _cacheYearCounts 已知該年無信 → 直接回傳空，不打 COM
+        '   ① 記憶體命中 → ② DB lazy load → ③ Layer3 GetMonthCountsForYearL3
+        ' OCE 不在此攔截，直接 re-throw 讓 CollectMonthCounts (L2) 的 Catch OCE 接住
+        ' ---------------------------------------------------------------
+
+        ' 提前過濾 1: 該資料夾完全無郵件，不必查快取或打 COM
+        ' 2026/04/10 by Gemini: 解決 DB 沒存 0 封信記錄，lazy_load 回 Nothing 被迫打 COM 的問題
+        If GetMailCount(folder, fPath:=fPath) = 0 Then Return New ConcurrentDictionary(Of Integer, Integer)()
+
+        ' 提前過濾 2: 年度快取已知此年份信件數為 0，不必打月份 COM
+        ' 2026/04/10 by Gemini: 省掉「某資料夾在 2001 年確定無信」的多餘 COM 呼叫
+        Dim yCache As ConcurrentDictionary(Of Integer, Integer) = Nothing
+        If _cacheYearCounts.TryGetValue(fPath, yCache) Then
+            Dim countInYear As Integer = 0
+            yCache.TryGetValue(year, countInYear)
+            If countInYear = 0 Then Return New ConcurrentDictionary(Of Integer, Integer)()
+        End If
+
+        Dim cacheKey As String = fPath & "_" & year.ToString()
+        Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
+        If _cacheMonthCounts.TryGetValue(cacheKey, value) Then Return value  ' ① 記憶體命中
+
+        Dim dbResult = DbGetMonthCountsForFolder(fPath, year)                 ' ② DB lazy load
+        If dbResult IsNot Nothing Then
+            _cacheMonthCounts.TryAdd(cacheKey, dbResult)
+            If _iLikeNoisy Then _dbg("DB 命中", $"{ExtractFolderName(fPath)} {year} 年 ({dbResult.Count} 個月)")
+            Return dbResult
+        End If
+
+        ' ③ Layer3 COM 呼叫；OCE re-throw，不在此攔截 (寫入快取在 COM 完成後，OCE 天然繞過)
+        Dim monthCounts = Await GetMonthCountsForYearL3(folder, year, fPath:=fPath, cToken:=cToken)
+        _cacheMonthCounts(cacheKey) = monthCounts           ' ✅ 完整計算後存入快取
+        ' DbSaveMonthCountsSingle(fPath, year, monthCounts) ' ✅ 2026/04/09 設計: 增量寫入 DB (待啟用)
+        Return monthCounts
+
+    End Function
+    Private Async Function GetSubtreeToList(rootFolder As Outlook.Folder, includeSubF As Boolean, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of List(Of (Folder As Outlook.Folder, fPath As String)))
+        ' ---------------------------------------------------------------
+        ' GetSubtreeToList — 整棵子資料夾清單 (Layer2.5 快取代理)
+        ' 2026/04/17 by Claude: 從 GetSubtreeToList 拆出快取邏輯
+        '   原來的快取邏輯混在 BFS 函數裡，現在統一到此 L2.5 層
+        '   GetSubtreeToListL3 (原 GetSubtreeToList) 只剩純 BFS COM 掃描
+        ' 呼叫順序: ① 記憶體命中 → ② DB lazy load → ③ Layer3 GetSubtreeToListL3
+        ' includeSubF=False 時無需快取，直接呼叫 L3 回傳單節點清單
+        ' ---------------------------------------------------------------
+        Dim rootPath As String = rootFolder.FolderPath
+
+        If Not includeSubF Then Return Await GetSubtreeToListL3(rootFolder, False, progress, cToken:=cToken) ' 單節點不快取
+
+        ' 2026/04/17 by Gemini 3.0 flash: 引入鍵值分支，避免全顯/過濾模式交錯污染快取
+        Dim cacheKey As String = rootPath & "|" & _showAllFolders
+
+        Dim cachedList As List(Of (Folder As Outlook.Folder, fPath As String)) = Nothing
+        If _cacheSubTreeList.TryGetValue(cacheKey, cachedList) Then              ' ① 記憶體命中
+            _dbg(" ├ 結束", $"{ExtractFolderName(rootPath)} (Cache Hit) | 資料夾總計: {cachedList.Count}")
+            Return cachedList
+        End If
+
+        ' ② DB lazy load: 利用 LIKE 一取回整棵樹的 ID 並重建物件
+        ' 注意: DB 存放的是 (EntryID, StoreID, FolderPath)，我們在這裡重建 Tuple
+        Dim dbIDs = DbGetSubFolderIDList(rootPath, _showAllFolders)                ' ② DB lazy load
+        If dbIDs IsNot Nothing Then
+            Dim dbResults As New List(Of (Folder As Outlook.Folder, fPath As String))
+            For Each row In dbIDs
+                Try
+                    ' DbGetSubFolderIDList 回傳的是 (eid, sid, path) 的具名 Tuple 列表 by Gemini 3.0 flash, 2026/04/16
+                    Dim f = TryCast(_olNS.GetFolderFromID(row.eid, row.sid), Outlook.Folder)
+                    If f IsNot Nothing Then dbResults.Add((Folder:=f, fPath:=row.path))
+                Catch
+                End Try
+            Next
+            If dbResults.Count > 0 Then
+                _cacheSubTreeList(cacheKey) = dbResults
+                If _iLikeNoisy Then _dbg("    ├ SSD Hit (Tree)", $"{ExtractFolderName(rootPath)}: 已從資料庫載入 {dbResults.Count} 個子目錄")
+                Return dbResults
+            End If
+        End If
+
+        ' ③ Layer3 BFS COM 掃描；OCE re-throw，快取寫入在 L3 完成後由 L3 自行負責
+        Return Await GetSubtreeToListL3(rootFolder, True, progress, cToken:=cToken)
+
+    End Function
+    Private Async Function GetUniqueFolderList(selectedNodes As List(Of TreeNode), includeSub As Boolean, cToken As CancellationToken, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of List(Of (Folder As Outlook.Folder, fPath As String)))
         ''' <summary>
-        ''' 共用邏輯 (Tab 2, 3, 4, 5 都有用到)：將多個 TreeNode 轉換為無重複的實體資料夾清單
-        '''   對每個選定的根資料夾執行 BFS，合併成一個完整的目標資料夾清單  
-        '''   用 HashSet(Of String) 以 FolderPath 去重，避免使用者選到父子資料夾時重複計算
-        '''   若Add() 回傳 False 代表已存在，自動去重
+        ''' 共用邏輯：將多個 TreeNode 轉換為無重複的實體資料夾清單
+        ''' 2026/04/16 by Gemini: 升級回傳 Tuple (Folder, fPath)，消除呼叫端對 COM .FolderPath 的一次性集體讀取
         ''' </summary>
         _dbg(" ├ 開始")
-        Dim folderList As New List(Of Outlook.Folder)
+        Dim fList As New List(Of (Folder As Outlook.Folder, fPath As String))
         Dim addedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
 
         For Each node As TreeNode In selectedNodes
@@ -516,242 +729,31 @@ Partial Class Form1
             Dim rootF = TryCast(node.Tag, Outlook.Folder)
             If rootF Is Nothing Then Continue For
 
-            For Each subF In Await GetSubtreeToList(rootF, includeSub, cToken:=cToken)  ' 呼叫 Layer 3 的 BFS 取得該節點下的所有子資料夾
-                If addedPaths.Add(subF.FolderPath) Then folderList.Add(subF)                ' 利用 HashSet 高效去重（跨節點選取到父子層級時不會重複統計）
+            ' GetSubtreeToList 回傳的 subF 現在是 (Folder, fPath) Tuple
+            ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，原 GetSubtreeToList 已改名為 L3
+            For Each subF In Await GetSubtreeToList(rootF, includeSub, progress:=progress, cToken:=cToken)
+                ' ✅ 直接讀取 subF.fPath (Tuple 屬性)，再也不用打 COM!
+                If addedPaths.Add(subF.fPath) Then fList.Add(subF)
             Next
             Await Task.Yield()
         Next
-        Return folderList
-
+        Return fList
     End Function
-    Private Function GetSubtreeToList_RDO(rootFolder As Redemption.RDOFolder, includeSubF As Boolean) As List(Of Redemption.RDOFolder)
-        ' --------------------------------------------------------------
-        ' 2026/3/24 by Gemini: GetSubtreeToList_RDO
-        ' 目的: 專門提供給 RDO 平行路徑使用，回傳 List(Of Redemption.RDOFolder)
-        ' 說明: 因為 Redemption 是 free-threaded，可以用 Parallel.ForEach 安全平行展開子樹
-        ' --------------------------------------------------------------
-        _dbg("    ├ 開始", rootFolder.Name)
-        Dim sw As New Stopwatch() : sw.Start()
-
-        Dim resultBag As New ConcurrentBag(Of Redemption.RDOFolder)
-        resultBag.Add(rootFolder)
-        If Not includeSubF Then
-            sw.Stop()
-            _dbg("    ├ 結束", $"{rootFolder.Name} (RDO-Single) | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
-            Return resultBag.ToList()
-        End If
-
-        ' 使用兩層佇列作層級遍歷，每層用 Parallel.ForEach 探索
-        Dim currentLayer As New ConcurrentQueue(Of Redemption.RDOFolder)
-        currentLayer.Enqueue(rootFolder)
-        Do
-            Dim layerList = currentLayer.ToList()
-            If layerList.Count = 0 Then Exit Do
-
-            ' 清空 queue 準備裝下一層的資料夾
-            Do While currentLayer.TryDequeue(Nothing) : Loop
-
-            ' 平行處理當前層的資料夾，將它們的子資料夾加進 queue 與結果中
-            Parallel.ForEach(layerList,
-                Sub(current)
-                    Try
-                        For Each subFolder As Redemption.RDOFolder In current.Folders
-                            resultBag.Add(subFolder)
-                            currentLayer.Enqueue(subFolder)
-                        Next
-                    Catch ex As System.Exception
-                        _dbg("    ├ 錯誤", current.Name & " - " & ex.Message) ' by Gemini, 2026/04/10
-                    End Try
-                End Sub)
-        Loop
-
-        sw.Stop()
-        _dbg("    ├ 結束", $"{rootFolder.Name} (RDO-Parallel BFS) | 資料夾總計: {resultBag.Count} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
-        Return resultBag.ToList()
-
-    End Function
-#End Region
-#Region "  ├ Layer2.5 快取存取點 (Cache Proxy Layer)"
-    ' 2026/03/27 by Gemini: 新增 Layer2.5 快取存取點 (Cache Proxy Layer)，保護 Layer3 不被頻繁呼叫
-    ' ---------------------------------------------------------------
-    '   - GetCachedMailCount(folder)            ' 單一資料夾郵件數，有 DB lazy + snapshot 驗證
-    '   - GetCachedFolderCount(folder)          ' 單一資料夾子資料夾數，有 DB lazy + snapshot 驗證
-    '   - GetCachedMailCountAllAsync(folder)    ' 整棵子樹郵件總數，有 DB lazy
-    '   - GetCachedFolderCountAllAsync(folder)  ' 整棵子樹資料夾總數，有 DB lazy
-    '   - GetCachedFolderSizeAsync(folder)      ' 單一資料夾大小，有 DB lazy
-    '   - GetCachedFolderSizeAllAsync(folder)   ' 整棵子樹大小，有 DB lazy
-    '   - GetCachedAttachMailList(folder)       ' Tab3 Phase1，有 DB lazy (attach_maillist)
-    '   - GetCachedAttachFilename(mail)         ' Tab3 Phase2，有 DB lazy (attach_filenames)
-    ' ---------------------------------------------------------------
-    ' 2026/04/07: Phase 2 — 在記憶體 miss 時加入 SQLite lazy SELECT，命中後一次填滿所有欄位
-    '             寫入仍由 SaveCachesToSQLiteAsync (SaveCache 按鈕) 批次處理，本層不做即時寫入
-    '
-    ' 2026/4/7 by Claude, 加入「持久化快取」存入SSD:
-    '             讀資料時若快取不存在就先去撈SSD, 有就放進快取, 沒有才算cache miss去COM讀取
-    ' ---------------------------------------------------------------
-    ' 呼叫順序 (每個 GetCachedXxx 函數):
-    '   ① 記憶體命中 → 直接回傳（最快，0 COM call）
-    '   ② DB 命中 + snapshot 驗證通過 → 填滿記憶體快取 → 回傳（快，0 COM call）
-    '   ③ DB miss 或 snapshot 不符 → 呼叫 Layer3 → 填入記憶體快取 → 回傳（慢，有 COM call）
-    '
-    ' snapshot 驗證: DB 儲存的 content_count_snapshot = save 時的 PR_CONTENT_COUNT 值
-    '   用 GetLiveFolderSnap (單次 PropertyAccessor call) 與 snapshot 比對
-    '   相同 → 快取仍有效；不同 → 資料夾內容已變，跳過 DB，呼叫 Layer3
-    ' ---------------------------------------------------------------
-    Private Function GetCachedMailCount(folder As Outlook.Folder) As Integer
+    Private Async Function GetAttachMailList(folder As Outlook.Folder, progress As IProgress(Of ProgressReport), Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of List(Of MailItemInfo))
         ' ---------------------------------------------------------------
-        ' GetCachedMailCount — 單一資料夾本層郵件數 (PR_CONTENT_COUNT)
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 mc 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheMailCount.TryGetValue(fPath, count) Then Return count  ' ① 記憶體命中
-
-        ' ② DB lazy load：命中且 mc 有效且 snapshot 吻合 → 一次填滿所有欄位
-        Dim row = DbGetFolderStats(fPath)
-        If row IsNot Nothing AndAlso row.mc >= 0 AndAlso GetLiveFolderSnap(folder) = row.snap Then
-            FillFolderCacheFromDbRow(fPath, row) : Return row.mc
-        End If
-
-        ' ③ fallback: Layer3 呼叫
-        count = GetMailCount(folder)
-        _cacheMailCount.TryAdd(fPath, count)
-        Return count
-
-    End Function
-    Private Async Function GetCachedMailCountAllAsync(folder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of Long)
-        ' ---------------------------------------------------------------
-        ' GetCachedMailCountAllAsync — 整棵子樹的郵件總數
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 mca 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        _dbg(" ├ 開始", folder.Name)
-        Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheMailCountAll.TryGetValue(fPath, count) Then Return count  ' ①
-
-        ' ② DB lazy load（mca 欄位）
-        Dim row = DbGetFolderStats(fPath)
-        If row IsNot Nothing AndAlso row.mca >= 0 AndAlso GetLiveFolderSnap(folder) = row.snap Then
-            FillFolderCacheFromDbRow(fPath, row) : Return row.mca
-        End If
-
-        ' ③ fallback: Layer3 呼叫
-        Dim total As Long = Await GetMailCountAll(folder, progress)
-        If total >= 0 AndAlso Not _cancelRequested Then _cacheMailCountAll.TryAdd(fPath, CInt(total))
-        Return total
-
-    End Function
-    Private Function GetCachedFolderCount(folder As Outlook.Folder) As Integer
-        ' ---------------------------------------------------------------
-        ' GetCachedFolderCount — 單一資料夾直屬子資料夾數
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 fc 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheFolderCount.TryGetValue(fPath, count) Then Return count  ' ①
-
-        ' ② DB lazy load（fc 欄位）
-        Dim row = DbGetFolderStats(fPath)
-        If row IsNot Nothing AndAlso row.fc >= 0 AndAlso GetLiveFolderSnap(folder) = row.snap Then
-            FillFolderCacheFromDbRow(fPath, row) : Return row.fc
-        End If
-
-        ' ③ fallback: Layer3 呼叫
-        count = GetFolderCount(folder)
-        _cacheFolderCount.TryAdd(fPath, count)
-        Return count
-
-    End Function
-    Private Async Function GetCachedFolderCountAllAsync(folder As Outlook.Folder) As Task(Of Integer)
-        ' ---------------------------------------------------------------
-        ' GetCachedFolderCountAllAsync — 整棵子樹的資料夾總數
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 fca 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        _dbg(" ├ 開始", folder.Name)
-        Dim count As Integer, fPath As String = folder.FolderPath
-        If _cacheFolderCountAll.TryGetValue(fPath, count) Then Return count  ' ①
-
-        ' ② DB lazy load（fca 欄位）
-        Dim row = DbGetFolderStats(fPath)
-        If row IsNot Nothing AndAlso row.fca >= 0 AndAlso GetLiveFolderSnap(folder) = row.snap Then
-            FillFolderCacheFromDbRow(fPath, row) : Return row.fca
-        End If
-
-        ' ③ fallback: Layer3 呼叫
-        count = Await GetFolderCountAll(folder)
-        If count >= 0 AndAlso Not _cancelRequested Then _cacheFolderCountAll.TryAdd(fPath, count)
-        Return count
-    End Function
-    Private Async Function GetCachedFolderSizeAsync(folder As Outlook.Folder) As Task(Of Long)
-        ' ---------------------------------------------------------------
-        ' GetCachedFolderSizeAsync — 單一資料夾本層大小 (GetTable 加總)
-        ' 2026/3/29 by Gemini: Layer2.5 快取代理層 - 取得單一資料夾本層的大小 (含快取機制)
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 fs 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        Dim size As Long, fPath As String = folder.FolderPath
-        If _cacheFolderSize.TryGetValue(fPath, size) Then Return size  ' ①
-
-        ' ② DB lazy load（fs 欄位）
-        Dim row = DbGetFolderStats(fPath)
-        If row IsNot Nothing AndAlso row.fs >= 0 AndAlso GetLiveFolderSnap(folder) = row.snap Then
-            FillFolderCacheFromDbRow(fPath, row) : Return row.fs
-        End If
-
-        ' ③ Layer3
-        size = Await GetFolderSize(folder)
-        If size >= 0 Then _cacheFolderSize.TryAdd(fPath, size)
-        Return size
-
-    End Function
-    Private Async Function GetCachedFolderSizeAllAsync(folder As Outlook.Folder) As Task(Of Long)
-        ' ---------------------------------------------------------------
-        ' GetCachedFolderSizeAllAsync — 整棵子樹大小總計
-        ' 2026/3/29 by Gemini: Layer2.5 快取代理層 - 取得整棵子樹的大小總計 (含快取機制)
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 fsa 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        _dbg(" ├ 開始", folder.Name)
-        Dim size As Long, fPath As String = folder.FolderPath
-        If _cacheFolderSizeAll.TryGetValue(fPath, size) Then Return size  ' ①
-
-        ' ② DB lazy load（fsa 欄位）
-        Dim row = DbGetFolderStats(fPath)
-        If row IsNot Nothing AndAlso row.fsa >= 0 AndAlso GetLiveFolderSnap(folder) = row.snap Then
-            FillFolderCacheFromDbRow(fPath, row) : Return row.fsa
-        End If
-
-        ' ③ fallback: Layer3 呼叫
-        size = Await GetFolderSizeAll(folder)
-        If size >= 0 AndAlso Not _cancelRequested Then _cacheFolderSizeAll.TryAdd(fPath, size)
-        Return size
-
-    End Function
-    Private Async Function GetCachedAttachMailList(folder As Outlook.Folder, progress As IProgress(Of ProgressReport)) As Task(Of List(Of MailItemInfo))
-        ' ---------------------------------------------------------------
-        ' GetCachedAttachMailList — Tab3 Phase1：含附件的候選郵件清單
+        ' GetAttachMailList — Tab3 Phase1：含附件的候選郵件清單
         ' by Gemini, 2026/04/05: Layer2.5 快取代理層 - Tab3 Phase 1 快取 - 取得單一資料夾本層含附件的郵件清單
         ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
         '   ① 記憶體命中
         '   ② DB lazy load：命中且 mca 有效且 snapshot 吻合 → 一次填滿所有欄位
         '   ③ fallback: Layer3 呼叫
+        ' 2026/04/15 by Claude: 加入 cToken 參數，傳遞至 GetAttachMailListL3 (Layer3)
         ' ---------------------------------------------------------------
-        If _iLikeNoisy Then _dbg(" ├ 開始", folder.Name)
-        Dim key As String = folder.FolderPath
-        Dim currentCount As Integer = GetCachedMailCount(folder)  ' 依賴同層快取（本身已有 DB lazy load）
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg(" ├ 開始", fName)
+        Dim key As String = fPath
+        Dim currentCount As Integer = GetMailCount(folder, fPath:=fPath)  ' 依賴同層快取 (本身已有 DB lazy load) 
 
         ' ① 記憶體命中
         Dim entry As FolderCacheTab3 = Nothing ' 補上初始化以消除 BC42108 警告
@@ -762,46 +764,27 @@ Partial Class Form1
         If dbResult IsNot Nothing AndAlso dbResult.Snap = currentCount Then
             Dim cached As New FolderCacheTab3 With {.AttachMailList = dbResult.Mails, .ItemCountSnap = currentCount}
             _cacheAttachMailList(key) = cached   ' 覆蓋式寫入，確保 ItemCountSnap 對應正確
-            If _iLikeNoisy Then _dbg(" ├ DB 命中", $"{folder.Name} ({dbResult.Mails.Count} 封)")
+            If _iLikeNoisy Then _dbg(" ├ DB 命中", $"{fName} ({dbResult.Mails.Count} 封)")
             Return dbResult.Mails
         End If
 
         ' ③ fallback: Layer3 呼叫
-        Dim targetMailList As List(Of MailItemInfo) = Await GetAttachMailList(folder, progress)
+        ' 2026/04/15: 加入 cToken 傳遞，取消時 GetAttachMailListL3 回傳空 List，不寫入快取 (見下方 If 判斷) 
+        Dim targetMailList As List(Of MailItemInfo) = Await GetAttachMailListL3(folder, progress, cToken:=cToken)
         _cacheAttachMailList(key) = New FolderCacheTab3 With {.AttachMailList = targetMailList, .ItemCountSnap = currentCount}
         ' 2026/04/05: 不使用 TryAdd/TryUpdate，確保最後的 cache entry 是正確的 (ItemCountSnap 與 mail list 對應)
-        If _iLikeNoisy Then _dbg(" ├ 結束", folder.Name)
+        If _iLikeNoisy Then _dbg(" ├ 結束", fName)
         Return targetMailList
 
     End Function
-    Private Function GetCachedAttachFilename(mail As MailItemInfo) As List(Of String)
-        ' ---------------------------------------------------------------
-        ' GetCachedAttachFilename — Tab3 Phase2：附件檔名清單 (by EntryID)
-        ' by Gemini, 2026/04/04: Layer2.5 快取代理層 - 取得附件檔名清單 (含 _cacheAttachFilename 機制)
-        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
-        '   ① 記憶體命中
-        '   ② DB lazy load：命中且 fc 有效且 snapshot 吻合 → 一次填滿所有欄位
-        '   ③ fallback: Layer3 呼叫
-        ' ---------------------------------------------------------------
-        Dim result As List(Of String) = Nothing
-        If _cacheAttachFilename.TryGetValue(mail.EntryID, result) Then Return result  ' ①
+    Private Async Function RdoPreloadAttach_1(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
 
-        ' ② DB lazy load (attach_filenames)
-        result = DbGetAttachFilenames(mail.EntryID)
-        If result IsNot Nothing Then
-            _cacheAttachFilename.TryAdd(mail.EntryID, result)
-            Return result
-        End If
-
-        ' ③ fallback: Layer3 呼叫
-        result = GetAttachFilename(mail)
-        If result IsNot Nothing Then _cacheAttachFilename.TryAdd(mail.EntryID, result)
-        Return result
-    End Function
-    Private Async Function PreloadAttachByRDOAsync1(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+        ' =================================================================
         ' by Gemini, 2026/04/05: Layer2.5 快取代理層 - 批次預熱附件檔名快取
-        ' 利用 Redemption (RDO) Free-Threaded 安全的特性，在進入 Layer2 迴圈前平行提早把附件檔名讀進 _cacheAttachFilename。
-        ' 完全不動原來的迴圈運作邏輯，以防呆的姿態大幅壓縮等待時間。
+        '   利用 Redemption (RDO) Free-Threaded 安全的特性，
+        '   在進入 Layer2 迴圈前平行提早把附件檔名讀進 _cacheAttachFilename。
+        '   完全不更改原有的迴圈運作邏輯，以預讀取的型態塞資料進快取來大幅壓縮等待時間。
+        ' =================================================================
         If _rdo Is Nothing OrElse sourceList.Count = 0 Then Return
 
         _dbg("開始", $"RDO平行預載 {sourceList.Count} 筆")
@@ -825,8 +808,7 @@ Partial Class Form1
                                                             rdoMsg = TryCast(_rdo.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
                                                             If rdoMsg IsNot Nothing Then
                                                                 Dim list As New List(Of String)()
-                                                                ' COM 的 index 從 1 開始
-                                                                For i As Integer = 1 To rdoMsg.Attachments.Count
+                                                                For i As Integer = 1 To rdoMsg.Attachments.Count    ' COM 的 index 從 1 開始而不是0
                                                                     list.Add(rdoMsg.Attachments.Item(i).FileName)
                                                                 Next
                                                                 _cacheAttachFilename.TryAdd(mail.EntryID, list)
@@ -837,18 +819,17 @@ Partial Class Form1
                                                         End Try
                                                     End If
 
-                                                    Dim currentProcessed As Integer = Interlocked.Increment(processed)
-                                                    If swThrottle.ElapsedMilliseconds >= 100 OrElse currentProcessed = total Then
+                                                    Dim curProcessed As Integer = Interlocked.Increment(processed)
+                                                    If swThrottle.ElapsedMilliseconds >= ThrottleFreq.Hii OrElse curProcessed = total Then
                                                         Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
-                                                        Dim speed As Double = currentProcessed / elapsedSec
+                                                        Dim speed As Double = curProcessed / elapsedSec
                                                         Dim etaString As String = ""
-                                                        If total > 1000 AndAlso speed > 0 Then
-                                                            Dim remainingSec As Integer = CInt(Math.Max(0, (total - currentProcessed) / speed))
+                                                        If total > 500 AndAlso speed > 0 Then
+                                                            Dim remainingSec As Integer = CInt(Math.Max(0, (total - curProcessed) / speed))
                                                             If remainingSec > 3 Then etaString = $"，預估剩餘 {remainingSec \ 60:D2}:{remainingSec Mod 60:D2}"
                                                         End If
-                                                        progress?.Report(New ProgressReport With {.CurrentCount = currentProcessed,
-                                                                                                  .TotalCount = total,
-                                                                                                  .Message = $"Phase 2 (RDO 預載快取): {currentProcessed} / {total} ({speed:F0} 封/秒{etaString})"})
+                                                        progress?.Report(New ProgressReport With {.CurrentCount = curProcessed, .TotalCount = total,
+                                                                                                  .Message = $"Phase 2 (RDO 預載快取): {curProcessed} / {total} ({speed:F0} 封/秒{etaString})"})
                                                         swThrottle.Restart()
                                                     End If
                                                 End Sub)
@@ -858,8 +839,12 @@ Partial Class Form1
                        End Sub, cToken)
         _dbg(" ├ 結束", $"RDO 預載完成，處理共 {processed} 筆") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
     End Function
-    Private Async Function PreloadAttachByRDOAsync2(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
-        ' by AntiGravity, 2026/04/07: 實驗性質 - 使用 Task.WhenAll + SemaphoreSlim，試圖推高 SSD I/O 並發度
+    Private Async Function RdoPreloadAttach_2(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+
+        ' ==============================================================
+        ' by AntiGravity, 2026/04/07: 實驗性質
+        ' - 使用 Task.WhenAll + SemaphoreSlim，試圖推高 SSD I/O 並發度
+        ' ==============================================================
         If _rdo Is Nothing OrElse sourceList.Count = 0 Then Return
 
         _dbg(" ├ 開始", $"WhenAll平行預載 {sourceList.Count} 筆") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
@@ -874,7 +859,6 @@ Partial Class Form1
         Dim tasks As New List(Of Task)()
 
         For Each m As MailItemInfo In sourceList
-            If cToken.IsCancellationRequested Then Exit For  ' ✅ 2026/04/11 cToken 重構（原 _cancelRequested 版）
             Dim mail = m ' 在 lambda 中避免變數捕獲問題
 
             tasks.Add(Task.Run(Async Function()
@@ -897,20 +881,18 @@ Partial Class Form1
                                            End Try
                                        End If
 
-                                       Dim currentProcessed As Integer = Interlocked.Increment(processed)
-                                       If swThrottle.ElapsedMilliseconds >= 100 OrElse currentProcessed = total Then
+                                       Dim curProcessed As Integer = Interlocked.Increment(processed)
+                                       If swThrottle.ElapsedMilliseconds >= ThrottleFreq.Hii OrElse curProcessed = total Then
                                            Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
-                                           Dim speed As Double = currentProcessed / elapsedSec
+                                           Dim speed As Double = curProcessed / elapsedSec
                                            Dim etaString As String = ""
-                                           If total > 1000 AndAlso speed > 0 Then
-                                               Dim remainingSec As Integer = CInt(Math.Max(0, (total - currentProcessed) / speed))
+                                           If total > 500 AndAlso speed > 0 Then
+                                               Dim remainingSec As Integer = CInt(Math.Max(0, (total - curProcessed) / speed))
                                                If remainingSec > 3 Then etaString = $"，預估剩餘 {remainingSec \ 60:D2}:{remainingSec Mod 60:D2}"
                                            End If
-                                           progress?.Report(New ProgressReport With {.CurrentCount = currentProcessed,
-                                                                                     .TotalCount = total,
-                                                                                     .Message = $"Phase 2 (WhenAll 預載): {currentProcessed} / {total} ({speed:F0} 封/秒{etaString})"})
+                                           progress?.Report(New ProgressReport With {.CurrentCount = curProcessed, .TotalCount = total,
+                                                                                     .Message = $"Phase 2 (WhenAll 預載): {curProcessed} / {total} ({speed:F0} 封/秒{etaString})"})
                                            swThrottle.Restart()
-                                           If cToken.IsCancellationRequested Then Return ' 進度回報後立即再檢查一次，盡快停止處理
                                        End If
                                    Finally
                                        throttler.Release()
@@ -921,12 +903,35 @@ Partial Class Form1
         If tasks.Count > 0 Then Await Task.WhenAll(tasks)
         _dbg(" ├ 結束", $"WhenAll 預載完成，處理共 {processed} 筆") ' by Gemini, 2026/04/10
     End Function
+    Private Function GetAttachFilename(mail As MailItemInfo) As List(Of String)
+        ' ---------------------------------------------------------------
+        ' GetAttachFilename — Tab3 Phase2：附件檔名清單 (by EntryID)
+        ' by Gemini, 2026/04/04: Layer2.5 快取代理層 - 取得附件檔名清單 (含 _cacheAttachFilename 機制)
+        ' 2026/4/7 by Claude, 加入Database lazy load, 讀資料順序:
+        '   ① 記憶體命中
+        '   ② DB lazy load：命中且 fc 有效且 snapshot 吻合 → 一次填滿所有欄位
+        '   ③ fallback: Layer3 呼叫
+        ' ---------------------------------------------------------------
+        Dim result As List(Of String) = Nothing
+        If _cacheAttachFilename.TryGetValue(mail.EntryID, result) Then Return result  ' ①
 
+        ' ② DB lazy load (attach_filenames)
+        result = DbGetAttachFilenames(mail.EntryID)
+        If result IsNot Nothing Then
+            _cacheAttachFilename.TryAdd(mail.EntryID, result)
+            Return result
+        End If
+
+        ' ③ fallback: Layer3 呼叫
+        result = GetAttachFilenameL3(mail)
+        If result IsNot Nothing Then _cacheAttachFilename.TryAdd(mail.EntryID, result)
+        Return result
+    End Function
 #End Region
 #Region "  ├ Layer3 直接存取底層計數函數"
-    Private Function GetMailSize(item As Object) As Long
+    Private Function GetMailSizeL3(item As Object) As Long
         ' --------------------------------------------------------------
-        ' GetMailSize: 讀取單封郵件的大小 (bytes)，供 GetFolderSize fallback 路徑呼叫
+        ' GetMailSizeL3: 讀取單封郵件的大小 (bytes)，供 GetFolderSizeL3 fallback 路徑呼叫
         '
         ' Fallback 鏈:
         '   ⓪ Redemption : RDOMail.Size
@@ -942,14 +947,21 @@ Partial Class Form1
         '            大郵件 (>2GB) 理論上會溢位，但實務上 Outlook 的 PST 限制在 50GB 總量，
         '            單封郵件超過 2GB 極不可能，此層可視為安全
         '
-        ' 注意: 此函數接受 Object 型別參數，是因為 GetFolderSize 的 fallback 路徑
+        ' 注意: 此函數接受 Object 型別參數，是因為 GetFolderSizeL3 的 fallback 路徑
         '       用 Items.GetFirst/GetNext 取回的是 Object，省去呼叫端的 TryCast 成本
         '       若是 MailItem 就正常讀取，若是其他型別 (Contact、Appointment 等) 就回 0
         '
         ' 取代: GetFolderSizeOld 內的 mailItem.Size 直接呼叫 行3385 的同名 stub (完整替換)
-        ' --------------------------------------------------------------
+        ' ---------------------------------------------------------------
+        ' 2026/4/28 by simon: 目前此函數已成死碼, 沒有任何呼叫端與進入點
+        ' 原始設計意圖:
+        ' 	呼叫端 → GetFolderSizeAll → GetFolderSize → GetMailSizeL3 (L3)
+        ' 後來使用GetTable.GetArray() 直接整個目錄的table一起讀出來在記憶體內運算
+        ' 	(自己計算並直接寫入 _cacheFolderSize，完全繞過此L3層級函數)
+        ' ---------------------------------------------------------------
 
         ' 非 MailItem 的項目 (Calendar、Contact 等) 直接略過，回 0
+        If _iLikeNoisy Then _dbg("    ├ 開始")
         Dim mail As Outlook.MailItem = TryCast(item, Outlook.MailItem)
         If mail Is Nothing Then Return 0
 
@@ -964,11 +976,11 @@ Partial Class Form1
                 rdoMail = TryCast(_rdo.GetMessageFromID(mail.EntryID, storeId), Redemption.RDOMail)
                 If rdoMail IsNot Nothing Then
                     Dim sz As Long = CLng(rdoMail.Size)
-                    ' _dbg("GetMailSize ⓪ RDO 成功", $"size={sz}") ' 高頻率項目平時不輸出 Log
+                    If _iLikeNoisy Then _dbg("    ├ ⓪ RDO 成功", $"size={sz}") ' 高頻率項目平時不輸出 Log
                     Return sz
                 End If
             Catch ex As System.Exception
-                _dbg("    ├ GetMailSize ⓪ RDO 失敗，走MAPI fallback", ex.Message) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (內部失敗路徑)
+                If _iLikeNoisy Then _dbg("    ├ ⓪ RDO 失敗，走MAPI fallback", ex.Message) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (內部失敗路徑)
             Finally
                 TryMarshalRelease(rdoMail)
             End Try
@@ -980,37 +992,38 @@ Partial Class Form1
             ' by Gemini, 2026/03/29: 移除 TypeOf 判斷，CLng() 可自動處理 Long/Integer 轉型，若屬性不存在或回傳 Nothing/DBNull，CLng 會拋例外進入 Catch
             Return CLng(mail.PropertyAccessor.GetProperty(PR_SIZE_EXTENDED))
         Catch ex As System.Exception
-            _dbg("    ├ GetMailSize ① PR_MESSAGE_SIZE_EXTENDED失敗", ex.Message) ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ ① PR_MESSAGE_SIZE_EXTENDED失敗", ex.Message) ' by Gemini, 2026/04/10
         End Try
 
         ' ② MAPI: PR_MESSAGE_SIZE (0x0E080003, PT_LONG) — 32-bit，超大郵件理論上溢位
         Try
             Const PR_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
-            ' by Gemini, 2026/03/29: 同上，移除 TypeOf 判斷
-            Return CLng(mail.PropertyAccessor.GetProperty(PR_SIZE))
+            Return CLng(mail.PropertyAccessor.GetProperty(PR_SIZE))             ' by Gemini, 2026/03/29: 同上，移除 TypeOf 判斷
         Catch ex As System.Exception
-            _dbg("    ├ GetMailSize ② PR_MESSAGE_SIZE失敗", ex.Message) ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ ② PR_MESSAGE_SIZE失敗", ex.Message) ' by Gemini, 2026/04/10
         End Try
 
         ' ③ OOM: mail.Size (Integer，超大郵件理論上不準，但實務上 PST 內不會發生)
         Try
             Return CLng(mail.Size)
         Catch ex As System.Exception
-            _dbg("    ├ GetMailSize ③ OOM mail.Size也失敗", ex.Message) ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ ③ OOM mail.Size也失敗", ex.Message) ' by Gemini, 2026/04/10
         End Try
         Return -1
 
     End Function
-    Private Function GetMailCount(folder As Outlook.Folder) As Integer
+    Private Function GetMailCountL3(folder As Outlook.Folder, Optional fPath As String = "") As Integer
         ' --------------------------------------------------------------
-        ' GetMailCount: 只讀單一資料夾的本層郵件數 (不含子孫)
+        ' GetMailCountL3: 只讀單一資料夾的本層郵件數 (不含子孫)
         ' Fallback 鏈:
         '   ⓪ Redemption : RDOFolder.Items.Count (可在非 STA 執行緒呼叫)
         '   ① MAPI : PR_CONTENT_COUNT (0x36020003) (最快快取屬性)
-        '   ② OOM  : folder.Items.Count (會建立 Items 集合)
+        '   ② OOM  : pFolder.Items.Count (會建立 Items 集合)
         '   ③ fail : Return -1
         ' --------------------------------------------------------------
-        If _iLikeNoisy Then _dbg("開始", folder.Name)
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg("開始", fName)
         Dim sw As New Stopwatch() : sw.Start()
 
         ' ⓪ Redemption: RDOFolder.Items.Count
@@ -1020,7 +1033,7 @@ Partial Class Form1
                 rdoFolder = _rdo.GetFolderFromID(folder.EntryID, folder.StoreID)
                 Dim count As Integer = rdoFolder.Items.Count : Return count
             Catch ex As System.Exception
-                _dbg("    ├ 錯誤路徑", $"GetMailCount ⓪ RDO: {folder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+                If _iLikeNoisy Then _dbg("    ├ 錯誤路徑", $"GetMailCount ⓪ RDO: {fName} | {ex.Message}") ' by Gemini, 2026/04/10
             Finally
                 TryMarshalRelease(rdoFolder)
             End Try
@@ -1032,10 +1045,10 @@ Partial Class Form1
             Dim count As Integer = CInt(folder.PropertyAccessor.GetProperty(PR_CONTENT_COUNT))
             Return count
         Catch ex As System.Exception
-            _dbg("    ├ 錯誤路徑", $"GetMailCount ① MAPI: {folder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ 錯誤路徑", $"GetMailCount ① MAPI: {fName} | {ex.Message}") ' by Gemini, 2026/04/10
         End Try
 
-        ' ② OOM: folder.Items.Count
+        ' ② OOM: pFolder.Items.Count
         Try
             Dim items As Outlook.Items = Nothing
             Try
@@ -1045,26 +1058,79 @@ Partial Class Form1
                 TryMarshalRelease(items)
             End Try
         Catch ex As System.Exception
-            _dbg("    ├ 錯誤路徑", $"GetMailCount ② OOM: {folder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ 錯誤路徑", $"GetMailCount ② OOM: {fName} | {ex.Message}") ' by Gemini, 2026/04/10
         End Try
 
         sw.Stop()
-        _dbg("結束", $"FAIL: {folder.Name} | -1 | {sw.ElapsedMilliseconds}ms")
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"FAIL: {fName} | -1 | {sw.ElapsedMilliseconds}ms")
         Return -1
 
     End Function
-    Private Async Function GetMailCountAll(rootFolder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of Long)
+    Private Function GetFolderCountL3(folder As Outlook.Folder, Optional fPath As String = "") As Integer
         ' --------------------------------------------------------------
-        ' GetMailCountAll v3.5: 讀取某資料夾及其整棵子樹的郵件總數
+        ' GetFolderCountL3: 讀取單一資料夾的本層直屬子資料夾數
+        '
+        ' Fallback 鏈:
+        '   ⓪ Redemption : RDOFolder.Folders.Count
+        '            可從非 STA 執行緒呼叫，繞過 Outlook Security Guard
+        '            _rdoSession 未就緒時自動跳過此層
+        '   ① MAPI : PR_FOLDER_CHILD_COUNT (0x66380003, PT_LONG) 一次 PropertyAccessor call，在大多數情況下準確
+        '            注意: PST 上此屬性在剛移動資料夾後可能短暫不同步，但 Outlook 關閉再開就會修正，日常使用可接受
+        '            2026/3/20 實測: PR_FOLDER_CHILD_COUNT 沒有一次成功過，已暫時 comment 出
+        '   ② OOM  : pFolder.Folders.Count
+        '            Folders 集合比 Items 輕量，載入速度可接受，且永遠準確
+        '   ③ fail : Return -1
+        '
+        ' 關於「先讀 PR_SUBFOLDERS (0x360A000B) 再讀個數」的設計討論:
+        '   PR_SUBFOLDERS 是 PT_BOOLEAN，只告訴你有沒有子資料夾 (不告訴你幾個)
+        '   先讀它再讀 PR_FOLDER_CHILD_COUNT 等於多一次 COM call，只有「大多數資料夾都沒有子資料夾」時才划算，
+        '   實際 PST 不符合此條件，因此直接讀 PR_FOLDER_CHILD_COUNT，不做 PR_SUBFOLDERS 前置判斷
+        '
+        ' 取代: 散落各處的 pFolder.Folders.Count 直接呼叫 (建議逐一替換)
+        ' --------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg("    ├ 開始", fName) ' by Gemini, 2026/04/10: Level 1
+
+        ' ⓪ Redemption: RDOFolder.Folders.Count
+        '   與 OOM pFolder.Folders.Count 等價，但可在任意執行緒呼叫, 2026-03-22 新增
+        If _rdo IsNot Nothing Then
+            Dim rdoFolder As Redemption.RDOFolder = Nothing
+            Try
+                rdoFolder = _rdo.GetFolderFromID(folder.EntryID, folder.StoreID)
+                Dim count As Integer = rdoFolder.Folders.Count : Return count
+            Catch ex As System.Exception
+                If _iLikeNoisy Then _dbg("    ├ 錯誤路徑", $"GetFolderCount ⓪ RDO: {fName} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
+            Finally
+                TryMarshalRelease(rdoFolder)
+            End Try
+        End If
+
+        ' ① MAPI: PR_FOLDER_CHILD_COUNT (0x66380003)
+        ' 2026/3/20, 奇怪PR_FOLDER_CHILD_COUNT 沒有一次成功過??? 乾脆先拿掉這個try, 省得一直fallback也是浪費開銷
+        Try
+            Dim count As Integer = folder.Folders.Count : Return count
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("    ├ 錯誤路徑", $"GetFolderCount ① OOM: {fName} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
+        End Try
+
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"FAIL: {fName}") ' by Gemini, 2026/04/10
+        Return -1
+
+    End Function
+    Private Async Function GetMailCountAllL3(rootFolder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of Long)
+        ' --------------------------------------------------------------
+        ' GetMailCountAllL3 v3.6: 讀取某資料夾及其整棵子樹的郵件總數
         ' by Gemini, 2026/04/02: 升級為 IProgress(Of ProgressReport) 並加入 100ms 節流回報
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標 (見函數內說明) 
         '
         ' v3.0 變更說明 (2026-03-22):
-        '   合併原 GetMailCountAll + GetMailCountAllParallel 為單一函數，
+        '   合併原 GetMailCountAllL3 + GetMailCountAllParallel 為單一函數，
         '   統一 fallback 鏈，呼叫端不再需要選擇要用哪個版本。
         '   GetMailCountAllParallel 可標記廢棄或直接刪除。
         '
         ' 設計說明:
-        '   為何呼叫 GetMailCount() 而非直接用 GetTable():
+        '   為何呼叫 GetMailCountL3() 而非直接用 GetTable():
         '     PR_CONTENT_COUNT 是 Folder 物件上的已儲存屬性，Outlook 自動維護，讀取等於讀一個整數，一次 COM call 結束。
         '     GetTable() 會把資料夾內所有郵件 row 逐一回傳，只為了計數代價太高。GetTable 適合讀郵件內容 (大小、日期)，不適合純計數。
         '
@@ -1080,10 +1146,10 @@ Partial Class Form1
         '                   注意: 走此路徑時 onProgress callback 不會被觸發 (無中間進度可回報)
         '   ① Task.WhenAll 平行 BFS:
         '                   BFS 展開後每個資料夾各建一個 Task.Run，全部 WhenAll 等待
-        '                   Task.Run 內的 GetMailCount(f) 走 Redemption ⓪ 時是 free-threaded 安全的
-        '                   若 GetMailCount fallback 到 MAPI PropertyAccessor，仍有 STA 違規風險，需留意
+        '                   Task.Run 內的 GetMailCountL3(cFolder) 走 Redemption ⓪ 時是 free-threaded 安全的
+        '                   若 GetMailCountL3 fallback 到 MAPI PropertyAccessor，仍有 STA 違規風險，需留意
         '   ② BFS 循序累加:
-        '                   GetSubtreeToList BFS 展開 + GetMailCount(Layer3) 逐一加總
+        '                   GetSubtreeToList BFS 展開 + GetMailCountL3(Layer3) 逐一加總
         '                   支援取消檢查和 onProgress 進度回報
         '                   平行路徑失敗時的安全 fallback
         '   ③ 遞迴 fallback:
@@ -1091,12 +1157,17 @@ Partial Class Form1
         '                   無法精確回報進度，但確保加總結果正確
         '   ④ Return -1: 四層都失敗，由 Layer2 決定如何處理
         '
-        ' cancelRequested:
-        '   檢查 _cancelRequested 旗標，取消時回傳 -1，由 Layer1 判斷是否需要清空 UI
+        ' cToken 取消偵測 (2026/04/15 by Claude):
         '   ⓪ Redemption 路徑不插入取消檢查 (單次 call，幾乎瞬間完成)
+        '   ① RDO Parallel.ForEach 路徑: 透過 ParallelOptions.CancellationToken 傳入 cToken；
+        '      取消時 Parallel.ForEach 拋 OperationCanceledException，由 Catch OCE 接住並回傳 -1
+        '   ② BFS 循序路徑: ThrottledYieldAsync 每 100ms 讓出一次；
+        '      cToken 取消時 Task.Delay 拋 OCE，由 Catch OCE 接住並回傳 -1
+        '   ③ 遞迴 fallback: 遞迴呼叫時透過 cToken 傳遞，子層 OCE 向上冒泡
+        '   取消後統一回傳 -1 (與讀取失敗同語義) ，呼叫端 Layer2.5 檢查 IsCancellationRequested 不寫入快取
         '
         ' onProgress 參數 (可選):
-        '   傳入 Action(Of Integer, Integer) callback
+        '   傳入 IProgress(Of ProgressReport) callback
         '   Layer2 每處理一個資料夾回報 (已完成數, 總數)，讓 Layer1 更新狀態列
         '   不需要進度回報時傳 Nothing
         '   ⓪ 和 ① 路徑不觸發 onProgress，② 路徑才會逐一回報
@@ -1104,8 +1175,18 @@ Partial Class Form1
         ' 取代:
         '   GetMailCountByMAPINew 的整棵子樹加總用途
         '   GetMailCountAllParallel (v3.0 已合併，舊版可廢棄)
-        ' --------------------------------------------------------------
-        _dbg(" ├ 開始", rootFolder.Name) ' by Gemini, 2026/04/10: Level 1
+        ' ---------------------------------------------------------------
+        ' 2026/4/28 by simon: 目前GetxxxCountAll系列函數已成死碼, 沒有任何呼叫端與進入點
+        ' 原始設計意圖:
+        ' 	呼叫端 → GetMailCountAllAsync (L2.5) → GetMailCountAllL3 (L3)
+        ' 	呼叫端 → GetFolderCountAllAsync (L2.5) → GetFolderCountAllL3 (L3)
+        '
+        ' 後來使用了BFS剪枝速度更快:
+        ' 	Compute → BFS → SummarizeSubTreeBottomUp → UpdateFolderStatsCache
+        ' 	(自己計算並直接寫入 _cacheMailCountAll / _cacheFolderCountAll，完全繞過 AllAsync系列函數)
+        ' ---------------------------------------------------------------
+        Dim rName As String = rootFolder.Name ' by Gemini 3.1 Pro 2026/04/16: 避免重複 COM 呼叫
+        If _iLikeNoisy Then _dbg("    ├ 開始", rName) ' by Gemini, 2026/04/10: Level 1
 
         ' ⓪ Redemption: TotalItemCount 直接回傳整棵子樹郵件總數
         '   一次 COM call 結束，不需要任何 BFS 遍歷或平行處理
@@ -1115,84 +1196,90 @@ Partial Class Form1
             Try
                 rdoFolder = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
                 Dim total As Long = CLng(rdoFolder.TotalItemCount)
-                _dbg(" ├ 結束", $"⓪ RDO 成功: {rootFolder.Name} | TotalItemCount={total}")
+                If _iLikeNoisy Then _dbg("    ├ 結束", $"⓪ RDO 成功: {rName} | TotalItemCount={total}")
                 Return total
             Catch ex As System.Exception
-                _dbg(" ├ GetMailCountAll ⓪ RDO 失敗，走平行BFS fallback", $"{rootFolder.Name} | {ex.Message}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
+                If _iLikeNoisy Then _dbg("    ├ ⓪ RDO 失敗，走平行BFS fallback", $"{rName} | {ex.Message}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
             Finally
                 TryMarshalRelease(rdoFolder)
             End Try
         End If
 
         ' 2026/3/24 by Gemini: ① 平行 BFS (RDO)
-        '   使用 GetSubtreeToList_RDO 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add 快速加總
+        '   使用 GetSubtreeToListL3_Rdo 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add 快速加總
         '   Redemption (RDO) 是 free-threaded，在背景平行執行安全且極為高效
+        ' 2026/04/15 by Claude: 改用 ParallelOptions.CancellationToken 取代 _cancelRequested 旗標
         If _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
             Try
                 rdoRoot = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
-                Dim rdoFolderList As List(Of Redemption.RDOFolder) = GetSubtreeToList_RDO(rdoRoot, includeSubF:=True)
+                Dim rdoFolderList As List(Of Redemption.RDOFolder) = GetSubtreeToListL3_Rdo(rdoRoot, includeSubF:=True)
                 Dim targetFolderCount As Integer = rdoFolderList.Count
                 Dim totalCount As Long = 0
                 Dim processedCount As Integer = 0
-                Parallel.ForEach(rdoFolderList,
+                Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini 3.0 flash, 2026/04/16: 補回計時器宣告
+                Dim parallelOptions As New ParallelOptions With {.CancellationToken = cToken}  ' 2026/04/15: cToken 傳入，取消時 ForEach 拋 OCE
+                Parallel.ForEach(rdoFolderList, parallelOptions,
                     Sub(rdoF As Redemption.RDOFolder)
-                        If _cancelRequested Then Return
                         Try
                             Dim count As Integer = rdoF.Items.Count
                             Interlocked.Add(totalCount, CLng(count))
                         Catch ex As System.Exception
-                            _dbg("    ├ GetMailCountAll ① 略過失敗資料夾", rdoF.Name) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (並行處理內部)
+                            If _iLikeNoisy Then _dbg("    ├ ① 略過失敗資料夾", rdoF.Name) ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (並行處理內部)
                         End Try
                         Dim done As Integer = Interlocked.Increment(processedCount)
 
-                        ' by Gemini, 2026/04/02: 更新為 IProgress 且加上簡易模數節流避免平行洗板
-                        If done Mod 10 = 0 Then
+                        ' by Gemini, 2026/04/02: 更新為 IProgress 且加上節流
+                        ' 2026/04/16 by Gemini 3.0 flash: [註：此處位於 Parallel.ForEach 同步區塊內，不可 await] 故維持手動計時器節流。
+                        If swThrottle.ElapsedMilliseconds >= ThrottleFreq.Hii OrElse done = targetFolderCount Then
                             progress?.Report(New ProgressReport With {.CurrentCount = done, .TotalCount = targetFolderCount,
                                                                       .Message = $"正在平行統計: {done} / {targetFolderCount} 個資料夾..."})
+                            swThrottle.Restart()
                         End If
                     End Sub)
-                If _cancelRequested Then
-                    _dbg(" ├ GetMailCountAll ① 已取消", $"總資料夾數: {targetFolderCount}") : Return -1
-                End If
-                _dbg(" ├ 結束", $"① 平行BFS成功 (RDO): {rootFolder.Name} | total={totalCount} | folders={targetFolderCount}")
+                If _iLikeNoisy Then _dbg("    ├ 結束", $"① 平行BFS成功 (RDO): {rName} | total={totalCount} | folders={targetFolderCount}")
                 Return totalCount
+            Catch ex As OperationCanceledException
+                ' 2026/04/15: ParallelOptions.CancellationToken 取消時拋 OCE，正常中斷，回傳 -1 表示取消/失敗
+                If _iLikeNoisy Then _dbg("    ├ ① 已取消", $"{rName}") : Return -1
             Catch ex As System.Exception
-                _dbg(" ├ GetMailCountAll ① 平行BFS失敗，走循序BFS fallback", $"{rootFolder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+                If _iLikeNoisy Then _dbg("    ├ ① 平行BFS失敗，走循序BFS fallback", $"{rName} | {ex.Message}") ' by Gemini, 2026/04/10
             Finally
                 TryMarshalRelease(rdoRoot)
             End Try
         End If
 
-        ' ② BFS 循序累加: GetSubtreeToList 展開 + GetMailCount(Layer3) 逐一加總
+        ' ② BFS 循序累加: GetSubtreeToList 展開 + GetMailCountL3(Layer3) 逐一加總
         '   支援取消檢查和 progress 進度回報，比平行版保守但穩定
+        ' 2026/04/15 by Claude: _cancelRequested 取代為 ThrottledYieldAsync(swThrottle, cToken)
+        '   cToken 取消時 Task.Delay(1,cToken) 拋 OCE → Catch OCE → Return -1
+        '   同時移除舊的 i Mod 10 Await Task.Yield()，統一由 ThrottledYieldAsync 每 100ms 讓出一次
         Try
-            Dim targetFolderList As List(Of Outlook.Folder) = Await GetSubtreeToList(rootFolder, includeSubF:=True)
+            ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，享有快取加速
+            Dim targetFolderList As List(Of (Folder As Outlook.Folder, fPath As String)) = Await GetSubtreeToList(rootFolder, includeSubF:=True, cToken:=cToken)
             Dim grandTotal As Long = 0
             Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02: 100ms 節流閥
 
             For i As Integer = 0 To targetFolderList.Count - 1
-                If _cancelRequested Then
-                    _dbg(" ├ GetMailCountAll ② 被取消", $"已處理 {i}/{targetFolderList.Count}") : Return -1
-                End If
-                Dim f As Outlook.Folder = targetFolderList(i)
-                Dim count As Integer = GetMailCount(f)
-                ' GetMailCount 的所有 fallback 都失敗才會到這個 else，記錄但不中止整體加總
-                If count >= 0 Then grandTotal += CLng(count) Else _dbg("    ├ GetMailCountAll ② 略過失敗資料夾", f.Name) ' by Gemini, 2026/04/10
+                Dim cFolder As Outlook.Folder = targetFolderList(i).Folder
+                Dim count As Integer = GetMailCountL3(cFolder)
+                ' GetMailCountL3 的所有 fallback 都失敗才會到這個 else，記錄但不中止整體加總
+                If count >= 0 Then grandTotal += CLng(count) Else If _iLikeNoisy Then _dbg("    ├ Get MailCountAll ② 略過失敗資料夾", cFolder.Name) ' by Gemini, 2026/04/10
 
-                ' by Gemini, 2026/04/02: 100ms 節流回報進度，且在此區塊不輸出 _dbg()
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    progress?.Report(New ProgressReport With {.CurrentCount = i + 1, .TotalCount = targetFolderList.Count,
-                                                              .Message = $"正在統計郵件數: {i + 1} / {targetFolderList.Count} 個資料夾..."})
-                    swThrottle.Restart()
-                End If
-
-                If i Mod 10 = 0 Then Await Task.Yield()
+                ' by Gemini, 2026/04/02: 100ms 節流回報進度
+                ' 2026/04/15 by Claude: 節流區塊整合讓出與取消偵測，ThrottledYieldAsync 在 cToken 取消時拋 OCE
+                ' 2026/04/16 by Gemini 3.0 flash: 節流區塊整合讓出與取消偵測，改用 onThrottled 委派
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                                          Sub() progress?.Report(New ProgressReport With {.CurrentCount = i + 1, .TotalCount = targetFolderList.Count,
+                                                                                          .Message = $"正在統計郵件數: {i + 1} / {targetFolderList.Count} 個資料夾..."}))
             Next
-            _dbg(" ├ GetMailCountAll ② 循序BFS成功", $"{rootFolder.Name} | total={grandTotal}")
+            If _iLikeNoisy Then _dbg("    ├ ② 循序BFS成功", $"{rName} | total={grandTotal}")
             Return grandTotal
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: ThrottledYieldAsync 或 GetSubtreeToList 取消時拋 OCE，正常中斷
+            If _iLikeNoisy Then _dbg("    ├ ② 已取消", $"{rName}") : Return -1
         Catch ex As System.Exception
-            _dbg(" ├ GetMailCountAll ② 循序BFS失敗，走遞迴fallback", $"{rootFolder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ ② 循序BFS失敗，走遞迴fallback", $"{rName} | {ex.Message}") ' by Gemini, 2026/04/10
         End Try
 
         ' ③ 遞迴 fallback: GetSubtreeToList 本身失敗時的最後保險
@@ -1202,74 +1289,24 @@ Partial Class Form1
         '        若 ③ 常被觸發，需回頭檢查 GetSubtreeToList 失敗的根本原因 ' pending:
         Try
             Dim totalCount As Long = 0
-            Dim count As Integer = GetMailCount(rootFolder)     ' 本層 mailcount
+            Dim count As Integer = GetMailCountL3(rootFolder)     ' 本層 mailcount
             If count >= 0 Then totalCount += count
             Await Task.Yield()
             For Each f As Outlook.Folder In rootFolder.Folders
-                Dim subCount As Long = Await GetMailCountAll(f) ' 遞迴，每個直屬子資料夾各自展開
+                Dim subCount As Long = Await GetMailCountAllL3(f, cToken:=cToken) ' 遞迴，傳遞 cToken
                 If subCount >= 0 Then totalCount += subCount
             Next
-            _dbg(" ├ 結束", $"③ 遞迴fallback成功: {rootFolder.Name} | total={totalCount}")
+            If _iLikeNoisy Then _dbg("    ├ 結束", $"③ 遞迴fallback成功: {rName} | total={totalCount}")
             Return totalCount
         Catch ex As System.Exception
-            _dbg(" ├ GetMailCountAll ③ 遞迴fallback也失敗", $"{rootFolder.Name} | {ex.Message}")
+            If _iLikeNoisy Then _dbg("    ├ ③ 遞迴fallback也失敗", $"{rName} | {ex.Message}")
             Return -1   ' ④ 四層都失敗，回傳 -1 讓 Layer2 知道這是「讀取失敗」而非「真的是 0 封」
         End Try
 
     End Function
-    Private Function GetFolderCount(folder As Outlook.Folder) As Integer
+    Private Async Function GetFolderCountAllL3(rootFolder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of Integer)
         ' --------------------------------------------------------------
-        ' GetFolderCount: 讀取單一資料夾的本層直屬子資料夾數
-        '
-        ' Fallback 鏈:
-        '   ⓪ Redemption : RDOFolder.Folders.Count
-        '            可從非 STA 執行緒呼叫，繞過 Outlook Security Guard
-        '            _rdoSession 未就緒時自動跳過此層
-        '   ① MAPI : PR_FOLDER_CHILD_COUNT (0x66380003, PT_LONG) 一次 PropertyAccessor call，在大多數情況下準確
-        '            注意: PST 上此屬性在剛移動資料夾後可能短暫不同步，但 Outlook 關閉再開就會修正，日常使用可接受
-        '            2026/3/20 實測: PR_FOLDER_CHILD_COUNT 沒有一次成功過，已暫時 comment 出
-        '   ② OOM  : folder.Folders.Count
-        '            Folders 集合比 Items 輕量，載入速度可接受，且永遠準確
-        '   ③ fail : Return -1
-        '
-        ' 關於「先讀 PR_SUBFOLDERS (0x360A000B) 再讀個數」的設計討論:
-        '   PR_SUBFOLDERS 是 PT_BOOLEAN，只告訴你有沒有子資料夾 (不告訴你幾個)
-        '   先讀它再讀 PR_FOLDER_CHILD_COUNT 等於多一次 COM call，只有「大多數資料夾都沒有子資料夾」時才划算，
-        '   實際 PST 不符合此條件，因此直接讀 PR_FOLDER_CHILD_COUNT，不做 PR_SUBFOLDERS 前置判斷
-        '
-        ' 取代: 散落各處的 folder.Folders.Count 直接呼叫 (建議逐一替換)
-        ' --------------------------------------------------------------
-        _dbg(" ├ 開始", folder.Name) ' by Gemini, 2026/04/10: Level 1
-
-        ' ⓪ Redemption: RDOFolder.Folders.Count
-        '   與 OOM folder.Folders.Count 等價，但可在任意執行緒呼叫, 2026-03-22 新增
-        If _rdo IsNot Nothing Then
-            Dim rdoFolder As Redemption.RDOFolder = Nothing
-            Try
-                rdoFolder = _rdo.GetFolderFromID(folder.EntryID, folder.StoreID)
-                Dim count As Integer = rdoFolder.Folders.Count : Return count
-            Catch ex As System.Exception
-                _dbg("       ├ 錯誤路徑", $"GetFolderCount ⓪ RDO: {folder.Name} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
-            Finally
-                TryMarshalRelease(rdoFolder)
-            End Try
-        End If
-
-        ' ① MAPI: PR_FOLDER_CHILD_COUNT (0x66380003)
-        ' 2026/3/20, 奇怪PR_FOLDER_CHILD_COUNT 沒有一次成功過??? 乾脆先拿掉這個try, 省得一直fallback也是浪費開銷
-        Try
-            Dim count As Integer = folder.Folders.Count : Return count
-        Catch ex As System.Exception
-            _dbg("       ├ 錯誤路徑", $"GetFolderCount ① OOM: {folder.Name} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
-        End Try
-
-        _dbg(" ├ 結束", $"FAIL: {folder.Name}") ' by Gemini, 2026/04/10
-        Return -1
-
-    End Function
-    Private Async Function GetFolderCountAll(rootFolder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of Integer)
-        ' --------------------------------------------------------------
-        ' GetFolderCountAll v1.5: 讀取某資料夾整棵子樹的資料夾總數 (不含 rootFolder 自身)
+        ' GetFolderCountAllL3 v1.5: 讀取某資料夾整棵子樹的資料夾總數 (不含 rootFolder 自身)
         ' by Gemini, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
         '
         ' 2026/3/24 by Gemini: Fallback 鏈 (由快到慢):
@@ -1284,51 +1321,64 @@ Partial Class Form1
         '   此函數計算的是整棵子樹的遞迴總數，Redemption 沒有單一 API 可直接取得遞迴資料夾總數
         '    (rdoFolder.Folders.Count 只回傳直屬子資料夾數，與 OOM 相同) 。
         '   因此此函數本身不需要直接加 Redemption 呼叫。
-        '   ① BFS 路徑: GetSubtreeToList 內部走 OOM folder.Folders 展開，展開後直接 .Count，不需 Layer3 讀取。
+        '   ① BFS 路徑: GetSubtreeToList 內部走 OOM pFolder.Folders 展開，展開後直接 .Count，不需 Layer3 讀取。
         '   ② 遞迴 fallback: 內部的 rootFolder.Folders.Count 和 ForEach 走 OOM，
-        '      若日後改為呼叫 GetFolderCount(Layer3)，即可自動走 Redemption ⓪ 路徑。
-        ' --------------------------------------------------------------
-        _dbg("開始", rootFolder.Name)
+        '      若日後改為呼叫 GetFolderCountL3(Layer3)，即可自動走 Redemption ⓪ 路徑。
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標
+        ' ---------------------------------------------------------------
+        ' 2026/4/28 by simon: 目前GetxxxCountAll系列函數已成死碼, 沒有任何呼叫端與進入點
+        ' 原始設計意圖:
+        ' 	呼叫端 → GetMailCountAllAsync (L2.5) → GetMailCountAllL3 (L3)
+        ' 	呼叫端 → GetFolderCountAllAsync (L2.5) → GetFolderCountAllL3 (L3)
+        '
+        ' 後來使用了BFS剪枝速度更快:
+        ' 	Compute → BFS → SummarizeSubTreeBottomUp → UpdateFolderStatsCache
+        ' 	(自己計算並直接寫入 _cacheMailCountAll / _cacheFolderCountAll，完全繞過 AllAsync系列函數)
+        ' ---------------------------------------------------------------
+        Dim rName As String = rootFolder.Name ' by Gemini 3.1 Pro 2026/04/16: 避免重複 COM 呼叫
+        If _iLikeNoisy Then _dbg("    ├ 開始", rName)
 
         ' by Gemini, 2026/04/02: 預跑一次顯示準備中
         progress?.Report(New ProgressReport With {.Message = "正在展開資料夾結構...", .IsIndeterminate = True})
 
         ' 2026/3/24 by Gemini: ⓪ Redemption + 平行處理 (最快路徑)
-        '   使用 GetSubtreeToList_RDO 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add(rdoF.Folders.Count) 快速加總
+        '   使用 GetSubtreeToListL3_Rdo 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add(rdoF.Folders.Count) 快速加總
+        ' 2026/04/15 by Claude: 改用 ParallelOptions.CancellationToken 取代 _cancelRequested 旗標
         If _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
             Try
                 rdoRoot = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
-                Dim rdoFolderList As List(Of Redemption.RDOFolder) = GetSubtreeToList_RDO(rdoRoot, includeSubF:=True)
+                Dim rdoFolderList As List(Of Redemption.RDOFolder) = GetSubtreeToListL3_Rdo(rdoRoot, includeSubF:=True)
                 Dim targetFolderCount As Integer = rdoFolderList.Count
                 Dim totalCount As Integer = 0
                 Dim processedCount As Integer = 0
                 Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
-                Parallel.ForEach(rdoFolderList,
+                Dim parallelOptions As New ParallelOptions With {.CancellationToken = cToken}  ' 2026/04/15
+                Parallel.ForEach(rdoFolderList, parallelOptions,
                     Sub(rdoF As Redemption.RDOFolder)
-                        If _cancelRequested Then Return
                         Try
                             Dim count As Integer = rdoF.Folders.Count
                             Interlocked.Add(totalCount, count)
                         Catch ex As System.Exception
-                            _dbg("       ├ GetFolderCountAll ⓪ RDO 略過失敗資料夾", rdoF.Name) ' by Gemini, 2026/04/11: Level 3
+                            If _iLikeNoisy Then _dbg("    ├ ⓪ RDO 略過失敗資料夾", rdoF.Name) ' by Gemini, 2026/04/11: Level 3
                         End Try
 
                         Dim done As Integer = Interlocked.Increment(processedCount)
                         ' by Gemini, 2026/04/02: 更新為 IProgress 且加上 100ms 節流，取代原有的 Mod 10
-                        If swThrottle.ElapsedMilliseconds >= 100 Then
+                        ' 
+                        If swThrottle.ElapsedMilliseconds >= ThrottleFreq.Hii Then
                             progress?.Report(New ProgressReport With {.CurrentCount = done, .TotalCount = targetFolderCount,
                                                                       .Message = $"正在統計資料夾樹: {done} / {targetFolderCount}..."})
                             swThrottle.Restart()
                         End If
                     End Sub)
-                If _cancelRequested Then
-                    _dbg("GetFolderCountAll ⓪ 已取消", "") : Return -1
-                End If
-                _dbg(" ├ 結束", $"⓪ RDO平行成功: {rootFolder.Name} | total={totalCount}") ' by Gemini, 2026/04/10
+                If _iLikeNoisy Then _dbg("    ├ 結束", $"⓪ RDO平行成功: {rName} | total={totalCount}") ' by Gemini, 2026/04/10
                 Return totalCount
+            Catch ex As OperationCanceledException
+                ' 2026/04/15: ParallelOptions.CancellationToken 取消時拋 OCE，正常中斷
+                If _iLikeNoisy Then _dbg("    ├ ⓪ 已取消", $"{rName}") : Return -1
             Catch ex As System.Exception
-                _dbg(" ├ GetFolderCountAll ⓪ RDO平行失敗，走OOM循序fallback", $"{rootFolder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+                If _iLikeNoisy Then _dbg("    ├ ⓪ RDO平行失敗，走OOM循序fallback", $"{rName} | {ex.Message}") ' by Gemini, 2026/04/10
             Finally
                 TryMarshalRelease(rdoRoot)
             End Try
@@ -1336,34 +1386,43 @@ Partial Class Form1
 
         ' 2026/3/24 by Gemini: ② OOM + BFS 循序 (無 Redemption 時的最後手段)
         '   必須循序處理 OOM COM 物件以避免 STA 違規
+        ' 2026/04/15 by Claude: 傳入 cToken，GetSubtreeToList 本身支援取消，OCE 向上冒泡
         Try
-            Dim allFolders As List(Of Outlook.Folder) = Await GetSubtreeToList(rootFolder, includeSubF:=True, progress:=progress)
+            ' 2026/04/16 by Gemini: GetSubtreeToList 現在回傳 Tuple，解開它以維持後續邏輯
+            ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，享有快取加速
+            Dim targetTupleList = Await GetSubtreeToList(rootFolder, includeSubF:=True, progress:=progress, cToken:=cToken)
+            Dim allFolders = targetTupleList.Select(Function(x) x.Folder).ToList()
             ' by Gemini, 2026/04/02: BFS 展開後回傳數量
             Dim total = allFolders.Count - 1
-            progress?.Report(New ProgressReport With {.CurrentCount = total,
-                                                      .TotalCount = total,
-                                                      .Message = $"資料夾結構已展開: 共 {total} 個資料夾。"})
+            progress?.Report(New ProgressReport With {.CurrentCount = total, .TotalCount = total, .Message = $"資料夾結構已展開: 共 {total} 個資料夾。"})
             Await Task.Yield()
-            _dbg(" ├ 結束", $"② OOM BFS成功: {rootFolder.Name} | total={total}") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ 結束", $"② OOM BFS成功: {rName} | total={total}") ' by Gemini, 2026/04/10
             Return total
+        Catch ex As OperationCanceledException
+            If _iLikeNoisy Then _dbg("    ├ ② 已取消", $"{rName}") : Return -1
         Catch ex As System.Exception
-            _dbg(" ├ GetFolderCountAll ② OOM BFS失敗", $"{rootFolder.Name} | {ex.Message}") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ ② OOM BFS失敗", $"{rName} | {ex.Message}") ' by Gemini, 2026/04/10
         End Try
         ' ③ 全部失敗
         Return -1
 
     End Function
-    Private Async Function GetFolderSize(folder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of Long)
+    Private Async Function GetFolderSizeL3(folder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
-        ' GetFolderSize v1.5: 讀取單一資料夾本層大小 (bytes)
+        ' GetFolderSizeL3 v1.6: 讀取單一資料夾本層大小 (bytes)
         ' by Gemini, 2026/04/02: 加入 IProgress 支援以回報分批讀取進度 (100ms 節流)
         ' 2026/3/24 by Gemini: Fallback 鏈重構
         '   ⓪ Redemption : rdoFolder.Fields(PR_MESSAGE_SIZE_EXTENDED) (部分 Exchange 支援，極快)
-        '   ① OOM  : folder.GetTable(PR_MESSAGE_SIZE_EXTENDED) + GetArray(1000) (最快安全招式)
-        '   ② OOM  : folder.GetTable(PR_MESSAGE_SIZE_EXTENDED) + GetNextRow() (備案)
+        '   ① OOM  : pFolder.GetTable(PR_MESSAGE_SIZE_EXTENDED) + GetArray(500) (最快安全招式)
+        '   ② OOM  : pFolder.GetTable(PR_MESSAGE_SIZE_EXTENDED) + GetNextRow() (備案)
         '   ③ fail : Return -1
+        ' 2026/04/15 by Claude: 加入 cToken 參數
+        '   ① ② 迴圈中改用 ThrottledYieldAsync(swThrottle, cToken) 取代 Task.Yield()
+        '   cToken 取消時 Task.Delay 拋 OCE，由 Catch OCE 接住後 re-throw (讓 GetFolderSizeAllL3 感知)
         ' --------------------------------------------------------------
-        If _iLikeNoisy Then _dbg("開始", folder.Name)
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg("    ├ 開始", fName)
         Dim sw As New Stopwatch() : sw.Start()
 
         ' ⓪ Redemption 層 (嘗試讀取資料夾本身的總量屬性)
@@ -1377,17 +1436,17 @@ Partial Class Form1
                 Dim val As Object = rdoFolder.Fields(PR_SIZE_EX)
                 If val IsNot Nothing AndAlso Not IsDBNull(val) Then
                     Dim totalSize As Long = CLng(val) : sw.Stop()
-                    _dbg(" ├ 結束", $"⓪ RDO Fields 成功: {folder.Name} | size={totalSize} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
+                    If _iLikeNoisy Then _dbg("    ├ 結束", $"⓪ RDO Fields 成功: {fName} | size={totalSize} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
                     Return totalSize
                 End If
             Catch ex As System.Exception
-                _dbg("       ├ 錯誤: ⓪ RDO 失敗，走 OOM GetArray fallback", $"{folder.Name} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
+                If _iLikeNoisy Then _dbg("    ├ 錯誤: ⓪ RDO 失敗，走 OOM GetArray fallback", $"{fName} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
             Finally
                 TryMarshalRelease(rdoFolder)
             End Try
         End If
 
-        ' ① OOM GetTable + GetArray(1000) (目前最穩、最快的批次讀取)
+        ' ① OOM GetTable + GetArray(500) (目前最穩、最快的批次讀取)
         Const PR_SIZE_EX_STR As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080014"
         Dim table As Outlook.Table = Nothing
         Try
@@ -1398,7 +1457,7 @@ Partial Class Form1
             Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
 
             Do While Not table.EndOfTable
-                Dim arr As Object = table.GetArray(1000)
+                Dim arr As Object = table.GetArray(BATCH_SIZE)
                 If arr Is Nothing Then Exit Do
                 Dim data(,) As Object = DirectCast(arr, Object(,))
                 For r As Integer = 0 To data.GetUpperBound(0)
@@ -1407,17 +1466,20 @@ Partial Class Form1
                 Next
 
                 ' by Gemini, 2026/04/02: 單一資料夾內部進度回報 (100ms 節流)
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    progress?.Report(New ProgressReport With {.Message = $"正在計算 {folder.Name} 大小: {totalSize / 1024 / 1024:0.0} MB..."})
-                    swThrottle.Restart()
-                End If
-                Await Task.Yield() ' 讓出 UI 避免卡死
+                ' 2026/04/15 by Claude: 改用 ThrottledYieldAsync 整合讓出與取消偵測
+                '   進度回報移入節流區塊內，由 ThrottledYieldAsync 統一控制頻率
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottledYieldAsync 整合進度回報與讓出點
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                                          Sub() progress?.Report(New ProgressReport With {.Message = $"正在計算 {fName} 大小: {totalSize / 1024 / 1024:0.0} MB..."}))
             Loop
             sw.Stop()
-            If _iLikeNoisy Then _dbg(" ├ 結束", $"① OOM GetArray 成功: {folder.Name} | size={totalSize} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg(" ├ 結束", $"① OOM GetArray 成功: {fName} | size={totalSize} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
             Return totalSize
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: cToken 取消時 re-throw，讓 GetFolderSizeAllL3 ① 的 For 迴圈感知並中止
+            If _iLikeNoisy Then _dbg("    ├ ① OOM GetArray 已取消", fName) : Throw
         Catch ex As System.Exception
-            _dbg("       ├ 錯誤: ① OOM GetArray 失敗，走 GetNextRow fallback", $"{folder.Name} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
+            If _iLikeNoisy Then _dbg("    ├ 錯誤: ① OOM GetArray 失敗，走 GetNextRow fallback", $"{fName} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
         Finally
             TryMarshalRelease(table)
         End Try
@@ -1429,63 +1491,72 @@ Partial Class Form1
             table2.Columns.RemoveAll()
             table2.Columns.Add(PR_SIZE_EX_STR)
             Dim totalSize As Long = 0
-            Dim loopCount As Integer = 0
+            Dim swThrottle2 As New Stopwatch() : swThrottle2.Start() ' 2026/04/15: 獨立命名避免與①的 swThrottle 衝突
             Do While Not table2.EndOfTable
                 Dim row As Outlook.Row = table2.GetNextRow()
                 If row IsNot Nothing Then
                     totalSize += SafeGet(Of Long)(row, PR_SIZE_EX_STR, 0L)
                     TryMarshalRelease(row)
                 End If
-                loopCount += 1
-                If loopCount Mod 500 = 0 Then Await Task.Yield()
+                Await ThrottledYieldAsync(swThrottle2, cToken:=cToken)  ' 2026/04/15: 取代 loopCount Mod 500 Yield
             Loop
             sw.Stop()
-            _dbg(" ├ 結束", $"② OOM GetNextRow 成功: {folder.Name} | size={totalSize} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
+            If _iLikeNoisy Then _dbg("    ├ 結束", $"② OOM GetNextRow 成功: {fName} | size={totalSize} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
             Return totalSize
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: re-throw 讓上層感知
+            If _iLikeNoisy Then _dbg("    ├ ② OOM GetNextRow 已取消", fName) : Throw
         Catch ex As System.Exception
-            _dbg("       ├ 錯誤: ② OOM GetNextRow 失敗", $"{folder.Name} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
+            If _iLikeNoisy Then _dbg("    ├ 錯誤: ② OOM GetNextRow 失敗", $"{fName} | {ex.Message}") ' by Gemini, 2026/04/11: Level 3
         Finally
             TryMarshalRelease(table2)
         End Try
 
         sw.Stop()
-        _dbg("結束", $"FAIL: {folder.Name} | -1 | {sw.ElapsedMilliseconds}ms")
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"FAIL: {fName} | -1 | {sw.ElapsedMilliseconds}ms")
         Return -1
     End Function
-    Private Async Function GetFolderSizeAll(rootFolder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of Long)
+    Private Async Function GetFolderSizeAllL3(rootFolder As Outlook.Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
-        ' GetFolderSizeAll v1.5: 讀取某資料夾及整棵子樹的大小總計 (bytes)
+        ' GetFolderSizeAllL3 v1.6: 讀取某資料夾及整棵子樹的大小總計 (bytes)
         ' by Gemini, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
         '
         ' 2026/3/24 by Gemini: 落實新的 Fallback 鏈設計，並修正平行處理的 STA 問題
         '   ⓪ Redemption 平行路徑 (最快):
-        '      利用 GetSubtreeToList_RDO 一次把該子樹下所有 RDOFolder 拿出來，
+        '      利用 GetSubtreeToListL3_Rdo 一次把該子樹下所有 RDOFolder 拿出來，
         '      放到 Parallel.ForEach 中，各別讀取 MAPI 屬性 PR_MESSAGE_SIZE_EXTENDED。
         '      (RDOFolder 不支援 GetTable().GetArray()，故依賴屬性直讀)
         '
         '   ① OOM 循序路徑 (最安全):
-        '      當 RDO 平行路徑失敗 (或是未匯入 Redemption) ，退回使用 OOM。
+        '      當 RDO 平行路徑失敗 (或是未匯入 Redemption)，退回使用 OOM。
         '      OOM 絕對不可以在 Task.Run / WhenAll 等背景執行緒內呼叫 COM，否則會觸發 STA 錯誤。
-        '      故改為嚴格的 For 迴圈，逐一 Await GetFolderSize()。
-        '      而內部的 GetFolderSize 會走到它專屬的 GetTable().GetArray(1000) OOM 極速路徑。
+        '      故改為嚴格的 For 迴圈，逐一 Await GetFolderSizeL3()。
+        '      而內部的 GetFolderSizeL3 會走到它專屬的 GetTable().GetArray(500) OOM 極速路徑。
         '
         '   ② 兩層都失敗: 回傳 -1，交給上一層流程處理。
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標
+        '   ⓪ RDO Parallel.ForEach 路徑: 透過 ParallelOptions.CancellationToken 傳入 cToken
+        '   ① OOM 循序路徑: ThrottledYieldAsync 每 100ms 讓出一次，cToken 取消時 OCE 冒泡
+        '      GetFolderSizeL3 內部 OCE 會 re-throw，For 迴圈 Catch OCE → Return -1
         ' --------------------------------------------------------------
-        _dbg("開始", rootFolder.Name)
+        Dim rName As String = rootFolder.Name ' by Gemini 3.1 Pro 2026/04/16: 避免重複 COM 呼叫
+        If _iLikeNoisy Then _dbg("    ├ 開始", rName)
+
         ' 2026/3/24 by Gemini: ⓪ Redemption 平行累加 PR_MESSAGE_SIZE_EXTENDED
+        ' 2026/04/15 by Claude: 改用 ParallelOptions.CancellationToken 取代 _cancelRequested 旗標
         If _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
             Try
                 rdoRoot = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
-                Dim rdoFolderList As List(Of Redemption.RDOFolder) = GetSubtreeToList_RDO(rdoRoot, includeSubF:=True)
+                Dim rdoFolderList As List(Of Redemption.RDOFolder) = GetSubtreeToListL3_Rdo(rdoRoot, includeSubF:=True)
                 Dim grandTotal As Long = 0
                 Const PR_SIZE_EX As Integer = &HE080014
 
                 ' 利用 Parallel.ForEach 與 Interlocked.Add 達到極致的多核並發加總
                 Dim validCount As Integer = 0
-                Parallel.ForEach(rdoFolderList,
+                Dim parallelOptions As New ParallelOptions With {.CancellationToken = cToken}  ' 2026/04/15
+                Parallel.ForEach(rdoFolderList, parallelOptions,
                     Sub(rdoF As Redemption.RDOFolder)
-                        If _cancelRequested Then Return
                         Try
                             Dim val As Object = rdoF.Fields(PR_SIZE_EX)
                             If val IsNot Nothing AndAlso Not IsDBNull(val) Then
@@ -1493,21 +1564,21 @@ Partial Class Form1
                                 Interlocked.Increment(validCount)
                             End If
                         Catch ex As System.Exception
-                            _dbg("錯誤: ⓪ RDO 略過讀取失敗的資料夾", rdoF.Name)
+                            If _iLikeNoisy Then _dbg("    ├ 錯誤: ⓪ RDO 略過讀取失敗的資料夾", rdoF.Name)
                         End Try
                     End Sub)
 
-                If _cancelRequested Then
-                    _dbg("錯誤: ⓪ 已取消", $"總資料夾數: {rdoFolderList.Count}") : Return -1
-                End If
                 If validCount = 0 AndAlso rdoFolderList.Count > 0 Then
-                    _dbg("錯誤: ⓪ RDO 讀取失敗 (無支援的屬性) ", "退回 OOM")
+                    If _iLikeNoisy Then _dbg("    ├ 錯誤: ⓪ RDO 讀取失敗 (無支援的屬性) ", "退回 OOM")
                     Throw New System.Exception("RDO PR_SIZE_EX returned empty for all folders")
                 End If
-                _dbg("結束", $"⓪ RDO平行成功: {rootFolder.Name} | totalSize={grandTotal} | folders={rdoFolderList.Count}")
+                If _iLikeNoisy Then _dbg("    ├ 結束", $"⓪ RDO平行成功: {rName} | totalSize={grandTotal} | folders={rdoFolderList.Count}")
                 Return grandTotal
+            Catch ex As OperationCanceledException
+                ' 2026/04/15: ParallelOptions.CancellationToken 取消時正常中斷
+                If _iLikeNoisy Then _dbg("    ├ 錯誤: ⓪ 已取消", $"{rName}") : Return -1
             Catch ex As System.Exception
-                _dbg("錯誤: ⓪ RDO平行失敗，走 OOM 循序 fallback", $"{rootFolder.Name} | {ex.Message}")
+                If _iLikeNoisy Then _dbg("    ├ 錯誤: ⓪ RDO平行失敗，走 OOM 循序 fallback", $"{rName} | {ex.Message}")
             Finally
                 TryMarshalRelease(rdoRoot)
             End Try
@@ -1515,47 +1586,48 @@ Partial Class Form1
 
         ' 2026/3/24 by Gemini: ① OOM 循序 BFS 累加 (避免 STA 錯誤的保險路徑)
         ' 因為 OOM 的 GetTable() 必須在 UI Thread，我們必須循序 Await 每一層
+        ' 2026/04/15 by Claude: _cancelRequested 取代為 ThrottledYieldAsync(swThrottle, cToken)
+        '   GetFolderSizeL3 內部 OCE re-throw → For 迴圈 Catch OCE → Return -1
+        '   同時移除舊的 i Mod 5 Await Task.Yield()，統一由 ThrottledYieldAsync 每 100ms 讓出
         Try
-            Dim targetFolderList As List(Of Outlook.Folder) = Await GetSubtreeToList(rootFolder, includeSubF:=True)
+            ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，享有快取加速
+            Dim targetFolderList As List(Of (Folder As Outlook.Folder, fPath As String)) = Await GetSubtreeToList(rootFolder, includeSubF:=True, cToken:=cToken)
             Dim grandTotal As Long = 0
             Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
 
             For i As Integer = 0 To targetFolderList.Count - 1
-                If _cancelRequested Then
-                    _dbg("錯誤: ① 被取消", $"已處理 {i}/{targetFolderList.Count}") : Return -1
-                End If
-                Dim f As Outlook.Folder = targetFolderList(i)
-                ' by Gemini, 2026/04/02: 傳遞 progress 進去以獲得更細緻的(郵件級別)進度回報
-                Dim sz As Long = Await GetFolderSize(f, progress)
+                Dim cFolder As Outlook.Folder = targetFolderList(i).Folder
+                Dim cName As String = ExtractFolderName(targetFolderList(i).fPath)
 
-                If sz >= 0 Then
-                    grandTotal += sz
-                Else
-                    _dbg("錯誤: ① 略過了大小計算失敗的資料夾", f.Name)
-                End If
+                ' by Gemini, 2026/04/02: 傳遞 progress 進去以獲得更細緻的(郵件級別)進度回報
+                ' 2026/04/15: 同時傳入 cToken，GetFolderSizeL3 取消時 OCE re-throw 冒泡至此
+                ' by Gemini, 2026/04/18: 替換 OOM fallback 路徑，從 GetFolderSizeL3() 變更為 GetFolderSizeAsync() (Layer 2.5) 以利用快取
+                Dim sz As Long = Await GetFolderSizeAsync(cFolder, fPath:=targetFolderList(i).fPath, cToken:=cToken)
+                If sz >= 0 Then grandTotal += sz Else If _iLikeNoisy Then _dbg("    ├ 錯誤: ① 略過了大小計算失敗的資料夾", cName)
 
                 ' by Gemini, 2026/04/02: 100ms 節流回報資料夾級別進度
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    progress?.Report(New ProgressReport With {.CurrentCount = i + 1, .TotalCount = targetFolderList.Count,
-                                                              .Message = $"正在計算大小: {i + 1} / {targetFolderList.Count} ({f.Name})..."})
-                    swThrottle.Restart()
-                End If
-
-                ' 避免卡死 UI
-                If i Mod 5 = 0 Then Await Task.Yield()
+                ' 2026/04/15 by Claude: ThrottledYieldAsync 整合讓出與取消偵測，取代舊的 i Mod 5 Yield
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottledYieldAsync 整合進度回報與讓出點
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                                          Sub() progress?.Report(New ProgressReport With {.CurrentCount = i + 1, .TotalCount = targetFolderList.Count,
+                                                                                          .Message = $"正在計算大小: {i + 1} / {targetFolderList.Count} ({cName})..."}))
             Next
-            _dbg("結束", $"① 循序BFS成功: {rootFolder.Name} | totalSize={grandTotal}")
+            If _iLikeNoisy Then _dbg("    ├ 結束", $"① 循序BFS成功: {rName} | totalSize={grandTotal}")
             Return grandTotal
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: GetSubtreeToList 或 ThrottledYieldAsync 或 GetFolderSizeAsync 取消時冒泡至此
+            If _iLikeNoisy Then _dbg("    ├ 錯誤: ① 已取消", $"{rName}") : Return -1
         Catch ex As System.Exception
-            _dbg("錯誤: ① 循序BFS失敗，放棄計算", $"{rootFolder.Name} | {ex.Message}")
+            If _iLikeNoisy Then _dbg("    ├ 錯誤: ① 循序BFS失敗，放棄計算", $"{rName} | {ex.Message}")
         End Try
 
         ' ② 兩層都失敗，回傳 -1 讓呼叫端知道失敗了
         Return -1
     End Function
-    Private Async Function GetYearCountsForFolder(folder As Outlook.Folder) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+
+    Private Async Function GetYearCountsForFolderL3(folder As Outlook.Folder, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
-        ' === Layer 3: COM 資料層 ===
+        ' === Layer3: COM 資料層 ===
         ' 職責: 對 Outlook 發出 COM 呼叫，回傳單一資料夾的年份郵件分佈
         ' 規則: 不遞迴、不碰 UI、不修改任何全域狀態，
         '       只做一件事: 詢問 Outlook 某資料夾每年有幾封郵件，回傳結果
@@ -1564,13 +1636,18 @@ Partial Class Form1
         '   原本每年一次 Restrict + Items.Count = ~30 次 COM call
         '   現在 1 次 GetTable + ceil(N/1000) 次 GetArray，大幅減少 COM 跨程序呼叫
         ' todo: 目前最耗時間的function(), 占整體時間60~65%
+        ' 2026/04/15 by Claude: 加入 cToken 參數
+        '   取代 _cancelRequested 旗標，改用 ThrottledYieldAsync(swThrottle, cToken) 節流讓出
+        '   cToken 取消時 Task.Delay 拋 OCE，此函數不攔截 (讓 OCE 冒泡至 CollectYearCounts) 
+        '   原因: 攔住後回傳半截 yearCounts，L2 會誤以為該資料夾已統計完畢，導致計數偏低
         ' ---------------------------------------------------------------
-        If _iLikeNoisy Then _dbg("開始", folder.Name)
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg("    ├ 開始", fName)
 
         ' 2026/3/11再次重構: 優化 COM 呼叫，減少 RCW 物件積累，提升效能和穩定性
         'Dim folderItems As Outlook.Items = Nothing
         Dim yearCounts As New ConcurrentDictionary(Of Integer, Integer)
-        Const BATCH_SIZE As Integer = 500  ' 2026/3/24 by Gemini: 每次批量讀取的筆數
         Dim table As Outlook.Table = Nothing
         Try
             ' 2026/3/24 by Gemini: 改用 GetTable + GetArray 取代逐年 Restrict
@@ -1580,9 +1657,9 @@ Partial Class Form1
             table.Columns.Add("ReceivedTime")   ' 欄位索引 0
 
             ' by Gemini, 2026/04/05: 每批次讀取後，若超過 100ms 則釋放執行緒並檢查中斷
+            ' 2026/04/15 by Claude: _cancelRequested 取代為 ThrottledYieldAsync(swThrottle, cToken)
             Dim swThrottle As New Stopwatch() : swThrottle.Start()
             Do While Not table.EndOfTable
-                If _cancelRequested Then Exit Do
                 Dim arr As Object = table.GetArray(BATCH_SIZE)
                 If arr Is Nothing Then Exit Do
 
@@ -1592,70 +1669,46 @@ Partial Class Form1
                     Dim receivedTime As DateTime = SafeGet(Of DateTime)(data, r, 0, DateTime.MinValue)
                     If receivedTime > DateTime.MinValue Then
                         Dim year As Integer = receivedTime.Year
-                        If year > 0 AndAlso year <= Date.Today.Year Then
-                            yearCounts.AddOrUpdate(year, 1, Function(k, v) v + 1)
-                        End If
+                        If year > 0 AndAlso year <= Date.Today.Year Then yearCounts.AddOrUpdate(year, 1, Function(k, v) v + 1)
                     End If
                 Next
 
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken)
                 ' by Gemini, 2026/04/05: 每 100ms 節流讓出執行緒
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    swThrottle.Restart()
-                    Await Task.Delay(1) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
-                    If _cancelRequested Then Exit Do
-                End If
+                ' 2026/04/15: ThrottledYieldAsync 整合讓出與取消偵測，OCE 冒泡至呼叫端 CollectYearCounts
             Loop
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: 不攔截 OCE，直接 re-throw 讓 CollectYearCounts 感知取消
+            If _iLikeNoisy Then _dbg("    ├ 已取消", fName) : Throw
         Catch ex As System.Exception
-            _dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
+            If _iLikeNoisy Then _dbg("    ├ 錯誤", $"{fName}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally
             TryMarshalRelease(table)
         End Try
         Await Task.Yield()   ' ✅ 函數結束前再讓出一次，確保畫面有機會更新
 
-        If _iLikeNoisy Then _dbg("結束", $"{folder.Name} | 年份分佈: {yearCounts.Count}")
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"{fName} | 年份分佈: {yearCounts.Count}")
         Return yearCounts
 
     End Function
-    Private Async Function GetMonthCountsForYear(folder As Outlook.Folder, year As Integer) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function GetMonthCountsForYearL3(folder As Outlook.Folder, year As Integer, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
-        ' GetMonthCountsForYear (完整替換舊版，加入快取和進度支援)
-        ' Layer3 COM 資料層: 計算單一資料夾在指定年份中每個月的郵件數量
-        ' 快取 key = FolderPath + "_" + year，與 yearCountsCache 的命名慣例一致
-        ' 2026/3/24 by Gemini: 從逐月 Restrict 改為 GetTable + GetArray 一次讀完再記憶體分組
+        ' GetMonthCountsForYearL3 — Layer3 COM 資料層: 單一資料夾月份郵件分佈
+        ' 職責: 對 Outlook 發出 COM 呼叫，回傳單一資料夾在指定年份中每個月的郵件數量
+        ' 規則: 不做快取、不做提前過濾、不遞迴 (這些全部交給 GetMonthCountsForYear L2.5 負責)
+        '       OCE 不在此攔截，直接 re-throw 讓呼叫端感知取消
+        ' 原始設計: 2026/3/24 by Gemini — 從逐月 Restrict 改為 GetTable + GetArray 一次讀完
         '   原本 12 次 Restrict + 12 次 Items.Count = 24 次 COM call
         '   現在 1 次 GetTable (含日期範圍 filter) + ceil(N/1000) 次 GetArray
+        ' 2026/04/15 by Claude/Gemini: 加入 cToken 參數與 fPath 參數
+        '   由 L2.5 直接傳入 fPath，完全消除 pFolder.FolderPath 的 COM 開銷
+        ' 2026/04/17 by Claude: 拆出快取/提前過濾邏輯至 GetMonthCountsForYear (L2.5)，此函數僅剩純 COM
         ' ---------------------------------------------------------------
-        If _iLikeNoisy Then _dbg("開始", $"{folder.Name} ({year} 年)")
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg("    ├ 開始", $"{fName} ({year} 年)")
 
-        ' ✅ 2026/04/10: 提前過濾 1: 該資料夾總郵件數為 0，直接略過 (by Gemini)
-        If GetCachedMailCount(folder) = 0 Then Return New ConcurrentDictionary(Of Integer, Integer)()
-
-        ' ✅ 2026/04/10: 提前過濾 2: 由先前的年度統計直接判定該資料夾今年無信件 (by Gemini)
-        '    解決 DB 沒有存 0 封信的紀錄，導致 lazy_load 回傳 Nothing 而被迫打 COM 的問題
-        Dim yCache As ConcurrentDictionary(Of Integer, Integer) = Nothing
-        If _cacheYearCounts.TryGetValue(folder.FolderPath, yCache) Then
-            Dim countInYear As Integer = 0
-            yCache.TryGetValue(year, countInYear)
-            If countInYear = 0 Then Return New ConcurrentDictionary(Of Integer, Integer)()
-        End If
-
-        ' ① 記憶體快取命中: 直接回傳，不打任何 COM
-        Dim cacheKey As String = folder.FolderPath & "_" & year.ToString()
-        Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
-        If _cacheMonthCounts.TryGetValue(cacheKey, value) Then Return value
-
-        ' ② DB lazy load（2026/04/09 by Claude）: 記憶體 miss 時先查 SSD，有就填回記憶體快取
-        ' 2026/04/09 修正：改用 (folderPath, year) 兩個參數，對應新 PK 設計
-        Dim dbResult = DbGetMonthCountsForFolder(folder.FolderPath, year)
-        If dbResult IsNot Nothing Then
-            _cacheMonthCounts.TryAdd(cacheKey, dbResult)
-            If _iLikeNoisy Then _dbg("DB 命中", $"{folder.Name} {year} 年 ({dbResult.Count} 個月)")
-            Return dbResult
-        End If
-
-        ' ③ L3 COM 呼叫: DB miss 才真正打 COM
         Dim monthCounts As New ConcurrentDictionary(Of Integer, Integer)
-        Const BATCH_SIZE As Integer = 500  ' 2026/3/24 by Gemini
         Dim table As Outlook.Table = Nothing
         Try
             ' 2026/3/24 by Gemini: 改用 GetTable + 日期範圍 DASL filter + GetArray
@@ -1667,56 +1720,168 @@ Partial Class Form1
             table.Columns.RemoveAll()
             table.Columns.Add("ReceivedTime")   ' 欄位索引 0
 
-            ' by simon, 2026/04/08: 每批次讀取後，若超過 100ms 則釋放執行緒並檢查中斷
             Dim swThrottle As New Stopwatch() : swThrottle.Start()
             Do While Not table.EndOfTable
                 Dim arr As Object = table.GetArray(BATCH_SIZE)
                 If arr Is Nothing Then Exit Do
+
                 Dim data(,) As Object = DirectCast(arr, Object(,))
                 Dim rows As Integer = data.GetUpperBound(0) + 1
                 For r As Integer = 0 To rows - 1
                     Dim receivedTime As DateTime = SafeGet(Of DateTime)(data, r, 0, DateTime.MinValue)
-                    If receivedTime > DateTime.MinValue Then
-                        Dim month As Integer = receivedTime.Month
-                        If _iLikeNoisy Then _dbg("DB miss, 從 L3 COM: ", $"{folder.Name} {year} 年")
-                        monthCounts.AddOrUpdate(month, 1, Function(k, v) v + 1)
-                    End If
+                    If receivedTime > DateTime.MinValue Then monthCounts.AddOrUpdate(receivedTime.Month, 1, Function(k, v) v + 1)
                 Next
 
-                ' by simon, 2026/04/08: 每 100ms 節流讓出執行緒
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    swThrottle.Restart()
-                    Await Task.Delay(1) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
-                    If _cancelRequested Then Exit Do ' by Gemini, 2026/04/09: 移出 100ms 節流，確保每一批次 (或 Task.Delay 醒來後) 都能立刻偵測到 ESC
-                End If
-
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken)
+                ' by simon, 2026/04/08: 每批次讀取後，若超過 100ms 則釋放執行緒並檢查中斷
+                ' 2026/04/15 by Claude: ThrottledYieldAsync 取代舊的 swThrottle + Task.Delay(1) + _cancelRequested
+                ' 2026/04/15: OCE 向上冒泡，不在此攔截 (快取寫入在呼叫端 L2.5，OCE 自然繞過)
             Loop
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: re-throw 讓 GetMonthCountsForYear (L2.5) 感知，不寫入快取
+            If _iLikeNoisy Then _dbg("    ├ 已取消", $"{fName} ({year} 年)") : Throw
         Catch ex As System.Exception
-            _dbg("錯誤", $"{folder.Name}, year={year}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
+            If _iLikeNoisy Then _dbg("    ├ 錯誤", $"{fName}, year={year}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally
             TryMarshalRelease(table)
         End Try
-        _cacheMonthCounts(cacheKey) = monthCounts    ' ✅ 第一次統計完, 一律存入快取，下次進入同一年份直接命中
 
-        '' ✅ 2026/04/09 新增：L3 計算完後立刻增量寫入 DB，不等 SaveCache 按鈕批次。
-        ''    根本原因：若使用者沒手動 SaveCache，下次重開程式 DB lazy 仍回 Nothing，每次都打 COM。
-        ''    修正後：每次 L3 計算完月份就持久化，下次 DB lazy 直接命中，首次以外均免 COM。
-        'If _iLikeNoisy Then DbSaveMonthCountsSingle(folder.FolderPath, year, monthCounts)
-        If _iLikeNoisy Then _dbg("結束", $"{folder.Name} ({year} 年)")
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"{fName} ({year} 年)")
         Return monthCounts
+    End Function
+    Private Async Function GetSubtreeToListL3(rootFolder As Outlook.Folder, includeSubF As Boolean, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of List(Of (Folder As Outlook.Folder, fPath As String)))
+        ' --------------------------------------------------------------
+        ' GetSubtreeToListL3 — Layer3 COM 資料層: BFS 純掃描
+        ' 原名 GetSubtreeToList，2026/04/17 by Claude: 拆出快取邏輯至 GetSubtreeToList (L2.5)
+        ' 職責: BFS 廣度優先掃描 rootFolder 下整棵子樹，回傳 (Folder, fPath) Tuple 清單
+        ' 規則: 不做快取讀取；BFS 完成後若未中斷，由本層負責寫入 _cacheSubTreeList
+        '       OCE 中斷時 re-throw，不寫快取 (確保不存入不完整的樹)
+        ' 2026/04/16 by Gemini: 升級回傳 Tuple (Folder, fPath)，消除呼叫端對 COM .FolderPath 的依賴
+        ' --------------------------------------------------------------
+        Dim rootPath As String = rootFolder.FolderPath
+        Dim rootName As String = ExtractFolderName(rootPath)
+        Dim cacheKey As String = rootPath & "|" & _showAllFolders  ' 2026/04/17: 鍵值含 _showAllFolders 分支
+
+        If _iLikeNoisy Then _dbg(" ├ 開始", rootName)
+        Dim sw As New Stopwatch() : sw.Start()
+        Dim swThrottle As New Stopwatch() : swThrottle.Start()
+
+        Dim result As New List(Of (Folder As Outlook.Folder, fPath As String))
+        result.Add((rootFolder, rootPath))
+
+        If Not includeSubF Then
+            sw.Stop()
+            If _iLikeNoisy Then _dbg("    ├ 結束", $"{rootName} (Single) | {sw.ElapsedMilliseconds}ms")
+            Return result
+        End If
+
+        ' BFS COM 掃描 (快取 miss 時走此路徑)
+        Dim queue As New Queue(Of (Folder As Outlook.Folder, Path As String))
+        queue.Enqueue((rootFolder, rootPath))
+        Try
+            While queue.Count > 0
+                Dim current = queue.Dequeue()
+                Try
+                    For Each subF As Outlook.Folder In current.Folder.Folders
+                        Dim fName As String = subF.Name
+                        Dim childPath As String = current.Path & "\" & fName
+
+                        Dim isMail As Boolean = IsMailFolder(subF, childPath)
+                        If Not _showAllFolders AndAlso Not isMail Then Continue For
+
+                        _cacheFolderIDs.TryAdd(childPath, (subF.EntryID, subF.StoreID, isMail, TextHasChineseChar(fName)))
+                        result.Add((subF, childPath))   ' ✅ 同步存入預計好的路徑，不之後再打 COM
+                        queue.Enqueue((subF, childPath))
+                    Next
+                Catch ex As System.Exception
+                    If _iLikeNoisy Then _dbg("    ├ ① OOM 失敗", ExtractFolderName(current.Path) & " - " & ex.Message)
+                End Try
+
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Low,
+                                          Sub() progress?.Report(New ProgressReport With {.CurrentCount = result.Count, .Message = $"正在展開資料夾結構: 已發現 {result.Count} 個資料夾..."}))
+            End While
+        Catch ex As OperationCanceledException
+            If _iLikeNoisy Then _dbg("    ├ 中斷", $"GetSubtreeToListL3 已由使用者中斷，已發現 {result.Count} 個")
+            Throw   ' re-throw，確保不完整的樹不寫入快取
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("    ├ ② OOM BFS 失敗", ex.Message)
+        End Try
+        sw.Stop()
+
+        ' BFS 完成且未中斷時寫入快取 (由 L3 自行負責，L2.5 不重複寫)
+        If Not cToken.IsCancellationRequested AndAlso result.Count > 0 Then _cacheSubTreeList.TryAdd(cacheKey, result)
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"{rootName} (BFS) | 資料夾總計: {result.Count} | {sw.ElapsedMilliseconds}ms")
+        Return result
 
     End Function
-    Private Async Function GetAttachMailList(folder As Outlook.Folder, progress As IProgress(Of ProgressReport)) As Task(Of List(Of MailItemInfo))
+    Private Function GetSubtreeToListL3_Rdo(rootFolder As Redemption.RDOFolder, includeSubF As Boolean) As List(Of Redemption.RDOFolder)
+        ' --------------------------------------------------------------
+        ' 2026/3/24 by Gemini: GetSubtreeToListL3_Rdo
+        ' 目的: 專門提供給 RDO 平行路徑使用，回傳 List(Of Redemption.RDOFolder)
+        ' 說明: 因為 Redemption 是 free-threaded，可以用 Parallel.ForEach 安全平行展開子樹
+        ' --------------------------------------------------------------
+        Dim rootName As String = rootFolder.Name
+        _dbg("    ├ 開始", rootName)
+        Dim sw As New Stopwatch() : sw.Start()
+
+        Dim resultBag As New ConcurrentBag(Of Redemption.RDOFolder)
+        resultBag.Add(rootFolder)
+        If Not includeSubF Then
+            sw.Stop()
+            _dbg("    ├ 結束", $"{rootName} (RDO-Single) | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
+            Return resultBag.ToList()
+        End If
+
+        ' 使用兩層佇列作層級遍歷，每層用 Parallel.ForEach 探索
+        Dim currentLayer As New ConcurrentQueue(Of Redemption.RDOFolder)
+        currentLayer.Enqueue(rootFolder)
+        Do
+            Dim layerList = currentLayer.ToList()
+            If layerList.Count = 0 Then Exit Do
+
+            ' 清空 queue 準備裝下一層的資料夾
+            Do While currentLayer.TryDequeue(Nothing) : Loop
+
+            ' 平行處理當前層的資料夾，將它們的子資料夾加進 queue 與結果中
+            Parallel.ForEach(layerList, Sub(current)
+                                            Try
+                                                For Each subFolder As Redemption.RDOFolder In current.Folders
+                                                    resultBag.Add(subFolder)
+                                                    currentLayer.Enqueue(subFolder)
+                                                Next
+                                            Catch ex As System.Exception
+                                                _dbg("    ├ 錯誤", current.Name & " - " & ex.Message) ' by Gemini, 2026/04/10
+                                            End Try
+                                        End Sub)
+        Loop
+
+        sw.Stop()
+        _dbg("    ├ 結束", $"{rootName} (RDO-Parallel BFS) | 資料夾總計: {resultBag.Count} | {sw.ElapsedMilliseconds}ms") ' by Gemini, 2026/04/10
+        Return resultBag.ToList()
+
+    End Function
+    Private Async Function GetAttachMailListL3(folder As Outlook.Folder, progress As IProgress(Of ProgressReport), Optional cToken As CancellationToken = Nothing) As Task(Of List(Of MailItemInfo))
+        ' ----------------------------------------------------------------------------------------
         ' Phase 1 / Layer3 純資料層: GetTable + GetArray 批次掃描單一資料夾
         ' 設計: 這裡只專注於透過 MAPI 取回資料，不會做快取判定，也無關大小設定過濾
-        If _iLikeNoisy Then _dbg(" ├ 開始", folder.Name)
+        ' 2026/04/15 by Claude: 加入 cToken 參數，取代 _cancelRequested 旗標
+        '   ThrottledYieldAsync(swThrottle, cToken) 每 100ms 讓出一次，cToken 取消時拋 OCE
+        '   取消時捕捉 OCE → 回傳空 List (不回傳已掃到的半截清單) 
+        '   原因: 呼叫端 GetAttachMailList 取消時不寫入快取 (見其 cToken.IsCancellationRequested 判斷) 
+        ' ----------------------------------------------------------------------------------------
+        Dim fName As String = folder.Name ' by Gemini 3.1 Pro 2026/04/16: 避免重複 COM 呼叫
+        If _iLikeNoisy Then _dbg(" ├ 開始", fName)
 
         Const PR_MESSAGE_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
-        Const BATCH_SIZE As Integer = 500
         Dim table As Outlook.Table = Nothing
 
         Dim strFilterHasAttachment As String = "@SQL=" & Chr(34) & "urn:schemas:httpmail:hasattachment" & Chr(34) & " = True"
         Dim result As New List(Of MailItemInfo)
+        
+        ' 2026/04/22 by Gemini 3.1 Pro: 提前取得路徑，讓此資料夾內的所有郵件都能獲得歸屬路徑，且只需 1 次 COM 存取
+        Dim fPath As String = ""
+        Try : fPath = folder.FolderPath : Catch : End Try
+
         Try
             table = folder.GetTable(strFilterHasAttachment)
             table.Columns.RemoveAll()
@@ -1729,16 +1894,8 @@ Partial Class Form1
             Dim swThrottle As New Stopwatch() : swThrottle.Start()
             Dim rowCount As Integer = 0
             Do While Not table.EndOfTable
-                If _cancelRequested Then Exit Do
-
                 Dim arr As Object = table.GetArray(BATCH_SIZE)
                 If arr Is Nothing Then Exit Do
-
-                If swThrottle.ElapsedMilliseconds >= 100 Then
-                    progress?.Report(New ProgressReport With {.Message = $"Phase 1 掃描: {folder.Name} (已找 {result.Count} 封)"})
-                    swThrottle.Restart()
-                    Await Task.Delay(1) ' ✅ 只有在更新進度時才讓出執行緒，效能與響應兼具
-                End If
 
                 Dim data(,) As Object = DirectCast(arr, Object(,))
                 Dim rows As Integer = data.GetUpperBound(0) + 1
@@ -1749,78 +1906,32 @@ Partial Class Form1
                                                        .Subject = SafeGet(Of String)(data, r, 1, ""),
                                                        .Size = SafeGet(Of Long)(data, r, 2, 0L),
                                                        .ReceivedTime = SafeGet(Of DateTime)(data, r, 3, DateTime.MinValue),
-                                                       .SenderName = SafeGet(Of String)(data, r, 4, "")}
+                                                       .SenderName = SafeGet(Of String)(data, r, 4, ""),
+                                                       .FolderPath = fPath}
                     result.Add(info)
                     rowCount += 1
                 Next
-                If _cancelRequested Then Exit Do
+
+                ' 2026/04/15: 整合 ThrottledYieldAsync，取代舊的 _cancelRequested 雙重檢查 + Task.Delay(1)
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottledYieldAsync 整合進度回報與讓出點
+                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                                          Sub() progress?.Report(New ProgressReport With {.Message = $"Phase 1 掃描: {fName} (已找 {result.Count} 封)"}))
             Loop
+        Catch ex As OperationCanceledException
+            ' 2026/04/15: 取消時回傳空 List，不回傳半截清單，呼叫端不會將不完整結果寫入快取 (是嗎???)
+            If _iLikeNoisy Then _dbg("    ├ 已取消", fName)
+            Return New List(Of MailItemInfo)()
         Catch ex As System.Exception
-            _dbg(" ├ 錯誤: ", folder.Name & " — " & ex.Message)
+            If _iLikeNoisy Then _dbg("    ├ 錯誤: ", fName & " — " & ex.Message)
         Finally
             TryMarshalRelease(table)
         End Try
-        If _iLikeNoisy Then _dbg(" ├ 結束", $"找到 {result.Count} 封有附件郵件")
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"找到 {result.Count} 封有附件郵件")
         Return result
     End Function
-    Private Async Function GetFolderBasicMailInfosAsync(folder As Outlook.Folder, needTopic As Boolean, ct As CancellationToken) As Task(Of List(Of (Mail As MailItemInfo, Topic As String)))
-        Dim resultList As New List(Of (MailItemInfo, String))
-        Dim table As Outlook.Table = Nothing
-
-        Try
-            table = folder.GetTable()
-            Const PR_MESSAGE_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
-            Const PR_CONVERSATION_TOPIC As String = "http://schemas.microsoft.com/mapi/proptag/0x0070001E"
-
-            table.Columns.RemoveAll()
-            table.Columns.Add("EntryID")
-            table.Columns.Add("Subject")
-            table.Columns.Add(PR_MESSAGE_SIZE)
-            table.Columns.Add("ReceivedTime")
-            table.Columns.Add("SenderName")
-            If needTopic Then table.Columns.Add(PR_CONVERSATION_TOPIC)
-
-            Dim swYield As New Stopwatch() : swYield.Start()
-
-            Do While Not table.EndOfTable
-                Dim arr As Object = table.GetArray(1000)
-                If arr Is Nothing Then Exit Do
-                Dim data(,) As Object = DirectCast(arr, Object(,))
-
-                For r As Integer = 0 To data.GetUpperBound(0)
-                    Dim entryID As String = SafeGet(Of String)(data, r, 0, "")
-                    If entryID = "" Then Continue For
-
-                    Dim info As New MailItemInfo With {
-                        .EntryID = entryID,
-                        .Subject = SafeGet(Of String)(data, r, 1, ""),
-                        .Size = SafeGet(Of Long)(data, r, 2, 0L),
-                        .ReceivedTime = SafeGet(Of DateTime)(data, r, 3, DateTime.MinValue),
-                        .SenderName = SafeGet(Of String)(data, r, 4, "")
-                    }
-
-                    Dim topic As String = If(needTopic, SafeGet(Of String)(data, r, 5, ""), "")
-                    resultList.Add((info, topic))
-                Next
-
-                ' ✅ 內建標準 200ms 節流讓位與中斷檢查
-                If swYield.ElapsedMilliseconds >= 200 Then
-                    swYield.Restart()
-                    Await Task.Yield()
-                    ct.ThrowIfCancellationRequested()
-                End If
-            Loop
-        Catch ex As System.Exception
-            _dbg("錯誤", $"{folder.Name}: {ex.Message}")
-        Finally
-            TryMarshalRelease(table)
-        End Try
-
-        Return resultList
-    End Function
-    Private Function GetAttachFilename(mail As MailItemInfo) As List(Of String)
+    Private Function GetAttachFilenameL3(mail As MailItemInfo) As List(Of String)
         ' by Gemini, 2026/04/04: 取得郵件的附件檔名清單 (純 Layer3 邏輯，不做快取)
-        If _iLikeNoisy Then _dbg(" ├ 開始", mail.Subject)
+        If _iLikeNoisy Then _dbg("    ├ 開始", mail.Subject)
         Dim result As New List(Of String)()
 
         ' ⓪ Redemption 優先: 繞過 OOM 開信的記憶體開銷，直接透過 MAPI Table 抓取檔名
@@ -1838,7 +1949,7 @@ Partial Class Form1
                 End If
                 Return result
             Catch ex As System.Exception
-                _dbg("⓪ RDO 失敗，走OOM fallback", ex.Message)
+                If _iLikeNoisy Then _dbg("    ├ ⓪ RDO 失敗，走OOM fallback", ex.Message)
             Finally
                 TryMarshalRelease(rdoMsg)
             End Try
@@ -1851,15 +1962,17 @@ Partial Class Form1
             tempMail = TryCast(_olNS.GetItemFromID(mail.EntryID), Outlook.MailItem)
             If tempMail IsNot Nothing Then
                 attachments = tempMail.Attachments
-                For i As Integer = 1 To attachments.Count ' COM 是 1-based index
+                Dim attCount As Integer = attachments.Count                     ' by simon 2026/04/19: 存成變數避免 COM 呼叫重複
+                Dim olbyValue As Integer = Outlook.OlAttachmentType.olByValue   ' by simon 2026/04/19: 存成變數避免 COM 呼叫重複
+                For i As Integer = 1 To attCount ' COM 是 1-based index
                     Dim att As Outlook.Attachment = attachments.Item(i)
-                    Try : If att.Type = Outlook.OlAttachmentType.olByValue Then result.Add(att.FileName) ' 2026/04/09 by Gemini: 僅處理 olByValue (1) 類型的附件
+                    Try : If att.Type = olbyValue Then result.Add(att.FileName) ' 2026/04/09 by Gemini: 僅處理 olByValue (1) 類型的附件
                     Finally : TryMarshalRelease(att)
                     End Try
                 Next
             End If
         Catch ex As System.Exception
-            _dbg("① OOM 失敗", ex.Message)
+            If _iLikeNoisy Then _dbg("    ├ ① OOM 失敗", ex.Message)
         Finally
             If _iLikeNoisy Then _dbg(" ├ 結束")
             TryMarshalRelease(attachments)
@@ -1868,29 +1981,130 @@ Partial Class Form1
 
         Return result
     End Function
+    Friend Async Function GetFolderBasicMailInfos(folder As Outlook.Folder, needTopic As Boolean, ct As CancellationToken, Optional fPath As String = "") As Task(Of List(Of (Mail As MailItemInfo, Topic As String)))
+        ' ---------------------------------------------------------------
+        ' GetFolderBasicMailInfos — Layer2.5 快取存取點 (Tab4/Tab5)
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        Dim currentSnap As Integer = GetLiveFolderSnapL3(folder, fPath)
+        Dim cacheKey As String = fPath & "|" & needTopic
+
+        ' ① 記憶體命中檢查
+        Dim entry As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer) = Nothing
+        If _cacheFolderBasicMailInfos.TryGetValue(cacheKey, entry) AndAlso entry.Snap = currentSnap Then
+            Return entry.Mails
+        End If
+
+        ' ② DB lazy load (basic_maillist 存在的話)
+        ' 這裡不管 needTopic 是 True 還是 False，只要 DB 有最新資料，我們都拿來用
+        Dim dbResult = DbGetFolderBasicMailInfos(fPath)
+        If dbResult.HasValue AndAlso dbResult.Value.Snap = currentSnap Then
+            Dim mails = dbResult.Value.Mails
+            _cacheFolderBasicMailInfos(cacheKey) = (mails, currentSnap)
+            Return mails
+        End If
+
+        ' ③ Fallback: Layer3 COM 掃描
+        Dim resultList = Await GetFolderBasicMailInfosL3(folder, needTopic, ct, fPath)
+        
+        ' 掃描完畢，存入記憶體快取 (SaveCache 時會持久化到 SSD)
+        If resultList IsNot Nothing Then
+            _cacheFolderBasicMailInfos(cacheKey) = (resultList, currentSnap)
+        End If
+
+        Return resultList
+    End Function
+    Private Async Function GetFolderBasicMailInfosL3(folder As Outlook.Folder, needTopic As Boolean, ct As CancellationToken, Optional fPath As String = "") As Task(Of List(Of (Mail As MailItemInfo, Topic As String)))
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+
+        If _iLikeNoisy Then _dbg("    ├ 開始 (掃描)", fName)
+
+        Dim resultList As New List(Of (MailItemInfo, String))
+        Dim table As Outlook.Table = Nothing
+        Try
+            table = folder.GetTable()
+            Const PR_MESSAGE_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
+            Const PR_CONVERSATION_TOPIC As String = "http://schemas.microsoft.com/mapi/proptag/0x0070001E"
+
+            table.Columns.RemoveAll()
+            table.Columns.Add("EntryID")
+            table.Columns.Add("Subject")
+            table.Columns.Add(PR_MESSAGE_SIZE)
+            table.Columns.Add("ReceivedTime")
+            table.Columns.Add("SenderName")
+            If needTopic Then table.Columns.Add(PR_CONVERSATION_TOPIC)
+
+            Dim swYield As New Stopwatch() : swYield.Start()
+            Do While Not table.EndOfTable
+                Dim arr As Object = table.GetArray(BATCH_SIZE)
+                If arr Is Nothing Then Exit Do
+
+                Dim data(,) As Object = DirectCast(arr, Object(,))
+                For r As Integer = 0 To data.GetUpperBound(0)
+                    Dim entryID As String = SafeGet(Of String)(data, r, 0, "")
+                    If entryID = "" Then Continue For
+
+                    Dim info As New MailItemInfo With {.EntryID = entryID,
+                                                       .Subject = SafeGet(Of String)(data, r, 1, ""),
+                                                       .Size = SafeGet(Of Long)(data, r, 2, 0L),
+                                                       .ReceivedTime = SafeGet(Of DateTime)(data, r, 3, DateTime.MinValue),
+                                                       .SenderName = SafeGet(Of String)(data, r, 4, ""),
+                                                       .FolderPath = fPath}
+
+                    Dim topic As String = If(needTopic, SafeGet(Of String)(data, r, 5, ""), "")
+                    resultList.Add((info, topic))
+                Next
+
+                ' ✅ 使用統一節流讓位，內部 Task.Delay(1) 確保 ESC 中斷靈敏度 (by Antigravity, 2026/04/19)
+                Await ThrottledYieldAsync(swYield, ct, ThrottleFreq.Mid)
+            Loop
+
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("    ├ 錯誤", $"{fName}: {ex.Message}")
+        Finally
+            If _iLikeNoisy Then _dbg("    ├ 結束 (掃描)")
+            TryMarshalRelease(table)
+        End Try
+
+        Return resultList
+    End Function
 #End Region
 #Region "  └ 輔助函數"
     Private Function TextHasChineseChar(name As String) As Boolean
         Return name.Any(Function(c) c >= ChrW(&H4E00) AndAlso c <= ChrW(&H9FFF))
     End Function
-    Private Function IsMailFolder(folder As Outlook.Folder) As Boolean
-        If _iLikeNoisy Then _dbg(" ├ 開始", folder.Name)
-        Dim fPath As String = folder.FolderPath
+    Private Function ExtractFolderName(fPath As String) As String
+        ' ---------------------------------------------------------------
+        ' ExtractFolderName: 從 FolderPath 字串中解析出資料夾名稱
+        ' 邏輯: 取出最後一個 "\" 之後的內容
+        ' by Gemini 3.0 flash, 2026/04/15
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then Return "未知"
+        Dim idx As Integer = fPath.LastIndexOf("\"c)
+        If idx < 0 Then Return fPath
+        Return fPath.Substring(idx + 1)
+    End Function
+    Private Function IsMailFolder(folder As Outlook.Folder, Optional fPath As String = "") As Boolean
+        If String.IsNullOrEmpty(fPath) Then fPath = folder.FolderPath
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg(" ├ 開始", fName)
         Dim isMail As Boolean
         If _cacheIsMailFolder.TryGetValue(fPath, isMail) Then Return isMail
 
-        Static allowedTypes As Outlook.OlItemType() = {Outlook.OlItemType.olMailItem, Outlook.OlItemType.olPostItem}
+        Static allowedTypes As Outlook.OlItemType() = {Outlook.OlItemType.olMailItem,
+                                                       Outlook.OlItemType.olPostItem}
         Try
             Dim itemType As Outlook.OlItemType = folder.DefaultItemType
             isMail = allowedTypes.Contains(itemType)
             _cacheIsMailFolder.TryAdd(fPath, isMail)
-            If Not isMail Then _dbg("過濾非郵件資料夾", $"{folder.Name} ({itemType})") ' 只有非郵件時才記錄
+            If Not isMail Then _dbg("過濾非郵件資料夾", $"{fName} ({itemType})") ' 只有非郵件時才記錄
             Return isMail
         Catch
             Return False
         End Try
     End Function
-
     Private Function objFolder2odoFolder(objFolder As Outlook.Folder) As Redemption.RDOFolder
         If _rdo Is Nothing OrElse objFolder Is Nothing Then Return Nothing
         Return _rdo.GetFolderFromID(objFolder.EntryID, objFolder.StoreID)
@@ -1911,22 +2125,23 @@ Partial Class Form1
 
     ' Layer2.5 輔助函數
     ' ---------------------------------------------------------------
-    '   - HasSubFoldersFast(folder)             ：快速預測子資料夾有無，TreeView 展開用（記憶體→DB→COM 三層）
-    '   - GetLiveFolderSnap(folder)             ：單次 PropertyAccessor 讀 PR_CONTENT_COUNT，專門用於 snapshot 驗證（< 1ms）；失敗回 -999（永遠不等於合法 snap 值）
-    '   - FillFolderCacheFromDbRow(fPath, row)  ：DB 命中時一次填滿六個記憶體快取（只填 Not NULL 欄位）
+    '   - HasSubFoldersFast(pFolder)            ：快速預測子資料夾有無，TreeView 展開用 (記憶體→DB→COM 三層) 
+    '   - GetLiveFolderSnapL3(pFolder)          ：單次 PropertyAccessor 讀 PR_CONTENT_COUNT，專門用於 snapshot 驗證 (< 1ms)；失敗回 -999 (永遠不等於合法 snap 值) 
+    '   - FillFolderCacheFromDbRow(fPath, row)  ：DB 命中時一次填滿六個記憶體快取 (只填 Not NULL 欄位) 
     ' ---------------------------------------------------------------
-    Private Function HasSubFoldersFast(folder As Outlook.Folder) As Boolean
+    Private Function HasSubFoldersFast(folder As Outlook.Folder, Optional fPath As String = "") As Boolean
         ' ---------------------------------------------------------------
         ' HasSubFoldersFast — 光速版子資料夾加號預測 (專為 TreeView 展開設計)
         ' 2026/4/7 by Gemini, 解決 SSD 讀出後無法出現假節點 + 號，以及嚴重卡頓問題
         ' ---------------------------------------------------------------
-        '   呼叫順序：① _cacheFolderCount 記憶體 → ② DbGetFolderStats(fPath).fc → ③ folder.Folders.Count COM
+        '   呼叫順序：① _cacheFolderCount 記憶體 → ② DbGetFolderStats(fPath).fc → ③ pFolder.Folders.Count COM
         '   已在 LoadSubFolderToTreeView 第 489 行啟用， 解決 DB 載入後 TreeView 不顯示 "+" 的問題
-        '   比直接 folder.Folders.Count 快： 記憶體命中~0μs，DB命中~0.1ms，COM才~1-5ms
+        '   比直接 pFolder.Folders.Count 快： 記憶體命中~0μs，DB命中~0.1ms，COM才~1-5ms
         ' ---------------------------------------------------------------
-        Dim fPath As String
-        Try : fPath = folder.FolderPath
-        Catch : Return False : End Try
+        If String.IsNullOrEmpty(fPath) Then
+            Try : fPath = folder.FolderPath
+            Catch : Return False : End Try
+        End If
 
         Dim fc As Integer
         If _cacheFolderCount.TryGetValue(fPath, fc) Then Return fc > 0
@@ -1940,11 +2155,15 @@ Partial Class Form1
         ' 萬一都沒有，直接保底呼叫一次 COM (比 PR_CONTENT_COUNT 驗證還快)
         Try : Return folder.Folders.Count > 0 : Catch : Return False : End Try
     End Function
-    Private Function GetLiveFolderSnap(folder As Outlook.Folder) As Integer
+    Private Function GetLiveFolderSnapL3(folder As Outlook.Folder, Optional fPath As String = "") As Integer
+        ' ---------------------------------------------------------------
         ' 快速讀取 PR_CONTENT_COUNT，專門只用於 SQLite snapshot 驗證
         ' 故意不走完整 Layer3 fallback 的GetMailCount，只走最快的 PropertyAccessor 路徑
-        ' 失敗時回傳 -999（不可能等於任何正常 snapshot 值，確保快取失效）
-        If _iLikeNoisy Then _dbg(" ├ 開始", folder.Name)
+        ' 失敗時回傳 -999 (不可能等於任何正常 snapshot 值，確保快取失效) 
+        ' 2026/4/7 by Gemini, 解決 SSD 讀出後 snapshot 驗證失敗導致的重複統計問題
+        ' ---------------------------------------------------------------
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg(" ├ 開始", fName)
         Try
             Const PR_CC As String = "http://schemas.microsoft.com/mapi/proptag/0x36020003"
             Return CInt(folder.PropertyAccessor.GetProperty(PR_CC))
@@ -1954,8 +2173,8 @@ Partial Class Form1
     End Function
     Private Sub FillFolderCacheFromDbRow(fPath As String, row As FolderStatsDbRow)
         ' DB 命中且 snapshot 驗證通過時，一次填滿所有欄位
-        ' 使用 TryAdd：記憶體已有值（例如另一個 Layer2.5 函數剛填入）時不覆蓋
-        ' -1 代表 DB 中該欄位尚未存入（例如 mca 還沒算過），跳過，不污染記憶體快取
+        ' 使用 TryAdd：記憶體已有值 (例如另一個 Layer2.5 函數剛填入) 時不覆蓋
+        ' -1 代表 DB 中該欄位尚未存入 (例如 mca 還沒算過)，跳過，不污染記憶體快取
         If row.mc >= 0 Then _cacheMailCount.TryAdd(fPath, row.mc)
         If row.mca >= 0 Then _cacheMailCountAll.TryAdd(fPath, row.mca)
         If row.fc >= 0 Then _cacheFolderCount.TryAdd(fPath, row.fc)
@@ -1967,7 +2186,6 @@ Partial Class Form1
         If Not String.IsNullOrEmpty(row.eid) Then _cacheFolderIDs.TryAdd(fPath, (row.eid, row.sid, row.isMail = 1, row.hasCh = 1))
         If row.isMail >= 0 Then _cacheIsMailFolder.TryAdd(fPath, row.isMail = 1)
     End Sub
-
 #End Region
 #End Region
 

@@ -26,6 +26,23 @@ Imports System.Text.RegularExpressions
 
 Public Class DebugForm
 
+#Region "■ 00 Form 雙緩衝"
+    ' 2026/04/18 by Claude: 與 Form1 相同的雙緩衝設定
+    ' DebugForm 開啟時主要卡頓來源是 Timer_Tick 高頻觸發 BeginUpdate/EndUpdate + EnsureVisible，
+    ' 這兩項設定可改善切換焦點與 Resize 時的撕裂感，但無法根治高頻更新本身的開銷。
+    Protected Overrides ReadOnly Property CreateParams As CreateParams
+        Get
+            Dim cp As CreateParams = MyBase.CreateParams
+            cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED：子控制項合成層雙緩衝
+            Return cp
+        End Get
+    End Property
+    Protected Overrides Sub OnLoad(e As EventArgs)
+        Me.DoubleBuffered = True    ' Form 自身 WM_PAINT 雙緩衝，與 WS_EX_COMPOSITED 互補無衝突
+        MyBase.OnLoad(e)
+    End Sub
+#End Region
+
 #Region "■ 01 Win32 API & 常數"
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function SendMessage(
@@ -351,7 +368,7 @@ Public Class DebugForm
                         Dim tagCurrent = TryCast(lvi.Tag, DebugItemTag)
                         Dim tagPair = TryCast(pair.Tag, DebugItemTag)
 
-                        if tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
+                        If tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
                             Dim totalMs As Double = Math.Abs((tagCurrent.timeStamp - tagPair.timeStamp).TotalMilliseconds)
                             lvi.SubItems(3).Text = totalMs.ToString("#,##0.00")
                             ' by Gemini, 2026/04/11: 填入數值後同步更新搜尋快取

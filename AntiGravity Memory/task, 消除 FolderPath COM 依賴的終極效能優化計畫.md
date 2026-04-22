@@ -1,0 +1,15 @@
+- [ ] 初始化重構環境 (建立工作清單)
+- [ ] 1. 修改 `Form1_Outlook.vb`:
+    - [ ] 更新 `_cacheSubFolderList` 快取字典宣告
+    - [ ] 重構 `GetSubtreeToList` 支援 Tuple 回傳 (包裝 Folder + FolderPath)
+    - [ ] 重構 `GetUniqueFolderList` 支援 Tuple 回傳
+- [ ] 2. 修改 `Form1_MainTabs.vb`:
+    - [ ] 更新 `Button2_Click` (Tab2) 呼叫端對齊
+    - [ ] 更新 `Button3_Click` (Tab3) 呼叫端對齊
+    - [ ] 更新 `Button4_Click` (Tab4) 呼叫端對齊
+    - [ ] 更新 `Button5_Click` (Tab5) 呼叫端對齊
+- [ ] 3. 修改 `Form1_SQLite2.vb`:
+    - [ ] 更新 `RenewCacheAsync` 呼叫端對齊
+- [ ] 4. 修改 `Form1_Win32API.vb`:
+    - [ ] 更新所有剩餘的 `GetSubtreeToList` 呼叫端
+- [ ] 複檢與驗證邏輯

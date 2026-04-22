@@ -1,0 +1,17 @@
+- [ ] **Tab1: UI 優化與 MB 單位轉換**
+    - [ ] 修改 `InitTab1UI`: 大小欄位顯示改為 MB
+    - [ ] 修改 `GenerateTab1SummaryLine`: 隱藏冗餘合計列 (當選取單一 PST 根節點時)
+    - [ ] 修改 `BuildListViewItem_Tab1` / `ComputeFolderSize`: 單位由 KB 改為 MB
+    - [ ] 實作 `UpdateTab1GroupHeaders`: 確保統計完畢後群組標題同步更新
+- [ ] **Tab2: 年度/月份視圖同步與群組收合**
+    - [ ] 在 `Form1_Win32API.vb` 加入 `LVGROUP` 與 `LVM_SETGROUPINFO` 相關定義
+    - [ ] 修改 `RenderLvYearView`: 啟用 `LVGS_COLLAPSIBLE` 狀態
+    - [ ] 強化 `ListView2_MouseDown`: 點擊群組標題連動 Chart2 顯示該年月份分佈
+    - [ ] 修正 `ListView2_SelectedIndexChanged`: 確保月份點選與年份收合時的圖表同步
+- [ ] **DebugForm: 分組邏輯修正 (Session-based)**
+    - [ ] 修改 `AddMessage3`: 實作「Session 入口」判定邏輯
+    - [ ] 修改 `Timer_Tick`: 按 Session 群組化，維持時間順序
+- [ ] **最終驗證與測試**
+    - [ ] 驗證 Tab1 單位與合計列顯示
+    - [ ] 驗證 Tab2 群組收合與圖表連動
+    - [ ] 驗證 DebugForm 時序分組

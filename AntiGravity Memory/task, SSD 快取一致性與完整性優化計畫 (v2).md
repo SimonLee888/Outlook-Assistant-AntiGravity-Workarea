@@ -1,0 +1,5 @@
+- [ ] 修正 `SaveFolderStatsInner`: 聯集 `_cacheFolderIDs.Keys` 至 `allPaths` <!-- id: 0 -->
+- [ ] 修正 `LoadFolderStatsInner`: 補全 SQL SELECT 並回填身分標識字典 <!-- id: 1 -->
+- [ ] 優化 `RenewAttachMailListAsync`: 補上 `GetLiveFolderSnapL3` 的 `fPath` 參數 <!-- id: 2 -->
+- [ ] 清理 `_dbg` 跳轉問題: 將 `Return` 後的 dead code 移前 <!-- id: 3 -->
+- [ ] 最終驗證: 檢查 `SaveCache` 與 `LoadCache` 流程完整性 <!-- id: 4 -->

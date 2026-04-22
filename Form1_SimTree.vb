@@ -1,4 +1,5 @@
-Imports System.ComponentModel
+﻿Imports System.ComponentModel
+Imports System.Runtime.InteropServices
 
 Public Class SimTree
 
@@ -41,13 +42,27 @@ Public Class SimTree
     ' 目前是否套用 Highlight 色（True=得焦深藍，False=失焦淡灰）
     ' S2 2026-03-23：從 OnLostFocus 上方移至此私有狀態區，集中管理
     Private _isHighlightActive As Boolean = True
+
+    ' Win32 常數與 API (用於徹底隱藏水平捲軸)
+    ' by Gemini 3.0 Flash, 2026/04/21
+    Private Const TVS_NOHSCROLL As Integer = &H8000     ' 停用水平捲軸樣式
+    Private Const WM_HSCROLL As Integer = &H114        ' 水平捲動訊息
+    Private Const TVM_ENSUREVISIBLE As Integer = &H1114 ' TreeView EnsureVisible 訊息 (TVM_FIRST + 20)
+    Private Const SB_HORZ As Integer = 0               ' 水平捲軸標記
+    Private Const WS_HSCROLL As Integer = &H100000     ' 標準水平捲軸樣式
+
+    <DllImport("user32.dll")>
+    Private Shared Function ShowScrollBar(hWnd As IntPtr, wBar As Integer, bShow As Boolean) As Integer
+    End Function
 #End Region
 
 #Region "■ 02 公共屬性"
     Public ReadOnly Property SelectedNodes As List(Of TreeNode)
         ' SelectedNodes：回傳目前所有選定節點的清單（唯讀）
-        ' 多選時，Form1 應改用這個屬性取得完整清單
+        ' [Fix by Gemini 3.0 Flash, 2026/04/17]
+        ' 增加安全性檢查：過濾掉因為 Nodes.Clear() 而脫離樹狀結構的殘留節點
         Get
+            _selectedNodes.RemoveAll(Function(n) n.TreeView IsNot Me)
             Return _selectedNodes
         End Get
     End Property
@@ -64,9 +79,9 @@ Public Class SimTree
         '   添加 <DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)> 告訴設計工具不要序列化此屬性。
         '
         '   Get: 單選時回傳選定節點；多選時回傳 _lastClickedNode（最後被點選的那個）
-        '        讓 Form1 的 EnsureVisible / ExpandTreeToDefaultInbox 等程式碼可以繼續正常使用
+        '        讓 Form1 的 EnsureVisible / ExpandTvToDefaultInbox 等程式碼可以繼續正常使用
         '   Set: 清除所有選取，只選定指定節點（等同 SelectSingleNode，不觸發 AfterSelect）
-        '        讓 ExpandTreeToDefaultInbox 的 treeview.SelectedNode = node 正常運作
+        '        讓 ExpandTvToDefaultInbox 的 treeview.SelectedNode = node 正常運作
         Get
             Return _lastClickedNode     ' 單選時 = 唯一選取節點；多選時 = 最後被點選的節點
         End Get
@@ -74,6 +89,13 @@ Public Class SimTree
             SelectSingleNode(value)     ' 清除所有選取，只選定這一個（不觸發 AfterSelect）
         End Set
     End Property
+
+    ' HideHorizontalScrollBar：是否隱藏水平捲軸並防止水平位移
+    ' by Gemini 3.0 Flash, 2026/04/21
+    ' 設為 True 時會加入 TVS_NOHSCROLL 樣式並攔截 WM_HSCROLL 訊息
+    <Category("Appearance")>
+    <DefaultValue(False)>
+    Public Property HideHorizontalScrollBar As Boolean = False
 #End Region
 
 #Region "■ 03 建構子"
@@ -231,6 +253,53 @@ Public Class SimTree
     End Sub
 #End Region
 
+#Region "■ 12 核心訊息處理（捲軸控制）"
+    ' CreateParams：覆寫樣式以停用水平捲軸
+    ' by Gemini 3.0 Flash, 2026/04/21
+    Protected Overrides ReadOnly Property CreateParams As CreateParams
+        Get
+            Dim cp As CreateParams = MyBase.CreateParams
+            If HideHorizontalScrollBar Then
+                ' TVS_NOHSCROLL: TreeView 專用停用捲軸樣式
+                ' WS_HSCROLL: 標準水平捲軸樣式 (透過 Not 運算移除)
+                cp.Style = cp.Style Or TVS_NOHSCROLL
+                cp.Style = cp.Style And Not WS_HSCROLL
+            End If
+            Return cp
+        End Get
+    End Property
+
+    ' OnHandleCreated：控制項 Handle 建立後立即強力隱藏捲軸
+    ' by Gemini 3.0 Flash, 2026/04/21
+    Protected Overrides Sub OnHandleCreated(e As EventArgs)
+        MyBase.OnHandleCreated(e)
+        If HideHorizontalScrollBar Then
+            ' 強力移除捲軸空間 (灰條)
+            ShowScrollBar(Me.Handle, SB_HORZ, False)
+        End If
+    End Sub
+
+    ' WndProc：攔截水平捲動訊息以防止位移
+    ' by Gemini 3.0 Flash, 2026/04/21
+    Protected Overrides Sub WndProc(ByRef m As Message)
+        If HideHorizontalScrollBar Then
+            Select Case m.Msg
+                Case WM_HSCROLL
+                    ' 攔截水平捲動訊息，直接返回不讓控制項位移
+                    Return
+                Case TVM_ENSUREVISIBLE
+                    ' 攔截 EnsureVisible 訊息
+                    ' 這是防止 TreeView 在選取長項目時自動「對齊」文字而產生水平位移的關鍵
+                    MyBase.WndProc(m) ' 先讓基類處理垂直方向的捲動
+                    ' 強制重置水平捲動位置 (如果有的話)
+                    ShowScrollBar(Me.Handle, SB_HORZ, False)
+                    Return
+            End Select
+        End If
+        MyBase.WndProc(m)
+    End Sub
+#End Region
+
 #Region "■ 07 失焦 / 得焦"
     Protected Overrides Sub OnLostFocus(e As EventArgs)
         ' 失焦：改成淡灰色，與原生 TreeView 的失焦行為一致
@@ -247,7 +316,7 @@ Public Class SimTree
         ' ✅ 2026-03-18 修正：OnGotFocus 只做重新上色，不改變選取狀態（不自動選 TopNode）
         '    原本加入「_selectedNodes 為空時自動選 TopNode」是為了 Tab 鍵初始選取，
         ' 但造成副作用：
-        '    ExpandTreeToDefaultInbox 設好 inbox 後，多個 Await Task.Yield 之間若 _selectedNodes 被清空，
+        '    ExpandTvToDefaultInbox 設好 inbox 後，多個 Await Task.Yield 之間若 _selectedNodes 被清空，
         '    BeginInvoke(SimTree2.Focus()) 觸發 OnGotFocus 時會覆蓋 inbox 選取。
         ' 改為：
         '    「第一次按鍵時若無選取則選 TopNode」，由 OnKeyDown 開頭處理，效果相同但不受 Await 競爭條件影響。
@@ -349,7 +418,8 @@ Public Class SimTree
     End Sub
     Private Sub ToggleSingleNode(node As TreeNode, selectIt As Boolean)
         ' ToggleSingleNode：設定或清除單一節點的選取狀態和高亮顏色
-        If node Is Nothing Then Return
+        ' [Fix by Gemini 3.0 Flash, 2026/04/17] 歸屬檢查：若節點不屬於目前樹則不動作
+        If node Is Nothing OrElse node.TreeView IsNot Me Then Return
         If selectIt Then
             If Not _selectedNodes.Contains(node) Then _selectedNodes.Add(node)
             node.BackColor = SystemColors.Highlight
@@ -378,6 +448,7 @@ Public Class SimTree
         ' ClearSelectedNodes：清除所有選取（顏色還原 + 清空清單）
         ' Form1 在切換模式時呼叫，避免殘留不正確的高亮
         ' by Gemini, 2026/04/07: 清空大量選取時加上 Begin/End Update 避免背景色重複重繪導致閃爍
+        ' by Gemini 3.0 Flash, 2026/04/17: 再次確認重置效力，解決 Nodes.Clear 導致的 stale 引用問題
         Me.BeginUpdate()
         Try
             For Each node As TreeNode In _selectedNodes
@@ -403,7 +474,7 @@ Public Class SimTree
     Public Sub AddSelectedNode(node As TreeNode)
         ' AddSelectedNode：從外部新增一個選定節點
         ' 不清除其他選取，不觸發 AfterSelect
-        ' 例如 ExpandTreeToDefaultInbox 初始化選取後使用
+        ' 例如 ExpandTvToDefaultInbox 初始化選取後使用
         If node Is Nothing Then Return
         ToggleSingleNode(node, True)
         _lastClickedNode = node

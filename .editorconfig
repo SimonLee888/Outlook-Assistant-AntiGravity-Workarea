@@ -14,3 +14,9 @@ dotnet_diagnostic.IDE0031.severity = suggestion
 
 # IDE1006: 命名樣式
 dotnet_diagnostic.IDE1006.severity = silent
+
+# BC42324: 在 Lambda 運算式中使用反覆運算變數可能會產生非預期的結果
+dotnet_diagnostic.BC42324.severity = none
+
+# BC42322: 對介面類型進行來回轉換時可能發生執行階段錯誤
+dotnet_diagnostic.BC42322.severity = none

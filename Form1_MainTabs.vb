@@ -275,18 +275,6 @@ Partial Class Form1
         _dbg("結束")
 
     End Sub
-    Private Async Sub TreeView1_AfterSelect(sender As Object, e As TreeViewEventArgs)
-        ' ★ 2026/04/13 by Simon/Claude: Tab1 升級為 SimTree1 後，TreeView1_AfterSelect 已不再是事件處理器
-        '   (移除 Handles TreeView1.AfterSelect，SimTree1 完全接管 L1 角色) 
-        '   保留函數本體供 TriggerAfterSelect 的舊有呼叫路徑相容，不刪除以保留版本記錄。
-        '   若確認無其他呼叫端，之後版本可安全刪除。
-        Await Task.CompletedTask ' 避免 Async Function 無 Await 的編譯器警告
-    End Sub
-    Private Sub TreeView1_MouseClick(sender As Object, e As MouseEventArgs)
-        ' 只為了第一次啟動時自動展開第一層資料夾, 點選之後就不再自動展開了, 以免干擾使用者操作
-        'If e.Button = MouseButtons.Left AndAlso _isTabInitialized(0) = True Then _isTabInitialized(0) = False
-        ' pending: 這行原本的作用是要保護什麼?? 現在還需要嗎?? 
-    End Sub
     Private Sub Lv1_MouseClick(sender As Object, e As MouseEventArgs) Handles ListView1.MouseClick
         ' ✅ 直接顯示已初始化好的選單，不重複建立和 AddHandler
         If e.Button = MouseButtons.Right Then _ctxListView1.Show(System.Windows.Forms.Cursor.Position)
@@ -451,8 +439,8 @@ Partial Class Form1
                     If s.SubItems.Count > 4 Then s.SubItems(4).Text = strFolderSize Else s.SubItems.Add(strFolderSize)
 
                     processedCount += 1
-                    ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                    Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                    ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                    Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                               Sub() ProgressBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({folder.Name})")
                 Next
             End If
@@ -512,14 +500,14 @@ Partial Class Form1
         Dim targetEntryID As String = t.SubFolder.EntryID
         Dim foundNode As TreeNode = Nothing
         _dbg("    ├ 搜尋節點", $"目標 EntryID: '{targetEntryID}', 父節點: '{parentNode.Text}', 子節點數: {parentNode.Nodes.Count}")
-        
+
         For Each node As TreeNode In parentNode.Nodes
             Dim nodeFolder As Outlook.Folder = TryCast(node.Tag, Outlook.Folder)
             If nodeFolder IsNot Nothing AndAlso nodeFolder.EntryID = targetEntryID Then
                 foundNode = node : Exit For
             End If
         Next
-        
+
         If foundNode Is Nothing Then
             _dbg("    ├ 錯誤", "找不到對應的子節點")
             Return
@@ -553,7 +541,7 @@ Partial Class Form1
 
         Dim allEntries As New List(Of FolderBfsEntry)
         Dim queue As New Queue(Of (folderObj As Outlook.Folder, parentIdx As Integer, path As String))
-        queue.Enqueue((rootFolder, -1, rootFolder.FolderPath))
+        queue.Enqueue((rootFolder, -1, SafeGetPath(rootFolder)))
 
         ' by Gemini, 2026/04/05: 每 100ms 主動讓出執行緒並檢查中斷，兼顧效能與靈敏度
         Dim swThrottle As New Stopwatch() : swThrottle.Start()
@@ -571,13 +559,18 @@ Partial Class Form1
                 If _cacheMailCountAll.TryGetValue(fPath, cachedMail) AndAlso _cacheFolderCountAll.TryGetValue(fPath, cachedSub) Then
                     isHit = True    ' ① 記憶體命中
                 Else
-                    ' ② DB lazy load：不驗 snapshot (剪枝決策可接受略舊資料，不需要額外 COM call) 
-                    ' 只在 mca 和 fca 兩個欄位都有值 (非 NULL) 時才算命中，確保顯示正確
+                    ' ② DB lazy load：只填本層欄位（mc/fc/fs/身分標識），不以 mca/fca 做剪枝
+                    ' by Claude Sonnet 4.6, 2026/04/25: 選項 A 修正 — DB 的 mca/fca/fsa 帶有模式語意，
+                    '   無法確認是在哪個 _showAllFolders 模式下計算並儲存的。
+                    '   若直接使用 DB 值做剪枝，切換模式後或重啟後第一次統計會顯示舊模式的錯誤加總。
+                    '   skipAggregates:=True → FillFolderCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
+                    '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，
+                    '   重算結果透過 UpdateFolderStatsCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
+                    '   效能代價：每次切換或重啟後第一次統計需完整展開（不能 DB 剪枝），可接受。
                     Dim row = DbGetFolderStats(fPath)
-                    If row IsNot Nothing AndAlso row.mca >= 0 AndAlso row.fca >= 0 Then
-                        cachedMail = row.mca : cachedSub = row.fca
-                        FillFolderCacheFromDbRow(fPath, row)   ' 一次填滿所有欄位到記憶體快取
-                        isHit = True    ' ② DB 命中
+                    If row IsNot Nothing Then
+                        FillFolderCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
+                        ' isHit 保持 False，BFS 不剪枝，繼續展開子資料夾重算聚合值
                     End If
                 End If
 
@@ -596,7 +589,7 @@ Partial Class Form1
                 For Each subFolder As Outlook.Folder In GetSortedSubFolders(curr.folderObj, fPath)
                     queue.Enqueue((subFolder, myIdx, fPath & "\" & subFolder.Name))
                 Next
-                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii)  ' 2026/04/16 by Simon/Claude: 改用 ThrottledYieldAsync，省去 If/Restart/Task.Delay 三行套路
+                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii)  ' 2026/04/16 by Simon/Claude: 改用 SmartThrottle，省去 If/Restart/Task.Delay 三行套路
             Loop
         Catch ex As OperationCanceledException
             ' 2026/04/11 by Claude: 改為 re-throw，確保不完整的 BFS 樹不會繼續傳入
@@ -633,8 +626,8 @@ Partial Class Form1
                 End If
                 processed += 1
 
-                ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub() progress?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
                                                                                           .Message = $"正在統計郵件數: {processed:N0} / {total:N0} 個資料夾..."}))
             Next
@@ -719,7 +712,7 @@ Partial Class Form1
 
         Dim sizeStr As String = "- "
         Dim sizeVal As Long
-        If _cacheFolderSizeAll.TryGetValue(rootEntry.Folder.FolderPath, sizeVal) AndAlso sizeVal > 0 Then
+        If _cacheFolderSizeAll.TryGetValue(SafeGetPath(rootEntry.Folder), sizeVal) AndAlso sizeVal > 0 Then
             sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB "
         End If
 
@@ -755,7 +748,7 @@ Partial Class Form1
         ' 大小: Lazy，從快取讀；未計算過則留空，等 ColumnClick 或右鍵選單觸發計算
         Dim sizeStr As String = "- "
         Dim sizeVal As Long
-        If _cacheFolderSizeAll.TryGetValue(entry.Folder.FolderPath, sizeVal) AndAlso sizeVal > 0 Then sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB"
+        If _cacheFolderSizeAll.TryGetValue(SafeGetPath(entry.Folder), sizeVal) AndAlso sizeVal > 0 Then sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB"
         ' 統計數字字串化 (字串結尾一律補一格空白，確保斜體與正常字體對齊且不切邊)
         Dim directMailStr As String = entry.DirectMailCount.ToString("N0") & " "
         Dim totalSubStr As String = entry.TotalSubCount.ToString("N0") & " "
@@ -982,7 +975,7 @@ Partial Class Form1
                 If c > 0 Then totalMailCount += c
                 processedCountLocal += 1
                 ' 2026/04/16 by Gemini: 每 100 毫秒更新一次預計計數進度
-                Await ThrottledYieldAsync(swThrottleCount, cToken:=cToken, ThrottleFreq.Hii,
+                Await SmartThrottle(swThrottleCount, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub() ProgressBar2.Text = $"正在計算郵件分母: {processedCountLocal:N0}/{totalFoldersLocal:N0} 個資料夾 (累計 {totalMailCount:N0} 封)...")
             Next
 
@@ -1268,8 +1261,8 @@ Partial Class Form1
                 processedCount += folderResult.Values.Sum()         ' 累加已處理郵件數，透過 callback 通知 Layer1 更新進度顯示
                 processedFolders += 1
 
-                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub() progress?.Report(New ProgressReport With {.CurrentCount = processedCount, .TotalCount = totalMailCount,
                                                                                           .Message = $"正在統計年度分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (已統計 {processedCount:N0} / {totalMailCount:N0} 封信)..."}))
             Next
@@ -1307,8 +1300,8 @@ Partial Class Form1
             Dim folderMonthCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCountsForYear(folder, selectedYear, fPath:=fPath, cToken:=cToken)
             monthCounts = MergeDictionaries(monthCounts, folderMonthCounts)
 
-            ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判
-            Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+            ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判
+            Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                       Sub()
                                           ProgressBar1.Text = "正在讀取..."
                                           ProgressBar2.Text = $"正在統計 {selectedYear} 年月份分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (相依包含共計 {totalMailCount:N0} 封信)。"
@@ -1811,7 +1804,7 @@ Partial Class Form1
                 ' 2026/04/16 by Gemini: 指定使用 Tuple 內的 .Folder 與 .fPath
                 Dim c As Integer = GetMailCount(folderList(i).Folder, fPaths(i))    ' 從 400ms 降至近乎 0ms!
                 If c > 0 Then totalMailCount += c
-                Await ThrottledYieldAsync(swThrottle3, cToken:=cToken, ThrottleFreq.Hii) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + ThrottledYieldAsync
+                Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle
             Next
             Dim tStep2_MailCountLoop = swStep.Elapsed.TotalMilliseconds : swStep.Restart() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (GetMailCount Loop)
 
@@ -1827,7 +1820,7 @@ Partial Class Form1
                     ' 2026/04/16 by Gemini: 使用 Tuple 中的 .Folder 與預錄好的 fPaths(i)
                     Dim folderResult = Await GetAttachMailList(folderList(i).Folder, progressPhase1, fPaths(i), cToken:=cToken)
                     targetMails.AddRange(folderResult)
-                    Await ThrottledYieldAsync(swThrottle3, cToken:=cToken, ThrottleFreq.Hii) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + ThrottledYieldAsync
+                    Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle
                 Next
             Catch ex As OperationCanceledException
                 ' by Gemini, 2026/04/12: 捕捉 ESC 中斷，結算目前已載入的部分郵件清單
@@ -2062,8 +2055,8 @@ Partial Class Form1
                 ' 2026/4/5, by Gemini: 將進度報告與 UI 釋放移至迴圈開頭，提早反饋處理進度
                 ' 避免被下方的 Guard Clauses (Continue For) 略過而導致長時間霸佔主執行緒, 未更新UI進度反饋
                 processed = curMail + 1
-                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub()
                                               Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
                                               Dim speed As Double = processed / elapsedSec
@@ -2183,14 +2176,29 @@ Partial Class Form1
                                       Try
                                           nSpace = _olApp.GetNamespace("MAPI")
                                           For Each id In entryIDs
-                                              Dim mail As Outlook.MailItem = Nothing
+                                              ' by Gemini 3.0 flash, 2026/04/24: 修改為 Object 以支援 RSS (PostItem) 或其他類型項目開啟
+                                              Dim olItem As Object = Nothing
                                               Try
-                                                  mail = CType(nSpace.GetItemFromID(id), Outlook.MailItem)
-                                                  mail.Display()
+                                                  olItem = nSpace.GetItemFromID(id)
+                                                  If olItem IsNot Nothing Then
+                                                      ' 優先嘗試轉型為常用類型以獲得 Intellisense 支援與早期綁定效能
+                                                      Dim mail = TryCast(olItem, Outlook.MailItem)
+                                                      If mail IsNot Nothing Then
+                                                          mail.Display()
+                                                      Else
+                                                          Dim post = TryCast(olItem, Outlook.PostItem)
+                                                          If post IsNot Nothing Then
+                                                              post.Display()
+                                                          Else
+                                                              ' 2026/04/24: 若非郵件或貼文，嘗試透過晚期綁定呼叫 Display (適用於 MeetingItem, AppointmentItem 等)
+                                                              Microsoft.VisualBasic.Interaction.CallByName(olItem, "Display", CallType.Method)
+                                                          End If
+                                                      End If
+                                                  End If
                                               Catch ex As System.Exception
                                                   _dbg("錯誤", $"開啟郵件失敗 (ID: {id}): {ex.Message}")
                                               Finally
-                                                  TryMarshalRelease(mail)
+                                                  TryMarshalRelease(olItem)
                                               End Try
                                           Next
                                       Catch ex As System.Exception
@@ -2203,6 +2211,7 @@ Partial Class Form1
         nThread.SetApartmentState(ApartmentState.STA)    ' ✅ 維持 STA 合規性，避免 COM Marshalling 錯誤
         nThread.IsBackground = True
         nThread.Start()
+
     End Sub
 #End Region
 #Region "  └ 輔助函數"
@@ -2313,7 +2322,7 @@ Partial Class Form1
             Dim processed As Integer = 0
             For Each folder In targetFolderList
                 ' by Gemini 3.0 Flash, 2026/04/19: 替換為統一的底層讀取方法 (升級 L2.5)
-                Dim infoList = Await GetFolderBasicMailInfos(folder, needTopic:=True, ct:=cToken)
+                Dim infoList = Await GetFolderBasicMailInfos(folder, needTopic:=True, cToken:=cToken)
                 For Each item In infoList
                     If item.Topic = "" Then Continue For ' 沒有 Conversation Topic 的信件略過
                     If Not topicDict.ContainsKey(item.Topic) Then topicDict(item.Topic) = New List(Of MailItemInfo)()
@@ -2321,8 +2330,8 @@ Partial Class Form1
                 Next
 
                 processed += 1
-                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync
-                Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle
+                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub() progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
                                                                                            .Message = $"正在掃描系列郵件: {processed} / {targetFolderList.Count} 個資料夾..."}))
             Next
@@ -2594,6 +2603,7 @@ Partial Class Form1
                                              mailItem.Size.ToString("N0"),
                                              mailItem.ReceivedTime.ToString("yyyy/MM/dd"),
                                              mailItem.SenderName,
+                                             " - ",
                                              mailItem.EntryID})
                 lvi.Tag = mailItem ' by Gemini 3.0 flash, 2026/04/21: 直接存入物件避開 Index 錯位問題
                 lvi.Group = lvGroup
@@ -2703,8 +2713,8 @@ Partial Class Form1
                     TryMarshalRelease(mail)
                 End Try
 
-                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                Await ThrottledYieldAsync(swThrottle, cToken:=CancellationToken.None, ThrottleFreq.Hii,
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                Await SmartThrottle(swThrottle, cToken:=CancellationToken.None, ThrottleFreq.Hii,
                                           Sub() ProgressBar2.Text = $"正在重新讀取郵件資訊: {i + 1} / {total}...")
             Next
 
@@ -2827,8 +2837,8 @@ Partial Class Form1
                         End Try
                         totalProcessed += 1
 
-                        ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                        Await ThrottledYieldAsync(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                        ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                        Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                                   Sub() progress5.Report(New ProgressReport With {.Message = $"掃描中 ({store.DisplayName}): 已處理 {totalProcessed} 個資料夾..."}))
                     Next
                 Catch ex As System.Exception
@@ -2868,8 +2878,8 @@ Partial Class Form1
                         Next
                         groupID += 1
 
-                        ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + ThrottledYieldAsync 與 onThrottled 委派
-                        Await ThrottledYieldAsync(swThrottleBuild, cToken:=cToken, ThrottleFreq.Hii,
+                        ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
+                        Await SmartThrottle(swThrottleBuild, cToken:=cToken, ThrottleFreq.Hii,
                                                   Sub() progress5.Report(New ProgressReport With {.Message = $"正在建立重複郵件清單: {groupID} 組..."}))
                     End If
                 End If
@@ -3021,7 +3031,7 @@ Partial Class Form1
         Try
             ' ── 步驟 2: 非同步讀取資料庫摘要 (解決卡頓核心) ──
             ' 將耗時的 SQL COUNT(*) 移至背景執行緒
-            Dim st = Await Task.Run(Function() GetDatabaseSummary())
+            Dim st = Await Task.Run(Function() GetDBSummary())
 
             _lvStats.BeginUpdate()
             _lvStats.Items.Clear()
@@ -3082,53 +3092,6 @@ Partial Class Form1
             _lvStats.Items.Add(New ListViewItem("❌ 讀取統計失敗: " & ex.Message))
         End Try
     End Sub
-
-    ' todo: 讀入OST檔案的功能
-    Private Sub OST_Click(sender As Object, e As EventArgs)
-        'Dim outlookApp As Outlook.Application = Nothing
-        'Dim nSpace As Outlook.NameSpace = Nothing
-        'Dim inbox As Outlook.Folder = Nothing
-        'Try
-        '    ReadEmailsFromOST("D:\Users\Simon\Documents\Outlook 檔案\Work\Inbox_2011_GLI.ost")
-        'Finally
-        '    If inbox IsNot Nothing Then Marshal.ReleaseComObject(inbox)
-        '    If nSpace IsNot Nothing Then Marshal.ReleaseComObject(nSpace)
-        '    If outlookApp IsNot Nothing Then Marshal.ReleaseComObject(outlookApp)
-        'End Try
-
-    End Sub
-    Private Sub ReadEmailsFromOST(path As String)
-        _dbg("開始")
-        ' 創建 Outlook 應用程序對象
-        Dim outlookApp As New Outlook.Application()
-        ' 獲取 Outlook 命名空間
-        Dim ns As Outlook.NameSpace = outlookApp.GetNamespace("MAPI")
-        ' 添加本地 OST 文件
-        ns.AddStore(path)
-        ' 獲取默認的收件箱文件夾
-        Dim inbox As Outlook.Folder = ns.GetDefaultFolder(Outlook.OlDefaultFolders.olFolderInbox)
-        ' 讀取郵件
-        ReadFolderEmails(inbox)
-        ' 釋放 COM 對象
-        TryMarshalRelease(inbox)
-        TryMarshalRelease(ns)
-        TryMarshalRelease(outlookApp)
-
-    End Sub
-    Private Sub ReadFolderEmails(folder As Outlook.Folder)
-        ' 迭代郵件項
-        For Each item As Object In folder.Items
-            If TypeOf item Is Outlook.MailItem Then
-                Dim mail As Outlook.MailItem = CType(item, Outlook.MailItem)
-                ' 在這裡處理郵件，比如顯示主題和內容等
-                MessageBox.Show($"Subject: {mail.Subject}, Received: {mail.ReceivedTime}")
-                TryMarshalRelease(mail)
-            End If
-        Next
-        _dbg("結束")
-
-    End Sub
-
 #End Region
 
 End Class

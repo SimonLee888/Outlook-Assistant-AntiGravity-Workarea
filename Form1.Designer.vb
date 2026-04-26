@@ -76,8 +76,8 @@ Partial Class Form1
         CheckSize = New CheckBox()
         Label1 = New Label()
         TabPage4 = New TabPage()
-        SimTree4 = New SimTree()
         SplitContainer4 = New SplitContainer()
+        SimTree4 = New SimTree()
         ListView4 = New ListView()
         ColumnHeader9 = New ColumnHeader()
         ColumnHeader10 = New ColumnHeader()
@@ -94,10 +94,9 @@ Partial Class Form1
         TabPage7 = New TabPage()
         LoadPST = New Button()
         LoadOST = New Button()
-        MoveFolder = New Button()
         CopyFolder = New Button()
-        ListViewPST = New ListView()
-        ListViewOST = New ListView()
+        LvPST = New ListView()
+        LvOST = New ListView()
         SimTreePST = New SimTree()
         SimTreeOST = New SimTree()
         TabPage6 = New TabPage()
@@ -149,6 +148,7 @@ Partial Class Form1
         CType(NumberMin, ComponentModel.ISupportInitialize).BeginInit()
         TabPage4.SuspendLayout()
         CType(SplitContainer4, ComponentModel.ISupportInitialize).BeginInit()
+        SplitContainer4.Panel1.SuspendLayout()
         SplitContainer4.Panel2.SuspendLayout()
         SplitContainer4.SuspendLayout()
         TabPage5.SuspendLayout()
@@ -170,10 +170,10 @@ Partial Class Form1
         TabControl1.Controls.Add(TabPage3)
         TabControl1.Controls.Add(TabPage4)
         TabControl1.Controls.Add(TabPage5)
-        TabControl1.Controls.Add(TabPage7)
         TabControl1.Controls.Add(TabPage6)
+        TabControl1.Controls.Add(TabPage7)
         TabControl1.Dock = DockStyle.Fill
-        TabControl1.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        TabControl1.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         TabControl1.Location = New Point(0, 0)
         TabControl1.Margin = New Padding(4)
         TabControl1.Name = "TabControl1"
@@ -225,12 +225,12 @@ Partial Class Form1
         ' 
         ListView1.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView1.Columns.AddRange(New ColumnHeader() {ColumnHeader11, ColumnHeader12, ColumnHeader13, ColumnHeader14, ColumnHeader15})
-        ListView1.Font = New Font("Microsoft JhengHei UI", 10.0F)
+        ListView1.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView1.FullRowSelect = True
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(568, 1244)
+        ListView1.Size = New Size(554, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -322,12 +322,12 @@ Partial Class Form1
         ' 
         ListView2.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         ListView2.Columns.AddRange(New ColumnHeader() {ColumnHeader21, ColumnHeader22, ColumnHeader23})
-        ListView2.Font = New Font("Microsoft JhengHei UI", 10.0F)
+        ListView2.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView2.FullRowSelect = True
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(568, 395)
+        ListView2.Size = New Size(554, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -362,7 +362,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(537, 857)
+        Chart2.Size = New Size(523, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -415,7 +415,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(533, 77)
+        CheckSubFolder3.Location = New Point(519, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -428,8 +428,8 @@ Partial Class Form1
         ' 
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
-        Button3.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(539, 10)
+        Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        Button3.Location = New Point(525, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -507,12 +507,12 @@ Partial Class Form1
         ListView3.AllowColumnReorder = True
         ListView3.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView3.Columns.AddRange(New ColumnHeader() {ColumnHeader31, ColumnHeader32, ColumnHeader34, ColumnHeader33, ColumnHeader35, ColumnHeader36})
-        ListView3.Font = New Font("Microsoft JhengHei UI", 10.0F)
+        ListView3.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView3.FullRowSelect = True
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(568, 1133)
+        ListView3.Size = New Size(554, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -653,7 +653,7 @@ Partial Class Form1
         NumberMin.Size = New Size(71, 28)
         NumberMin.TabIndex = 18
         NumberMin.TextAlign = HorizontalAlignment.Right
-        NumberMin.Value = New Decimal(New Integer() {200, 0, 0, 0})
+        NumberMin.Value = New Decimal(New Integer() {500, 0, 0, 0})
         ' 
         ' CheckSize
         ' 
@@ -681,7 +681,6 @@ Partial Class Form1
         ' 
         ' TabPage4
         ' 
-        TabPage4.Controls.Add(SimTree4)
         TabPage4.Controls.Add(SplitContainer4)
         TabPage4.Location = New Point(4, 37)
         TabPage4.Margin = New Padding(4)
@@ -692,19 +691,16 @@ Partial Class Form1
         TabPage4.Text = "´M§ä¨t¦C¶l¥ó"
         TabPage4.UseVisualStyleBackColor = True
         ' 
-        ' SimTree4
-        ' 
-        SimTree4.Location = New Point(8, 8)
-        SimTree4.Name = "SimTree4"
-        SimTree4.Size = New Size(151, 121)
-        SimTree4.TabIndex = 12
-        ' 
         ' SplitContainer4
         ' 
         SplitContainer4.Dock = DockStyle.Fill
         SplitContainer4.Location = New Point(4, 4)
         SplitContainer4.Margin = New Padding(4)
         SplitContainer4.Name = "SplitContainer4"
+        ' 
+        ' SplitContainer4.Panel1
+        ' 
+        SplitContainer4.Panel1.Controls.Add(SimTree4)
         ' 
         ' SplitContainer4.Panel2
         ' 
@@ -716,16 +712,23 @@ Partial Class Form1
         SplitContainer4.SplitterWidth = 5
         SplitContainer4.TabIndex = 11
         ' 
+        ' SimTree4
+        ' 
+        SimTree4.Location = New Point(0, 0)
+        SimTree4.Name = "SimTree4"
+        SimTree4.Size = New Size(151, 121)
+        SimTree4.TabIndex = 12
+        ' 
         ' ListView4
         ' 
         ListView4.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView4.Columns.AddRange(New ColumnHeader() {ColumnHeader9, ColumnHeader10})
-        ListView4.Font = New Font("Microsoft JhengHei UI", 10.0F)
+        ListView4.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView4.FullRowSelect = True
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(568, 1133)
+        ListView4.Size = New Size(554, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
@@ -745,8 +748,8 @@ Partial Class Form1
         ' 
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
-        ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(368, 15)
+        ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        ButtonDeleteMail.Location = New Point(354, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -757,8 +760,8 @@ Partial Class Form1
         ' Button4
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        Button4.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(472, 15)
+        Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        Button4.Location = New Point(458, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -805,7 +808,7 @@ Partial Class Form1
         ' TreeView5
         ' 
         TreeView5.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        TreeView5.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        TreeView5.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         TreeView5.Location = New Point(0, 0)
         TreeView5.Margin = New Padding(4)
         TreeView5.Name = "TreeView5"
@@ -863,10 +866,9 @@ Partial Class Form1
         ' 
         TabPage7.Controls.Add(LoadPST)
         TabPage7.Controls.Add(LoadOST)
-        TabPage7.Controls.Add(MoveFolder)
         TabPage7.Controls.Add(CopyFolder)
-        TabPage7.Controls.Add(ListViewPST)
-        TabPage7.Controls.Add(ListViewOST)
+        TabPage7.Controls.Add(LvPST)
+        TabPage7.Controls.Add(LvOST)
         TabPage7.Controls.Add(SimTreePST)
         TabPage7.Controls.Add(SimTreeOST)
         TabPage7.Location = New Point(4, 37)
@@ -879,76 +881,66 @@ Partial Class Form1
         ' 
         ' LoadPST
         ' 
-        LoadPST.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold)
-        LoadPST.Location = New Point(952, 212)
+        LoadPST.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+        LoadPST.Location = New Point(961, 71)
         LoadPST.Name = "LoadPST"
-        LoadPST.Size = New Size(94, 61)
+        LoadPST.Size = New Size(90, 61)
         LoadPST.TabIndex = 4
         LoadPST.Text = "Load  PST file"
         LoadPST.UseVisualStyleBackColor = True
         ' 
         ' LoadOST
         ' 
-        LoadOST.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold)
-        LoadOST.Location = New Point(952, 145)
+        LoadOST.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+        LoadOST.Location = New Point(961, 4)
         LoadOST.Name = "LoadOST"
-        LoadOST.Size = New Size(94, 61)
+        LoadOST.Size = New Size(90, 61)
         LoadOST.TabIndex = 4
         LoadOST.Text = "Load OST file"
         LoadOST.UseVisualStyleBackColor = True
         ' 
-        ' MoveFolder
-        ' 
-        MoveFolder.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold)
-        MoveFolder.Location = New Point(952, 75)
-        MoveFolder.Name = "MoveFolder"
-        MoveFolder.Size = New Size(94, 61)
-        MoveFolder.TabIndex = 5
-        MoveFolder.Text = "Move Folder"
-        MoveFolder.UseVisualStyleBackColor = True
-        ' 
         ' CopyFolder
         ' 
-        CopyFolder.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold)
-        CopyFolder.Location = New Point(952, 8)
+        CopyFolder.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+        CopyFolder.Location = New Point(961, 138)
         CopyFolder.Name = "CopyFolder"
-        CopyFolder.Size = New Size(94, 61)
+        CopyFolder.Size = New Size(90, 61)
         CopyFolder.TabIndex = 4
         CopyFolder.Text = "Copy Folder"
         CopyFolder.UseVisualStyleBackColor = True
         ' 
-        ' ListViewPST
+        ' LvPST
         ' 
-        ListViewPST.Font = New Font("Microsoft JhengHei UI", 10.0F)
-        ListViewPST.Location = New Point(279, 614)
-        ListViewPST.Name = "ListViewPST"
-        ListViewPST.Size = New Size(667, 600)
-        ListViewPST.TabIndex = 3
-        ListViewPST.UseCompatibleStateImageBehavior = False
+        LvPST.Font = New Font("Microsoft JhengHei UI", 10F)
+        LvPST.Location = New Point(330, 629)
+        LvPST.Name = "LvPST"
+        LvPST.Size = New Size(625, 619)
+        LvPST.TabIndex = 3
+        LvPST.UseCompatibleStateImageBehavior = False
         ' 
-        ' ListViewOST
+        ' LvOST
         ' 
-        ListViewOST.Font = New Font("Microsoft JhengHei UI", 10.0F)
-        ListViewOST.Location = New Point(279, 8)
-        ListViewOST.Name = "ListViewOST"
-        ListViewOST.Size = New Size(667, 600)
-        ListViewOST.TabIndex = 2
-        ListViewOST.UseCompatibleStateImageBehavior = False
+        LvOST.Font = New Font("Microsoft JhengHei UI", 10F)
+        LvOST.Location = New Point(330, 4)
+        LvOST.Name = "LvOST"
+        LvOST.Size = New Size(625, 619)
+        LvOST.TabIndex = 2
+        LvOST.UseCompatibleStateImageBehavior = False
         ' 
         ' SimTreePST
         ' 
-        SimTreePST.Font = New Font("Microsoft JhengHei UI", 10.0F)
-        SimTreePST.Location = New Point(8, 614)
+        SimTreePST.Font = New Font("Microsoft JhengHei UI", 10F)
+        SimTreePST.Location = New Point(4, 629)
         SimTreePST.Name = "SimTreePST"
-        SimTreePST.Size = New Size(265, 600)
+        SimTreePST.Size = New Size(320, 619)
         SimTreePST.TabIndex = 1
         ' 
         ' SimTreeOST
         ' 
-        SimTreeOST.Font = New Font("Microsoft JhengHei UI", 10.0F)
-        SimTreeOST.Location = New Point(8, 8)
+        SimTreeOST.Font = New Font("Microsoft JhengHei UI", 10F)
+        SimTreeOST.Location = New Point(4, 4)
         SimTreeOST.Name = "SimTreeOST"
-        SimTreeOST.Size = New Size(265, 600)
+        SimTreeOST.Size = New Size(320, 619)
         SimTreeOST.TabIndex = 0
         ' 
         ' TabPage6
@@ -967,7 +959,7 @@ Partial Class Form1
         ' 
         ' txtDatabaseStats
         ' 
-        txtDatabaseStats.Font = New Font("Noto Sans TC", 10.0F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        txtDatabaseStats.Font = New Font("Noto Sans TC", 10F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         txtDatabaseStats.Location = New Point(514, 28)
         txtDatabaseStats.Multiline = True
         txtDatabaseStats.Name = "txtDatabaseStats"
@@ -987,7 +979,7 @@ Partial Class Form1
         SettingGroup.Controls.Add(LoadCache)
         SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(CheckRDO)
-        SettingGroup.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        SettingGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
         SettingGroup.Location = New Point(8, 16)
         SettingGroup.Name = "SettingGroup"
         SettingGroup.Size = New Size(500, 500)
@@ -999,7 +991,7 @@ Partial Class Form1
         ' 
         RenewAttachFilename.AutoSize = True
         RenewAttachFilename.FlatStyle = FlatStyle.System
-        RenewAttachFilename.Font = New Font("Microsoft JhengHei UI", 9.0F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        RenewAttachFilename.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         RenewAttachFilename.Location = New Point(167, 215)
         RenewAttachFilename.Name = "RenewAttachFilename"
         RenewAttachFilename.Size = New Size(202, 24)
@@ -1014,7 +1006,7 @@ Partial Class Form1
         RenewIncludeSize.Checked = True
         RenewIncludeSize.CheckState = CheckState.Indeterminate
         RenewIncludeSize.FlatStyle = FlatStyle.System
-        RenewIncludeSize.Font = New Font("Microsoft JhengHei UI", 9.0F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        RenewIncludeSize.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         RenewIncludeSize.Location = New Point(167, 186)
         RenewIncludeSize.Name = "RenewIncludeSize"
         RenewIncludeSize.Size = New Size(168, 24)
@@ -1026,7 +1018,7 @@ Partial Class Form1
         ' RDO_Parallel2
         ' 
         RDO_Parallel2.FlatStyle = FlatStyle.System
-        RDO_Parallel2.Font = New Font("Microsoft JhengHei UI", 9.0F)
+        RDO_Parallel2.Font = New Font("Microsoft JhengHei UI", 9F)
         RDO_Parallel2.Location = New Point(16, 215)
         RDO_Parallel2.Name = "RDO_Parallel2"
         RDO_Parallel2.Size = New Size(135, 26)
@@ -1039,7 +1031,7 @@ Partial Class Form1
         ' 
         RDO_Parallel1.Checked = True
         RDO_Parallel1.FlatStyle = FlatStyle.System
-        RDO_Parallel1.Font = New Font("Microsoft JhengHei UI", 9.0F)
+        RDO_Parallel1.Font = New Font("Microsoft JhengHei UI", 9F)
         RDO_Parallel1.Location = New Point(16, 186)
         RDO_Parallel1.Name = "RDO_Parallel1"
         RDO_Parallel1.Size = New Size(135, 26)
@@ -1052,7 +1044,7 @@ Partial Class Form1
         ' 
         RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         RenewCache.BackColor = Color.Transparent
-        RenewCache.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         RenewCache.ForeColor = SystemColors.ActiveCaptionText
         RenewCache.Location = New Point(167, 116)
         RenewCache.Name = "RenewCache"
@@ -1065,7 +1057,7 @@ Partial Class Form1
         ' 
         ClearCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ClearCache.BackColor = Color.MistyRose
-        ClearCache.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        ClearCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         ClearCache.ForeColor = SystemColors.ActiveCaptionText
         ClearCache.Location = New Point(167, 29)
         ClearCache.Name = "ClearCache"
@@ -1079,7 +1071,7 @@ Partial Class Form1
         checkShowAllFolders.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         checkShowAllFolders.Appearance = Appearance.Button
         checkShowAllFolders.FlatStyle = FlatStyle.System
-        checkShowAllFolders.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        checkShowAllFolders.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         checkShowAllFolders.Location = New Point(16, 29)
         checkShowAllFolders.Margin = New Padding(4)
         checkShowAllFolders.Name = "checkShowAllFolders"
@@ -1093,7 +1085,7 @@ Partial Class Form1
         ' LoadCache
         ' 
         LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        LoadCache.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        LoadCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         LoadCache.Location = New Point(318, 116)
         LoadCache.Name = "LoadCache"
         LoadCache.Size = New Size(129, 63)
@@ -1104,7 +1096,7 @@ Partial Class Form1
         ' SaveCache
         ' 
         SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        SaveCache.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        SaveCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         SaveCache.Location = New Point(318, 29)
         SaveCache.Name = "SaveCache"
         SaveCache.Size = New Size(129, 63)
@@ -1118,7 +1110,7 @@ Partial Class Form1
         CheckRDO.Appearance = Appearance.Button
         CheckRDO.BackColor = Color.Transparent
         CheckRDO.FlatStyle = FlatStyle.System
-        CheckRDO.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        CheckRDO.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         CheckRDO.Location = New Point(16, 116)
         CheckRDO.Margin = New Padding(4)
         CheckRDO.Name = "CheckRDO"
@@ -1133,7 +1125,7 @@ Partial Class Form1
         DebugGroup.Controls.Add(OKiLikeNoisy)
         DebugGroup.Controls.Add(CheckDebug)
         DebugGroup.Controls.Add(DebugButton)
-        DebugGroup.Font = New Font("Microsoft JhengHei UI", 10.0F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
+        DebugGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
         DebugGroup.Location = New Point(8, 531)
         DebugGroup.Name = "DebugGroup"
         DebugGroup.Size = New Size(500, 500)
@@ -1147,7 +1139,7 @@ Partial Class Form1
         OKiLikeNoisy.Appearance = Appearance.Button
         OKiLikeNoisy.FlatAppearance.CheckedBackColor = Color.LightCoral
         OKiLikeNoisy.FlatStyle = FlatStyle.System
-        OKiLikeNoisy.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        OKiLikeNoisy.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         OKiLikeNoisy.Location = New Point(16, 126)
         OKiLikeNoisy.Margin = New Padding(4)
         OKiLikeNoisy.Name = "OKiLikeNoisy"
@@ -1164,7 +1156,7 @@ Partial Class Form1
         CheckDebug.Appearance = Appearance.Button
         CheckDebug.FlatAppearance.CheckedBackColor = Color.FromArgb(CByte(192), CByte(255), CByte(192))
         CheckDebug.FlatStyle = FlatStyle.System
-        CheckDebug.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        CheckDebug.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         CheckDebug.Location = New Point(16, 40)
         CheckDebug.Margin = New Padding(4)
         CheckDebug.Name = "CheckDebug"
@@ -1177,7 +1169,7 @@ Partial Class Form1
         ' DebugButton
         ' 
         DebugButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        DebugButton.Font = New Font("Microsoft JhengHei UI", 12.0F, FontStyle.Bold)
+        DebugButton.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         DebugButton.Location = New Point(167, 40)
         DebugButton.Name = "DebugButton"
         DebugButton.Size = New Size(129, 63)
@@ -1235,7 +1227,7 @@ Partial Class Form1
         ' 
         ' Form1
         ' 
-        AutoScaleDimensions = New SizeF(9.0F, 19.0F)
+        AutoScaleDimensions = New SizeF(9F, 19F)
         AutoScaleMode = AutoScaleMode.Font
         ClientSize = New Size(1062, 1319)
         Controls.Add(StatusStrip1)
@@ -1276,6 +1268,7 @@ Partial Class Form1
         CType(NumberMax, ComponentModel.ISupportInitialize).EndInit()
         CType(NumberMin, ComponentModel.ISupportInitialize).EndInit()
         TabPage4.ResumeLayout(False)
+        SplitContainer4.Panel1.ResumeLayout(False)
         SplitContainer4.Panel2.ResumeLayout(False)
         CType(SplitContainer4, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer4.ResumeLayout(False)
@@ -1396,10 +1389,9 @@ Partial Class Form1
     Friend WithEvents SimTree3 As SimTree
     Friend WithEvents SimTree1 As SimTree
     Friend WithEvents TabPage7 As TabPage
-    Friend WithEvents MoveFolder As Button
     Friend WithEvents CopyFolder As Button
-    Friend WithEvents ListViewPST As ListView
-    Friend WithEvents ListViewOST As ListView
+    Friend WithEvents LvPST As ListView
+    Friend WithEvents LvOST As ListView
     Friend WithEvents SimTreePST As SimTree
     Friend WithEvents SimTreeOST As SimTree
     Friend WithEvents LoadPST As Button

@@ -1,4 +1,4 @@
-﻿Imports System.Collections.Concurrent
+Imports System.Collections.Concurrent
 Imports System.ComponentModel
 Imports System.Runtime.InteropServices
 Imports System.Threading
@@ -37,7 +37,7 @@ Module moduleStore
 
     End Sub
     Private Sub CacheTotalFolderSize(folder As Outlook.Folder)
-        System.Console.WriteLine($"開始cache資料夾: {folder.FolderPath}")
+        System.Console.WriteLine($"開始cache資料夾: {Form1.SafeGetPath(folder)}")
         ' 檢查快取中是否已經存在該資料夾的大小值
         If folderSizeCache.ContainsKey(folder) Then Return
         Dim folderSize As Long = 0
@@ -56,7 +56,7 @@ Module moduleStore
         Next
         ' 將結果存入快取
         folderSizeCache(folder) = folderSize
-        System.Console.WriteLine($"完成cache資料夾: {folder.FolderPath }")
+        System.Console.WriteLine($"完成cache資料夾: {Form1.SafeGetPath(folder)}")
 
     End Sub
     Private Sub LoadSubFolders(folder As Outlook.Folder, nodes As TreeNodeCollection, tvwTarget As TreeView)

@@ -1,6 +1,0 @@
-requests
-psycopg2-binary
-pandas
-pythonnet
-xlwings
-tqdm

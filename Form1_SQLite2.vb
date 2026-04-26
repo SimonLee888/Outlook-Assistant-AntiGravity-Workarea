@@ -13,18 +13,18 @@ Imports Microsoft.Office.Interop
 '   Form1_SQLite2.vb  (本檔)
 '   - InitDatabase()                            ' Form1_Load 呼叫，建 connection + CREATE TABLE IF NOT EXISTS
 '   - CloseDatabase()                           ' FormClosing 呼叫
-'   - LoadCachesFromSQLiteAsync()               ' LoadCache 按鈕手動讀出：Bulk Load，輸出詳細 _dbg 分項
-'   - SaveCachesToSQLiteAsync()                 ' SaveCache 按鈕手動存入：① CleanupOrphanFolderPath → ② 批次寫入四張表
+'   - LoadCachesFromDB()               ' LoadCache 按鈕手動讀出：Bulk Load，輸出詳細 _dbg 分項
+'   - SaveCachesToDB()                 ' SaveCache 按鈕手動存入：① CleanupOrphanFolderPath → ② 批次寫入四張表
 '   - CleanupOrphanFolderPath(livePaths)        ' 清除 DB 中已不存在的 folder_path (原 PurgeStaleFolders)，SaveCache 時順帶呼叫
-'   - RenewCacheAsync(includeSize As Boolean)   ' RenewCache 按鈕：Phase1~6 完整更新 (2026-04-09 新增) 
-'   - RenewAttachMailListAsync(folder, fPath:=fPath)   ' 三路比對更新 attach_maillist (2026-04-09 新增) 
+'   - RenewCacheToDB(includeSize As Boolean)   ' RenewCache 按鈕：Phase1~6 完整更新 (2026-04-09 新增) 
+'   - RenewAttachMailList(folder, fPath:=fPath)   ' 三路比對更新 attach_maillist (2026-04-09 新增) 
 '
 '   - DbGetFolderStats(folderPath)              ' folder_stats 單行查詢
 '   - DbGetMailBasic(folderPath)                ' mail_basic WHERE folder_path=? 全部行
 '   - DbGetAttachFilenames(entryId)             ' mail_attachments 單行查詢
 '   - DbGetYearCountsForFolder(folderPath)      ' year_counts WHERE folder_path=? 全部行
 '   - DbGetMonthCountsForFolder(cacheKey)       ' 2026-04-09 新增，cacheKey = FolderPath_year
-'   - GetDatabaseSummary() → (fc, mb, at, yc, mc, basic, kb) ' DB 統計摘要 (六張表行數 + 檔案 KB) 
+'   - GetDBSummary() → (fc, mb, at, yc, mc, basic, kb) ' DB 統計摘要 (六張表行數 + 檔案 KB) 
 ' ---------------------------------------------------------------
 '
 '   五張表結構 (2026-04-09 新增 month_counts) 合一個 cache.db (LocalAppData)
@@ -54,7 +54,7 @@ Imports Microsoft.Office.Interop
 ' ---------------------------------------------------------------
 Partial Class Form1
 
-    ' 私有成員
+#Region "■ 私有成員"
     Private _db As SqliteConnection = Nothing
     ' by Gemini, 2026/04/10: 將資料庫路徑移至 LocalAppData，避免與 Dropbox 同步衝突導致檔案鎖定與 Explorer 卡頓
     Private ReadOnly _dbPath As String = IO.Path.Combine(Environment.GetFolderPath(
@@ -83,7 +83,9 @@ Partial Class Form1
         Public Snap As Integer = -1
         Public Mails As New List(Of MailItemInfo)()
     End Class
+#End Region
 
+#Region "■ 基礎結構與資料庫生命週期管理 (Lifecycle & Schema)"
     Private Sub InitDatabase()
         ' ---------------------------------------------------------------
         ' InitDatabase — 建立或開啟 cache.db，確保三張表與索引存在
@@ -99,7 +101,7 @@ Partial Class Form1
             _db.Open()
             _dbg("", $"已開啟: {_dbPath}")
 
-            Using cmd As New SqliteCommand(GetCreateTablesSql(), _db)
+            Using cmd As New SqliteCommand(BuildSQLiteTableString(), _db)
                 cmd.ExecuteNonQuery()
             End Using
 
@@ -153,7 +155,7 @@ Partial Class Form1
         End Try
 
     End Sub
-    Private Function GetCreateTablesSql() As String
+    Private Function BuildSQLiteTableString() As String
 
         Return "
                 CREATE TABLE IF NOT EXISTS folder_stats ( 
@@ -223,9 +225,9 @@ Partial Class Form1
         ' 不在此處 DROP TABLE，避免每次啟動都清空已存資料。
 
     End Function
-    Private Function GetDatabaseSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, mc As Integer, basic As Integer, kb As Long, lastTs As String)
+    Private Function GetDBSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, mc As Integer, basic As Integer, kb As Long, lastTs As String)
         ' ---------------------------------------------------------------
-        ' GetDatabaseSummary — 取得 DB 統計摘要，供按鈕顯示
+        ' GetDBSummary — 取得 DB 統計摘要，供按鈕顯示
         ' 回傳 (folder_stats, attach_maillist, attach_filenames, year_counts, month_counts, basic_maillist, KB, lastTs)
         ' 2026/04/09 新增 mc = month_counts 行數
         ' 2026/04/10 新增 lastTs = 最後 updated_at 時間
@@ -258,9 +260,9 @@ Partial Class Form1
         End Try
 
     End Function
-    Private Async Function ResetSSDatabaseAsync() As Task
+    Private Async Function ZipAndRebuildDB() As Task
         ' ---------------------------------------------------------------
-        ' ResetSSDatabaseAsync — [透明化控制] 徹底清空並重建 SSD 快取檔
+        ' ZipAndRebuildDB — [透明化控制] 徹底清空並重建 SSD 快取檔
         ' 流程: 1. 關閉連線 → 2. 實體刪除 db 檔 → 3. 呼叫 InitDatabase 重建 Schema
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
@@ -304,10 +306,12 @@ Partial Class Form1
             Throw
         End Try
     End Function
+#End Region
 
-    Private Async Function SaveCachesToSQLiteAsync() As Task
+#Region "■ 快取主控流程 (High-Level Cache Controllers)"
+    Private Async Function SaveCachesToDB() As Task
         ' ---------------------------------------------------------------
-        ' SaveCachesToSQLiteAsync — 把記憶體快取全部存入 SQLite
+        ' SaveCachesToDB — 把記憶體快取全部存入 SQLite
         ' 對應 Setting 頁 SaveCache 按鈕
         ' 流程: ① CleanupOrphanFolderPath (先清孤兒) → ② 批次寫入三張表 → ③ 統計顯示
         ' ---------------------------------------------------------------
@@ -353,7 +357,7 @@ Partial Class Form1
             Dim statLine1 = $"① [記憶體] MailCount: {_cacheMailCount.Count} / MailCountAll: {_cacheMailCountAll.Count} / FolderCount: {_cacheFolderCount.Count} / FolderCountAll: {_cacheFolderCountAll.Count}"
             Dim statLine2 = $"② [記憶體] FolderSize: {_cacheFolderSize.Count} / FolderSizeAll: {_cacheFolderSizeAll.Count} / AttachPreScan: {_cacheAttachMailList.Count} / AttachFilename: {_cacheAttachFilename.Count}"
             Dim statLine3 = $"③ [寫入DB] folder_stats: {savedFolders} 筆 / basic_maillist: {savedBasic} 筆 / attach_maillist: {savedAttachMailList} 筆 / attach_filenames: {savedAttachFilenames} 筆 / year_counts: {savedYears} 筆 / month_counts: {savedMonths} 筆 / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
-            Dim st = GetDatabaseSummary()
+            Dim st = GetDBSummary()
             Dim statLine4 = $"④ [DB現況] folder_stats: {st.fc} 筆 / attach_maillist: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / month_counts: {st.mc} 筆 / 檔案: {st.kb} KB"
 
             ProgressBar1.Text = $"SaveCache 完成 — {statLine3}"
@@ -372,9 +376,9 @@ Partial Class Form1
         End Try
 
     End Function
-    Private Async Function LoadCachesFromSQLiteAsync() As Task
+    Private Async Function LoadCachesFromDB() As Task
         ' ---------------------------------------------------------------
-        ' LoadCachesFromSQLiteAsync — 從 SQLite 讀回所有快取 (Bulk Load) 
+        ' LoadCachesFromDB — 從 SQLite 讀回所有快取 (Bulk Load) 
         ' 對應 Setting 頁 LoadCache 按鈕，Debug 階段使用
         ' 完成後輸出詳細 _dbg 分項：每個快取字典各自載入了幾筆
         ' ---------------------------------------------------------------
@@ -420,7 +424,7 @@ Partial Class Form1
             Dim statLine_yc = $"⑤ [year_counts] 讀入 {r.y} 筆 → _yearCountsCache {_cacheYearCounts.Count} 個資料夾"
             Dim statLine_mc = $"⑥ [month_counts] 讀入 {r.m} 筆 → _monthCountsCache {_cacheMonthCounts.Count} 個 cache_key"
             Dim statLine_basic = $"⑦ [basic_maillist] 讀入 {r.basic} 筆 → BasicPreScan {_cacheFolderBasicMailInfos.Count} 個資料夾" ' 2026/04/22 by Gemini 3.1 Pro
-            Dim st = GetDatabaseSummary()
+            Dim st = GetDBSummary()
             Dim statLine5 = $"⑧ [DB現況] folder_stats: {st.fc} 筆 / basic_maillist: {st.basic} 筆 / attach_maillist: {st.mb} 筆 / attach_filenames: {st.at} 筆 / year_counts: {st.yc} 筆 / month_counts: {st.mc} 筆 / 檔案: {st.kb} KB / 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒" ' 2026/04/22 by Gemini 3.1 Pro: 加入 basic 統計
 
             ProgressBar1.Text = $"LoadCache 完成 — DB: {st.fc}/{st.basic}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆，{st.kb} KB，耗時 {sw.Elapsed.TotalSeconds:0.000} 秒" ' 2026/04/22 by Gemini 3.1 Pro
@@ -443,11 +447,11 @@ Partial Class Form1
         End Try
 
     End Function
-    Private Async Function RenewCacheAsync(includeSize As Boolean) As Task
+    Private Async Function RenewCacheToDB(includeSize As Boolean) As Task
         ' ---------------------------------------------------------------
-        ' RenewCacheAsync — 完整更新 DB 快取 (對應 Setting 頁 RenewCache 按鈕) 
+        ' RenewCacheToDB — 完整更新 DB 快取 (對應 Setting 頁 RenewCache 按鈕) 
         '
-        ' 與 SaveCachesToSQLiteAsync 的差異：
+        ' 與 SaveCachesToDB 的差異：
         '   SaveCache  = 把目前記憶體快取照單全收寫入 DB (不更新過期的值) 
         '   RenewCache = 先用 COM 比對 snapshot → 只對有變動的資料夾重新計算 → 寫入 DB
         '
@@ -464,7 +468,7 @@ Partial Class Form1
         '              清除此 folder 的 month_counts 記憶體快取 (不重算，展開年份時 lazy) 
         '   Phase 4. 清除所有 dirty folders 的 ancestor 聚合快取
         '   Phase 5. 批次 DELETE dirty folders 的 month_counts DB rows (不是孤兒，不靠 Cleanup) 
-        '   Phase 6. CleanupOrphanFolderPath → SaveCachesToSQLiteAsync
+        '   Phase 6. CleanupOrphanFolderPath → SaveCachesToDB
         '
         ' 不更新項目 (設計邊界) ：
         '   attach_filenames — 最耗時，留給使用者搜尋附件時 lazy 觸發
@@ -474,7 +478,7 @@ Partial Class Form1
         ' 2026/04/16 by Simon/Claude: 加入 cToken (OkayNowYouHaveToken)，取代 _cancelRequested + GoTo Cancelled 模式
         '   Phase1 改用 Dictionary(Of String, Outlook.Folder) liveDict，每個資料夾只讀一次 FolderPath COM 屬性，
         '   Phase2/3/4 迭代 dict 的 Key/Value，完全省去重複的 folder.FolderPath COM 呼叫（~500 資料夾省 ~250ms）
-        '   Phase2/3 節流改用 ThrottledYieldAsync(sw, cToken, ThrottleFreq.Low)，取代 Mod N + Task.Delay(1)
+        '   Phase2/3 節流改用 SmartThrottle(sw, cToken, ThrottleFreq.Low)，取代 Mod N + Task.Delay(1)
         '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
         ' ---------------------------------------------------------------
 
@@ -496,6 +500,10 @@ Partial Class Form1
                 Dim root As Outlook.Folder = TryCast(store.GetRootFolder(), Outlook.Folder)
                 If root Is Nothing Then Continue For
 
+                ' 2026/04/24 by Gemini 3.0 flash: 使用 SafeGetPath 確保 root 取得安全
+                Dim rootPath As String = SafeGetPath(root)
+                If String.IsNullOrEmpty(rootPath) Then Continue For
+
                 ' 2026/04/16 by Gemini: GetSubtreeToList 現在直接回傳 Tuple (Folder, FolderPath)
                 ' 直接將計算好的路徑存入 liveDict，完成 0 COM Call 的清單建立
                 For Each item In Await GetSubtreeToList(root, includeSubF:=True, cToken:=cToken)
@@ -507,9 +515,17 @@ Partial Class Form1
 
             ' ── Phase 2: 比對 snapshot → 找出 dirty folders ──
             ' 2026/04/16: 迭代 liveDict，kvp.Key 直接當 fPath，省去 folder.FolderPath COM 呼叫
-            '   節流改用 ThrottledYieldAsync(swThrottle2, cToken, ThrottleFreq.Low)，取代 Mod 100 + Task.Delay(1)
+            '   節流改用 SmartThrottle(swThrottle2, cToken, ThrottleFreq.Low)，取代 Mod 100 + Task.Delay(1)
             ProgressBar1.Text = $"RenewCache Phase2: 比對 snapshot (共 {liveDict.Count} 個) ..."
             Dim dirtyDict As New Dictionary(Of String, Outlook.Folder)()
+            ' by Claude Sonnet 4.6, 2026/04/25: 區分兩種「dirty」語意
+            '   isNewFolder = True  → DB 從未記錄（清空後首次，或真正新資料夾）
+            '                         Phase 3 只算 mc/fc/year_counts，跳過 attach_maillist 重掃
+            '                         attach_maillist 交由使用者搜尋附件時 lazy 觸發
+            '   isNewFolder = False → snapshot 不符（真正有信件增減）
+            '                         Phase 3 完整重算包含 attach_maillist（三路比對）
+            ' 這樣清空快取後執行 RenewCache，不會因為所有資料夾都「看起來像新的」而偷跑全量 GetTable 掃描，產生 2 萬筆非預期的 attach_maillist 內容。
+            Dim dirtyNewFolderSet As New HashSet(Of String)()  ' 記錄 isNewFolder=True 的路徑
             Dim processed As Integer = 0
             Dim swThrottle2 As New Stopwatch : swThrottle2.Start()
             For Each kvp In liveDict
@@ -517,19 +533,38 @@ Partial Class Form1
                 Dim fPath As String = kvp.Key : Dim folder As Outlook.Folder = kvp.Value
                 Dim liveSnap As Integer = GetLiveFolderSnapL3(folder, fPath:=fPath)   ' ~0.5ms，PropertyAccessor 單次呼叫 by Gemini 3.0 flash, 2026/04/16
                 Dim row = DbGetFolderStats(fPath)
+
                 ' dirty 條件：DB 無此路徑 (新資料夾) OR snapshot 不一致 (有信件增減)
-                If row Is Nothing OrElse row.snap <> liveSnap Then dirtyDict.Add(fPath, folder)
+                Dim isNewFolder As Boolean = (row Is Nothing)
+                If isNewFolder OrElse row.snap <> liveSnap Then
+                    dirtyDict.Add(fPath, folder)
+                    If isNewFolder Then
+                        dirtyNewFolderSet.Add(fPath)  ' 全新資料夾，Phase 3 跳過 attach_maillist
+
+                        ' by Gemini 3.0 flash, 2026/04/24: 新資料夾確保 ID 被快取，Phase 6 寫入時需要 entry_id
+                        _cacheFolderIDs.TryAdd(fPath, (folder.EntryID, folder.StoreID, IsMailFolder(folder, fPath), TextHasChineseChar(ExtractFolderName(fPath))))
+
+                        ' 使父資料夾的樹狀快取失效，確保刷新 UI 後能顯示新成員
+                        Dim parentPath As String = GetParentPath(fPath)
+                        If Not String.IsNullOrEmpty(parentPath) Then
+                            ' 清除父路徑的所有顯示模式快取 (|True 與 |False)
+                            _cacheFolderTree.TryRemove(parentPath & "|True", Nothing)
+                            _cacheFolderTree.TryRemove(parentPath & "|False", Nothing)
+                        End If
+                    End If
+                End If
+
                 processed += 1
-                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + ThrottledYieldAsync 與 onThrottled 委派
-                Await ThrottledYieldAsync(swThrottle2, cToken:=cToken, ThrottleFreq.Low,
-                                          Sub() ProgressBar1.Text = $"RenewCache Phase2: {processed}/{liveDict.Count}，dirty={dirtyDict.Count}...")
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + SmartThrottle 與 onThrottled 委派
+                Await SmartThrottle(swThrottle2, cToken:=cToken, ThrottleFreq.Low,
+                                          Sub() ProgressBar1.Text = $"RenewCache Phase2: {processed}/{liveDict.Count}，dirty={dirtyDict.Count} (新={dirtyNewFolderSet.Count})...")
             Next
-            _dbg("Phase2 完成", $"dirty={dirtyDict.Count}/{liveDict.Count}")
+            _dbg("Phase2 完成", $"dirty={dirtyDict.Count}/{liveDict.Count} (其中全新資料夾={dirtyNewFolderSet.Count})")
 
             ' ── Phase 3: 對每個 dirty folder 重新計算 ──
             ' 2026/04/16: 迭代 dirtyDict，省去 folder.FolderPath COM 呼叫
             '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
-            '   節流改用 ThrottledYieldAsync(swThrottle3, cToken, ThrottleFreq.Low)，取代 Mod 10 + Task.Delay(1)
+            '   節流改用 SmartThrottle(swThrottle3, cToken, ThrottleFreq.Low)，取代 Mod 10 + Task.Delay(1)
             ProgressBar1.Text = $"RenewCache Phase3: 更新 {dirtyDict.Count} 個 dirty 資料夾..." : Await Task.Delay(1, cToken)
             processed = 0
             Dim swThrottle3 As New Stopwatch : swThrottle3.Start()
@@ -551,19 +586,30 @@ Partial Class Form1
                 Next
 
                 ' attach_maillist — 三路比對，更新記憶體快取 (不碰 attach_filenames)
-                Await RenewAttachMailListAsync(folder, fPath:=fPath)
+                ' by Claude Sonnet 4.6, 2026/04/25: 只對「真正 dirty」（snapshot 不符）的資料夾才重掃附件
+                '   全新資料夾（DB 從未記錄）跳過，避免清空快取後 RenewCache 偷跑全量 GetTable 掃描
+                '   全新資料夾的 attach_maillist 在使用者執行 Tab3 附件搜尋時透過 lazy load 建立
+                If Not dirtyNewFolderSet.Contains(fPath) Then
+                    Await RenewAttachMailList(folder, fPath:=fPath)
+                End If
 
                 ' folder_size — 選擇性 (GetTable 遍歷 PR_MESSAGE_SIZE，大資料夾需 10~30s)
                 If includeSize Then _cacheFolderSize(fPath) = Await GetFolderSizeL3(folder, fPath:=fPath, cToken:=cToken)  ' 2026/04/16: 補 cToken
 
                 ' 聚合快取清除 — 讓 parent 在下次點選時重新 BFS 加總
-                _cacheMailCountAll.TryRemove(fPath, Nothing)
-                _cacheFolderCountAll.TryRemove(fPath, Nothing)
+                ' by Claude Sonnet 4.6, 2026/04/25: 同時清除 |True 和 |False 兩個模式的鍵值
+                '   因應未來 _showAllFolders 分支鍵值架構，確保兩個模式的過期聚合都被清掉
+                _cacheMailCountAll.TryRemove(fPath & "|True", Nothing)
+                _cacheMailCountAll.TryRemove(fPath & "|False", Nothing)
+                _cacheMailCountAll.TryRemove(fPath, Nothing)    ' 兼容舊鍵值（無分支時寫入的）
+                _cacheFolderCountAll.TryRemove(fPath & "|True", Nothing)
+                _cacheFolderCountAll.TryRemove(fPath & "|False", Nothing)
+                _cacheFolderCountAll.TryRemove(fPath, Nothing)  ' 同上
                 _cacheFolderSizeAll.TryRemove(fPath, Nothing)
 
                 processed += 1
-                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + ThrottledYieldAsync 與 onThrottled 委派
-                Await ThrottledYieldAsync(swThrottle3, cToken:=cToken, ThrottleFreq.Low,
+                ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + SmartThrottle 與 onThrottled 委派
+                Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Low,
                                           Sub() ProgressBar1.Text = $"RenewCache Phase3: {processed}/{dirtyDict.Count} 個處理中...")
             Next
             _dbg("Phase3 完成", $"{processed} 個 dirty folder 重新計算完畢")
@@ -571,23 +617,27 @@ Partial Class Form1
             ' ── Phase 4: 清除 dirty folders 的 ancestor 聚合快取 ──
             ' 任何 dirty leaf 都讓所有 ancestor 的 mca/fca/fsa 失效
             ' 2026/04/16: 改迭代 liveDict.Keys，直接用 key 作 fPath，省去 fs.FolderPath COM 呼叫
-            Dim dirtyPaths As New HashSet(Of String)(dirtyDict.Keys)  ' 供 Phase4/5 使用
-            If dirtyPaths.Count > 0 Then
-                For Each fPath As String In liveDict.Keys
-                    If dirtyPaths.Contains(fPath) Then Continue For    ' Phase3 已清過
-                    ' ancestor 判斷：dirtyPaths 中有以 fPath+"\" 開頭的路徑
-                    If dirtyPaths.Any(Function(dp) dp.StartsWith(fPath & "\")) Then
-                        _cacheMailCountAll.TryRemove(fPath, Nothing)
-                        _cacheFolderCountAll.TryRemove(fPath, Nothing)
-                        _cacheFolderSizeAll.TryRemove(fPath, Nothing)
-                    End If
+            ' by Gemini 3.0 flash, 2026/04/24: 優化為「精確打擊」模式，改用 GetAncestors 直接清除，效能從 O(N*D) 降至 O(D*L)
+            If dirtyDict.Count > 0 Then
+                For Each dp In dirtyDict.Keys
+                    For Each ancestor In GetAncestors(dp)
+                        ' by Claude Sonnet 4.6, 2026/04/25: 同時清除 |True / |False 兩個模式鍵值及舊式鍵值
+                        _cacheMailCountAll.TryRemove(ancestor & "|True", Nothing)
+                        _cacheMailCountAll.TryRemove(ancestor & "|False", Nothing)
+                        _cacheMailCountAll.TryRemove(ancestor, Nothing)
+                        _cacheFolderCountAll.TryRemove(ancestor & "|True", Nothing)
+                        _cacheFolderCountAll.TryRemove(ancestor & "|False", Nothing)
+                        _cacheFolderCountAll.TryRemove(ancestor, Nothing)
+                        _cacheFolderSizeAll.TryRemove(ancestor, Nothing)
+                    Next
                 Next
-                _dbg("Phase4 完成", $"ancestor 聚合快取已清除")
+                _dbg("Phase4 完成", $"已針對 {dirtyDict.Count} 個異動路徑精確清除祖先快取 (含 |True/|False 模式鍵值)")
             End If
 
             ' ── Phase 5: 批次 DELETE dirty folders 的 month_counts DB rows ──
             ' 注意: CleanupOrphan 只刪「不再存在的路徑」，不刪「仍存在但 dirty」的路徑
             '       所以 dirty folder 的舊 month rows 必須在這裡主動清除
+            Dim dirtyPaths As New HashSet(Of String)(dirtyDict.Keys)  ' 供 Phase 5 使用
             If dirtyPaths.Count > 0 AndAlso _db IsNot Nothing Then
                 Await Task.Run(Sub()
                                    Using txn = _db.BeginTransaction()
@@ -609,10 +659,10 @@ Partial Class Form1
             ' ── Phase 6: 孤兒清除 + 批次寫入 ──
             ProgressBar1.Text = "RenewCache Phase6: 清孤兒 + 寫入 DB..." : Await Task.Delay(1, cToken)
             CleanupOrphanFolderPath(livePaths)
-            Await SaveCachesToSQLiteAsync()    ' 內部會顯示 SaveCache 的進度訊息
+            Await SaveCachesToDB()    ' 內部會顯示 SaveCache 的進度訊息
 
             sw.Stop()
-            Dim st = GetDatabaseSummary()
+            Dim st = GetDBSummary()
             ProgressBar1.Text = $"RenewCache 完成 ✔ dirty:{dirtyDict.Count}/{liveDict.Count} 個 / 耗時:{sw.Elapsed.TotalSeconds:0.0}s — DB:{st.fc}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆"
             _dbg("完成", $"dirty={dirtyDict.Count}, total={liveDict.Count}, elapsed={sw.Elapsed.TotalSeconds:0.0}s")
 
@@ -629,9 +679,9 @@ Partial Class Form1
         End Try
 
     End Function
-    Private Async Function RenewAttachMailListAsync(folder As Outlook.Folder, fPath As String) As Task
+    Private Async Function RenewAttachMailList(folder As Outlook.Folder, fPath As String) As Task
         ' ---------------------------------------------------------------
-        ' RenewAttachMailListAsync — 三路比對更新單一資料夾的 attach_maillist 快取
+        ' RenewAttachMailList — 三路比對更新單一資料夾的 attach_maillist 快取
         '
         ' 三路比對邏輯：
         '   新郵件   (live 有、DB 沒有) → 進入新的 mailList，SaveCache 時 INSERT
@@ -668,7 +718,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' CleanupOrphanFolderPath — 刪除已不存在於 Outlook 的資料夾孤兒行
         ' liveFolderPaths = 目前仍有效的資料夾路徑集合
-        '   呼叫來源 A: SaveCachesToSQLiteAsync 開頭 (用記憶體快取 key 聯集) 
+        '   呼叫來源 A: SaveCachesToDB 開頭 (用記憶體快取 key 聯集) 
         '   呼叫來源 B: RenewCache_Click (用 GetSubtreeToList BFS 掃 COM 取得完整清單) 
         ' ---------------------------------------------------------------
         _dbg("    ├ 開始", $"live 資料夾數: {liveFolderPaths.Count}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
@@ -720,7 +770,9 @@ Partial Class Form1
         End Try
 
     End Sub
+#End Region
 
+#Region "■ 批次寫入核心 (Batch Writer Core)"
     Private Function SaveFolderStatsInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
         ' SaveFolderStatsInner — Transaction 內批次寫入 folder_stats
@@ -929,48 +981,6 @@ Partial Class Form1
         _dbg("結束")
 
     End Function
-    Private Function SaveFolderBasicMailInfosInner(txn As SqliteTransaction) As Integer
-        ' ---------------------------------------------------------------
-        ' SaveFolderBasicMailInfosInner — Transaction 內批次寫入 basic_maillist (Tab4/Tab5) 
-        ' ---------------------------------------------------------------
-        _dbg("開始")
-        Dim sql = "INSERT OR REPLACE INTO basic_maillist" &
-                  " (entry_id,folder_path,subject,msg_size,received_time,sender_name,topic,item_count_snap,updated_at)" &
-                  " VALUES (@eid,@fp,@subj,@sz,@rt,@sn,@tpc,@snap,@ts)"
-
-        Dim count As Integer = 0
-        Dim ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-        Using cmd As New SqliteCommand(sql, _db, txn)
-            cmd.Parameters.Add("@eid", SqliteType.Text)
-            cmd.Parameters.Add("@fp", SqliteType.Text)
-            cmd.Parameters.Add("@subj", SqliteType.Text)
-            cmd.Parameters.Add("@sz", SqliteType.Integer)
-            cmd.Parameters.Add("@rt", SqliteType.Text)
-            cmd.Parameters.Add("@sn", SqliteType.Text)
-            cmd.Parameters.Add("@tpc", SqliteType.Text)
-            cmd.Parameters.Add("@snap", SqliteType.Integer)
-            cmd.Parameters.Add("@ts", SqliteType.Text)
-
-            For Each kvp In _cacheFolderBasicMailInfos
-                Dim fp = kvp.Key : Dim snap = kvp.Value.Snap
-                For Each item In kvp.Value.Mails
-                    cmd.Parameters("@eid").Value = item.Mail.EntryID
-                    cmd.Parameters("@fp").Value = fp
-                    cmd.Parameters("@subj").Value = If(item.Mail.Subject, "")
-                    cmd.Parameters("@sz").Value = item.Mail.Size
-                    cmd.Parameters("@rt").Value = item.Mail.ReceivedTime.ToString("yyyy-MM-dd HH:mm:ss")
-                    cmd.Parameters("@sn").Value = If(item.Mail.SenderName, "")
-                    cmd.Parameters("@tpc").Value = If(item.Topic, "")
-                    cmd.Parameters("@snap").Value = snap
-                    cmd.Parameters("@ts").Value = ts
-                    cmd.ExecuteNonQuery() : count += 1
-                Next
-            Next
-        End Using
-        Return count
-        _dbg("結束")
-
-    End Function
     Private Function SaveAttachFilenamesInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
         ' SaveAttachFilenamesInner — Transaction 內批次寫入 attach_filenames (Tab3 Phase2) 
@@ -1013,7 +1023,51 @@ Partial Class Form1
         _dbg("結束")
 
     End Function
+    Private Function SaveFolderBasicMailInfosInner(txn As SqliteTransaction) As Integer
+        ' ---------------------------------------------------------------
+        ' SaveFolderBasicMailInfosInner — Transaction 內批次寫入 basic_maillist (Tab4/Tab5) 
+        ' ---------------------------------------------------------------
+        _dbg("開始")
+        Dim sql = "INSERT OR REPLACE INTO basic_maillist" &
+                  " (entry_id,folder_path,subject,msg_size,received_time,sender_name,topic,item_count_snap,updated_at)" &
+                  " VALUES (@eid,@fp,@subj,@sz,@rt,@sn,@tpc,@snap,@ts)"
 
+        Dim count As Integer = 0
+        Dim ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+        Using cmd As New SqliteCommand(sql, _db, txn)
+            cmd.Parameters.Add("@eid", SqliteType.Text)
+            cmd.Parameters.Add("@fp", SqliteType.Text)
+            cmd.Parameters.Add("@subj", SqliteType.Text)
+            cmd.Parameters.Add("@sz", SqliteType.Integer)
+            cmd.Parameters.Add("@rt", SqliteType.Text)
+            cmd.Parameters.Add("@sn", SqliteType.Text)
+            cmd.Parameters.Add("@tpc", SqliteType.Text)
+            cmd.Parameters.Add("@snap", SqliteType.Integer)
+            cmd.Parameters.Add("@ts", SqliteType.Text)
+
+            For Each kvp In _cacheFolderBasicMailInfos
+                Dim fp = kvp.Key : Dim snap = kvp.Value.Snap
+                For Each item In kvp.Value.Mails
+                    cmd.Parameters("@eid").Value = item.Mail.EntryID
+                    cmd.Parameters("@fp").Value = fp
+                    cmd.Parameters("@subj").Value = If(item.Mail.Subject, "")
+                    cmd.Parameters("@sz").Value = item.Mail.Size
+                    cmd.Parameters("@rt").Value = item.Mail.ReceivedTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    cmd.Parameters("@sn").Value = If(item.Mail.SenderName, "")
+                    cmd.Parameters("@tpc").Value = If(item.Topic, "")
+                    cmd.Parameters("@snap").Value = snap
+                    cmd.Parameters("@ts").Value = ts
+                    cmd.ExecuteNonQuery() : count += 1
+                Next
+            Next
+        End Using
+        Return count
+        _dbg("結束")
+
+    End Function
+#End Region
+
+#Region "■ 批次載入核心 (Batch Reader Core)"
     Private Function LoadFolderStatsInner() As Integer
         ' ---------------------------------------------------------------
         ' LoadFolderStatsInner — 讀回六個數字快取
@@ -1163,7 +1217,6 @@ Partial Class Form1
         _dbg("結束")
 
     End Function
-    ' 註：Tab4/5 基本郵件快取因為資料量較大，不放在 LoadCachesFromSQLiteAsync 中預載，而是採用 Lazy Load (DbGetFolderBasicMailInfos)
     Private Function LoadAttachFilenamesInner() As Integer
         ' ---------------------------------------------------------------
         ' LoadAttachFilenamesInner — 重建 _cacheAttachFilename (JSON 反序列化) 
@@ -1233,12 +1286,13 @@ Partial Class Form1
         _dbg("結束")
 
     End Function
+#End Region
 
-    ' ==============================================================
+#Region "■ Layer 2.5 即時查詢 (Lazy SELECT Helpers)"
     ' Phase 2 — Layer2.5 lazy SELECT 用的 DB read helper 群
     ' ==============================================================
     ' 設計原則 (2026-04-07):
-    '   1. 只做「讀」，不做「寫」。寫入仍由 SaveCachesToSQLiteAsync (SaveCache 按鈕) 批次處理。
+    '   1. 只做「讀」，不做「寫」。寫入仍由 SaveCachesToDB (SaveCache 按鈕) 批次處理。
     '   2. 回傳 Nothing 表示 DB 中無此筆資料，呼叫端應繼續往 Layer3 走。
     '   3. 這些函數從 UI 執行緒呼叫，SQLite keyed lookup < 1ms，不需要 Async。
     '   4. FolderStatsDbRow / AttachMailListDbResult 定義在本檔，Partial Class 跨檔可見。
@@ -1554,6 +1608,7 @@ Partial Class Form1
         End Try
 
     End Sub
+#End Region
 
 
 End Class

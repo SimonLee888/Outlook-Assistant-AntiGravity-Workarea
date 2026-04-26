@@ -29,6 +29,10 @@
     <Compile Remove="Backup\**" />
     <EmbeddedResource Remove="Backup\**" />
     <None Remove="Backup\**" />
+    <Compile Remove="My Project\esteban-garzon-portfolio-main\**" />
+    <Content Remove="My Project\esteban-garzon-portfolio-main\**" />
+    <EmbeddedResource Remove="My Project\esteban-garzon-portfolio-main\**" />
+    <None Remove="My Project\esteban-garzon-portfolio-main\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -83,6 +87,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="ost2pst">
+      <HintPath>Libs\ost2pst.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Update="My Project\Application.Designer.vb">
       <DesignTime>True</DesignTime>
       <AutoGen>True</AutoGen>
@@ -118,13 +128,6 @@
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.vb</LastGenOutput>
     </None>
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- 修復 NU1105: 備份專案不在方案中導致還原失敗，改為直接引用編譯好的 DLL by Gemini 3 Flash, 2026/04/18 -->
-    <Reference Include="ost2pst">
-      <HintPath>Backup\OST Parser\Niv2023 ost2pst\bin\Debug\net8.0-windows\ost2pst.dll</HintPath>
-    </Reference>
   </ItemGroup>
 
 </Project>

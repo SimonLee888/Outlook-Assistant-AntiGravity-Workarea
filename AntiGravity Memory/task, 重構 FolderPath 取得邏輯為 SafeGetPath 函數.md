@@ -1,0 +1,6 @@
+- [ ] 在 `Form1_Outlook.vb` 中新增 `SafeGetPath` 函數 (置於 `ExtractFolderName` 旁)
+- [ ] 在 `Form1_Outlook.vb` 中替換所有重複的取得路徑模式
+- [ ] 在 `moduleStore.vb` 中替換直接存取 `folder.FolderPath` 的地方
+- [ ] 在 `Form1_MainTabs.vb` 中替換直接存取 `folder.FolderPath` 的地方
+- [ ] 在 `Form1.vb` 中替換直接存取 `folder.FolderPath` 的地方
+- [ ] 驗證編譯與執行穩定性

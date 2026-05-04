@@ -5,25 +5,7 @@ Imports System.Threading
 Imports System.Windows.Forms.DataVisualization.Charting
 Imports Microsoft.Office.Interop.Outlook
 Imports Outlook = Microsoft.Office.Interop.Outlook
-'Imports Redemption      ' 2026/3/22 正式導入Redemption, 測試logon成功, 傳回數值成功
 'Imports MailKit        ' MailKit is a cross-platform mail client library built on top of MimeKit.
-'Imports MailKit.Search
-'Imports Windows.Graphics.Printing.OptionDetails
-'Imports System
-'Imports System.Core.dll
-'Imports System.ComponentModel
-'Imports System.ComponentModel.Design.ObjectSelectorEditor
-'Imports System.Collections.Concurrent
-'Imports System.Diagnostics.Metrics
-'Imports System.DirectoryServices.ActiveDirectory
-'Imports System.Linq.Parallel.dll
-'Imports System.Net
-'Imports System.Threading
-'Imports System.Windows.Controls
-'Imports System.Windows.Forms.VisualStyles.VisualStyleElement
-'Imports System.Windows.Forms.VisualStyles.VisualStyleElement.Header
-'Imports Windows.Graphics.Printing.OptionDetails
-'Imports Microsoft.VisualBasic.Devices
 
 Partial Class Form1
 
@@ -50,7 +32,6 @@ Partial Class Form1
         ' 2026/03/31 by Gemini: 改用 DebugForm 統一提供的 GetCallerName，此版本支援解析 Async 非同步方法名稱
         Dim realCaller As String = DebugForm.GetCallerName()
         If _isDebugMode Then DebugForm.AddMessage3(msg, detail, realCaller)
-
     End Sub
 
     'Private _isFirstInit As Boolean = True          ' 第一次啟動程式
@@ -64,34 +45,19 @@ Partial Class Form1
     Private _isClosing As Boolean = False           ' added by Gemini, 2026/04/08: 關閉流程旗標，確保 FormClosing 中的非同步儲存完成後再釋放資源並允許關閉
     'Private _cancelRequested As Boolean = False    ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
     Private _cts As CancellationTokenSource         ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
-    Private _lastTvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
-    Private _lastLvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
     '2026/3/10重構時停止使用全域變數來記錄遞迴過程中的資料, 改用傳遞參數以避免多線程或重入呼叫時資料被改寫的問題
     'Private _intTotalMailCount As Integer          ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
     'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
-    ' Private _isTab3_Stop As Boolean                 ' 2026/04/05 by Gemini: 已併入全域 _cancelRequested，不再單獨使用專屬旗標以簡化邏輯內容流程處理機制
-    ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
-
-    Private _ctxListView1 As ContextMenuStrip
-    Private pnlOptions_tab3 As Panel
-    Private rbExactMatch As New RadioButton()       ' tab5 用到的radio button
-    Private rbFuzzyMatch As New RadioButton()       ' tab5 用到的radio button
-    'Private WithEvents ListView5 As New ListView()
-    Private _lvStats As ListView = Nothing          ' by Gemini 3 Flash, 2026/04/20: 動態建立的統計列表
-    ' 可複選Treeview 自訂控制項 及 ContextMenu 成員變數，只初始化一次，不在每次右鍵時重新建立
-    ' delete: 2026/04/01 by simon, 直接從設計工具建立 SimTree 控制項到 Form1
-    'Private WithEvents SimTree1 As New SimTree
-    'Private WithEvents SimTree2 As New SimTree
-    'Private WithEvents SimTree3 As New SimTree
-    'Private WithEvents SimTree4 As New SimTree
+    Private _lastTvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
+    Private _lastLvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
-
     Private Const MAX_HISTORY_COUNT As Integer = 100
     Private WithEvents HistoryListBox As ListBox
     Private _historyHoverIndex As Integer = -1
     Private _historyPopup As ToolStripDropDown
     Private _statusHistory As New List(Of StatusHistoryItem)(1024)
+    ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
 
     Private Structure StatusHistoryItem
         Dim Time As DateTime
@@ -100,9 +66,9 @@ Partial Class Form1
     End Structure
     Friend NotInheritable Class ThrottleFreq
         ' 2026/04/16 by Simon/Claude: 統一管理 SmartThrottle 的讓出間隔常數，取代散落的 100ms 魔術數字
-        '   Hii  (100ms)：高頻迴圈，如 GetTable 掃郵件 (Tab2/Tab3)、Tab2 郵件總數預計算
-        '   Mid (200ms)：中頻迴圈，如 ComputeFolderSize 右鍵大小計算
-        '   Low (300ms)：低頻迴圈，如 RenewCache Phase2/3，每次操作 ~0.5ms，300ms 約每 600 個資料夾讓出一次
+        '   Hii (100ms) ：高頻迴圈，如 GetTable 掃郵件 (Tab2/Tab3)、Tab2 郵件總數預計算
+        '   Mid (200ms) ：中頻迴圈，如 ComputeFolderSize 右鍵大小計算
+        '   Low (300ms) ：低頻迴圈，如 RenewCache Phase2/3，每次操作 ~0.5ms，300ms 約每 600 個資料夾讓出一次
         Public Const Hii As Integer = 100   ' 高頻更新：適用於單純資料計算或記憶體操作
         Public Const Mid As Integer = 200   ' 中等更新：一般進度更新
         Public Const Low As Integer = 300   ' 低頻慢速：極耗時的附件掃描，不需過度更新
@@ -357,6 +323,7 @@ Partial Class Form1
             AddHandler lv.DrawColumnHeader, Sub(s, ev) ev.DrawDefault = True    ' 統一表頭繪製, 2026/4/26 by Gemini
             ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4Lv5_KeyPress        ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
             AddHandler lv.KeyDown, AddressOf HandleLv3Lv4Lv5_KeyDown            ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
+            AddHandler lv.DrawItem, AddressOf HandleLv3Lv4Lv5_DrawItem          ' 統一項目背景繪製, 2026/05/05 by Gemini 3 Flash
             AddHandler lv.DrawSubItem, AddressOf HandleLv3Lv4Lv5_DrawSubItem    ' 統一 SubItem 繪製 (處理 Hover 變色與對齊), 2026/4/26 by Gemini
             AddHandler lv.MouseClick, AddressOf HandleLv3Lv4Lv5_MouseClick      ' 整合：單擊左鍵複製與點擊顯示路徑
             AddHandler lv.MouseDoubleClick, AddressOf HandleLv3Lv4Lv5_DoubleClick
@@ -531,7 +498,7 @@ Partial Class Form1
         CheckSubFolder3.TextAlign = ContentAlignment.MiddleLeft
         CheckSubFolder3.AutoSize = True                                                 ' 1. 開啟 AutoSize 解決勾選框與文字「離得太遠」的問題 (寬度會自動縮短到剛好)
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Left                  ' 2. 清除 Anchor 避免設計時的自動定位干擾手動計算，之後再重設為右側關聯
-        'CheckSubFolder3.Left = (Button3.Left + Button3.Width) - CheckSubFolder3.Width   ' 3. 重新計算右側對齊 (會在 AutoSize 完後的正確 Width 基礎上計算)
+        'CheckSubFolder3.Left = (Button3.Left + Button3.Width) - CheckSubFolder3.Width  ' 3. 重新計算右側對齊 (會在 AutoSize 完後的正確 Width 基礎上計算)
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right                 ' 4. 最後設定 Anchor，讓它在之後的視窗縮放中保持與 Button3 的右側對齊
 
         ' ------------------------------------------
@@ -580,8 +547,10 @@ Partial Class Form1
             .Columns.Clear()
             .Columns.Add("主旨", "主旨", CInt(ListView3.Width * 0.45))
             .Columns.Add("郵件大小", "郵件大小", CInt(ListView3.Width * 0.13)) : .Columns(1).TextAlign = HorizontalAlignment.Right
-            .Columns.Add("收到日期", "收到日期", CInt(ListView3.Width * 0.18)) : .Columns(2).TextAlign = HorizontalAlignment.Center
+            .Columns.Add("收到日期", "收到日期", CInt(ListView3.Width * 0.17)) : .Columns(2).TextAlign = HorizontalAlignment.Center
             .Columns.Add("寄件者", "寄件者", CInt(ListView3.Width * 0.22))
+            .Columns.Add("附件個數", "附件個數", 0) : .Columns(4).TextAlign = HorizontalAlignment.Center ' [4] by Gemini 3 Flash, 2026/05/06: 初始隱藏
+            .Columns.Add("EntryID", "EntryID", 0)                                                    ' [5] by Gemini 3 Flash, 2026/05/06: 初始隱藏
             .OwnerDraw = True ' by Gemini 3 Flash, 2026/04/26: 開啟 OwnerDraw 以在 VirtualMode 下實作流暢的 MouseHover 效果
         End With
 
@@ -662,7 +631,7 @@ Partial Class Form1
             For Each n In lv4Names : .Columns.Add(n, n) : Next
             .Columns("主旨").Width = .Width * 0.4
             .Columns("郵件大小").Width = CInt(.Width * 0.13) : .Columns("郵件大小").TextAlign = HorizontalAlignment.Right
-            .Columns("收到日期").Width = CInt(.Width * 0.18) : .Columns("收到日期").TextAlign = HorizontalAlignment.Center
+            .Columns("收到日期").Width = CInt(.Width * 0.17) : .Columns("收到日期").TextAlign = HorizontalAlignment.Center
             .Columns("寄件者").Width = .Width * 0.18
             .Columns("相似").Width = .Width * 0.08 : .Columns("相似").TextAlign = HorizontalAlignment.Center
             .Columns("EntryID").Width = 0   ' 隱藏，僅供 OpenMailByEntryID 使用
@@ -681,13 +650,14 @@ Partial Class Form1
         ' 1. 初始化基礎控制項
         InitTreeView(SimTree5)
         InitListView(ListView5)
+        ListView5.OwnerDraw = True ' by Gemini 3 Flash, 2026/05/05: 開啟 OwnerDraw，徹底解決 ListView5 懸停時 BackColor 被覆蓋與效能問題
         InitSplitter(SplitContainer5)
         'TreeView5.Visible = False ' 使用 SimTree5 取代，TreeView5 設為不可見
 
         ' 2. 準備右側選項面板 (pnlOptions5)
         Dim pnlOptions5 As New Panel With {.Name = "pnlOptions5",
                                            .Dock = DockStyle.Top,
-                                           .Height = 80, ' 參考 Tab4 高度
+                                           .Height = 110, ' 2026/05/05 by Gemini 3 Flash: 增加高度以容納 CheckSubFolder5
                                            .BackColor = ThemeColors.Gray95}
         ' 設定 RadioButtons 樣式與位置
         rbExactMatch.Text = "完全相同 (主旨+大小+時間+寄件者)"
@@ -712,8 +682,17 @@ Partial Class Form1
         Button5.Location = New Point(pnlOptions5.Width - Button5.Width - 10, 10)
         Button5.BringToFront()
 
+        ' CheckSubFolder5：暫用程式建立，日後改設計工具放置。2026/05/05 by Claude
+        CheckSubFolder5.Text = "含子資料夾"
+        CheckSubFolder5.Checked = True
+        CheckSubFolder5.AutoSize = True
+        CheckSubFolder5.FlatStyle = FlatStyle.System
+        CheckSubFolder5.Location = New Point(20, 75) ' 2026/05/05 by Gemini 3 Flash: 手動指定位置確保不被裁切
+        AddHandler CheckSubFolder5.CheckedChanged, Sub() _includeSubTab5 = CheckSubFolder5.Checked
+
         ' 3. 組裝右側面板
-        pnlOptions5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, Button5, Label2})
+        pnlOptions5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, Button5, Label2})
+        CheckSubFolder5.BringToFront() ' ✅ by Gemini 3 Flash, 2026/05/05: 顯式移至最前，防止被遮擋
 
         ' 4. 將控制項掛載到 SplitContainer5 的正確 Panel 中
         ' 左側：SimTree5 填滿 Panel1
@@ -747,11 +726,11 @@ Partial Class Form1
             .Columns.Clear()
             Dim lv5Names As String() = {"主旨", "郵件大小", "收到日期", "寄件者", "群組", "相似", "EntryID"}
             For Each n In lv5Names : .Columns.Add(n, n) : Next
-            .Columns("主旨").Width = CInt(.Width * 0.36)
+            .Columns("主旨").Width = CInt(.Width * 0.34)
             .Columns("郵件大小").Width = CInt(.Width * 0.12) : .Columns("郵件大小").TextAlign = HorizontalAlignment.Right
             .Columns("收到日期").Width = CInt(.Width * 0.17) : .Columns("收到日期").TextAlign = HorizontalAlignment.Center
             .Columns("寄件者").Width = .Width * 0.17
-            .Columns("群組").Width = CInt(.Width * 0.05) : .Columns("群組").TextAlign = HorizontalAlignment.Right
+            .Columns("群組").Width = CInt(.Width * 0.08) : .Columns("群組").TextAlign = HorizontalAlignment.Right
             .Columns("相似").Width = CInt(.Width * 0.08) : .Columns("相似").TextAlign = HorizontalAlignment.Center
             .Columns("EntryID").Width = 0   ' 隱藏，僅供 OpenMailByEntryID 使用
         End With
@@ -1457,33 +1436,55 @@ Partial Class Form1
         _lastHoveredListItem = currentItem
 
     End Sub
-    Private Sub HandleLv3Lv4Lv5_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs)
-        ' by Gemini 3 Flash, 2026/04/26: ListView3 與 ListView4 共用的 OwnerDraw 繪製邏輯
-        ' 統一處理滑鼠懸停 (Hover) 的背景變色與精確的文字對齊
-        If _lastHoveredListItem IsNot Nothing AndAlso e.ItemIndex = _lastHoveredListItem.Index AndAlso Not e.Item.Selected Then
-            Using bgBrush As New SolidBrush(ThemeColors.MercuryGray)
-                e.Graphics.FillRectangle(bgBrush, e.Bounds)
-            End Using
-
-            Dim textRect As Rectangle = e.Bounds
-            Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine Or TextFormatFlags.PreserveGraphicsClipping
-
-            ' 依照欄位對齊方式設定旗標與微調位移 (位移量根據 USER 實測反饋調整)
-            If e.ColumnIndex = 0 Then
-                textRect.X += 2 : textRect.Width -= 2 ' 避免第一欄文字貼著邊線
-                flags = flags Or TextFormatFlags.Left
-            ElseIf e.Header.TextAlign = HorizontalAlignment.Right Then
-                flags = flags Or TextFormatFlags.Right
-            ElseIf e.Header.TextAlign = HorizontalAlignment.Center Then
-                flags = flags Or TextFormatFlags.HorizontalCenter
-                textRect.X += 1 ' 修正往左偏移的問題
-            Else
-                flags = flags Or TextFormatFlags.Left
-                textRect.X += 2 ' by USER, 2026/04/26: 寄件者之後的欄位再多補 1px (共 2px)
-            End If
-
-            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, SystemColors.InactiveCaptionText, flags)
+    Private Sub HandleLv3Lv4Lv5_DrawItem(sender As Object, e As DrawListViewItemEventArgs)
+        ' by Gemini 3 Flash, 2026/05/05: 為 OwnerDraw 模式提供基礎渲染
+        ' 在 Details 視圖下，大部分工作由 DrawSubItem 完成，此處僅確保基本行為正確。
+        If e.Item.Selected Then
+            e.DrawDefault = True ' 選取狀態交由系統繪製，確保藍色高亮正確
         End If
+    End Sub
+    Private Sub HandleLv3Lv4Lv5_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs)
+        ' by Gemini 3 Flash, 2026/04/26: ListView3, ListView4, ListView5 共用的 OwnerDraw 繪製邏輯
+        ' 2026/05/05 by Gemini 3 Flash: 修正非懸停狀態下的背景繪製，確保保留群組背景色 (BackColor)
+
+        ' 1. 決定底色與文字色
+        Dim backColor As Color = e.Item.BackColor
+        Dim foreColor As Color = SystemColors.WindowText
+
+        If _lastHoveredListItem IsNot Nothing AndAlso e.ItemIndex = _lastHoveredListItem.Index AndAlso Not e.Item.Selected Then
+            ' 懸停中且未被選取：使用懸停灰色
+            backColor = ThemeColors.MercuryGray
+            foreColor = SystemColors.InactiveCaptionText
+        ElseIf e.Item.Selected Then
+            ' 已選取：讓系統處理選取藍色
+            e.DrawDefault = True
+            Return
+        End If
+
+        ' 2. 繪製背景 (使用 SolidBrush 繪製 BackColor，解決懸停消失問題)
+        Using bgBrush As New SolidBrush(backColor)
+            e.Graphics.FillRectangle(bgBrush, e.Bounds)
+        End Using
+
+        ' 3. 繪製文字 (使用 TextRenderer 確保對齊與抗鋸齒)
+        Dim textRect As Rectangle = e.Bounds
+        Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine Or TextFormatFlags.PreserveGraphicsClipping
+
+        ' 依照欄位對齊方式設定旗標與微調位移 (位移量根據 USER 實測反饋調整)
+        If e.ColumnIndex = 0 Then
+            textRect.X += 2 : textRect.Width -= 2 ' 避免第一欄文字貼著邊線
+            flags = flags Or TextFormatFlags.Left
+        ElseIf e.Header.TextAlign = HorizontalAlignment.Right Then
+            flags = flags Or TextFormatFlags.Right
+        ElseIf e.Header.TextAlign = HorizontalAlignment.Center Then
+            flags = flags Or TextFormatFlags.HorizontalCenter
+            textRect.X += 1 ' 修正往左偏移的問題
+        Else
+            flags = flags Or TextFormatFlags.Left
+            textRect.X += 2 ' by USER, 2026/04/26: 寄件者之後的欄位再多補 1px (共 2px)
+        End If
+
+        TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, foreColor, flags)
     End Sub
     Private Sub HistoryListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles HistoryListBox.MouseMove
         Dim newHoverIndex = HistoryListBox.IndexFromPoint(e.Location)
@@ -1667,7 +1668,7 @@ Partial Class Form1
         ' by Gemini 3.1 Pro, 2026/04/24
         ' ---------------------------------------------------------------
         For Each n As TreeNode In nodes
-            Dim f = TryCast(n.Tag, Outlook.Folder)
+            Dim f = TryCast(n.Tag, Folder)
             If f IsNot Nothing AndAlso String.Compare(SafeGetPath(f), folderPath, StringComparison.OrdinalIgnoreCase) = 0 Then
                 Return n
             End If
@@ -1687,7 +1688,7 @@ Partial Class Form1
         Dim node As TreeNode = If(st IsNot Nothing, st.SelectedNode, tv.SelectedNode)
         If node Is Nothing Then Return ""
 
-        Dim folder = TryCast(node.Tag, Outlook.Folder)
+        Dim folder = TryCast(node.Tag, Folder)
         Return If(folder IsNot Nothing, SafeGetPath(folder), node.FullPath)
     End Function
     Private Function SelectNodeByPath(tv As TreeView, fPath As String, Optional expandTarget As Boolean = False) As Boolean
@@ -1702,7 +1703,7 @@ Partial Class Form1
     Private Function SelectNodeByPathRecursive(nodes As TreeNodeCollection, fPath As String, tv As TreeView, expandTarget As Boolean) As Boolean
         ' 遞迴搜尋匹配路徑的節點
         For Each node As TreeNode In nodes
-            Dim folder = TryCast(node.Tag, Outlook.Folder)
+            Dim folder = TryCast(node.Tag, Folder)
             Dim nodePath As String = If(folder IsNot Nothing, SafeGetPath(folder), node.FullPath)
 
             ' 精確匹配目標並完成選定節點
@@ -1762,17 +1763,22 @@ Partial Class Form1
         ElseIf lv Is ListView3 Then ' Tab3: 郵件主旨 / 郵件大小 / 收到日期 / 寄件者 / 附件個數 / EntryID
             If lv.Columns.Count >= 6 Then
                 lv.Columns(1).Width = CInt(w * 0.15)    ' 郵件大小
-                lv.Columns(2).Width = CInt(w * 0.2)     ' 收到日期
-                lv.Columns(3).Width = CInt(w * 0.2)     ' 寄件者 (by Gemini 3.0 Flash, 2026/04/20: 從 0.15 調升至 0.2 以與 LV4 一致)
-                lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03
-                lv.Columns(4).Width = If(CheckAttCount.Checked, CInt(w * 0.1), 0.03)   ' 2026/04/01 by Gemini: 根據勾選狀態 動態顯示/隱藏 附件個數欄位
+                lv.Columns(2).Width = CInt(w * 0.17)    ' 收到日期 (by Gemini 3 Flash, 2026/05/06: 統一 17%)
+                lv.Columns(3).Width = CInt(w * 0.18)    ' 寄件者
+                lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留
+
+                ' by Gemini 3 Flash, 2026/05/06: 實作連動邏輯 —— 
+                ' 當使用者勾選「附件個數」或左側側邊欄收攏時，自動展開此欄位（寬度 60px 即可，顯示數字用）
+                Dim isLeftCollapsed As Boolean = (SplitContainer3.SplitterDistance < 50)
+                lv.Columns(4).Width = If(CheckAttCount.Checked OrElse isLeftCollapsed, 60, 0)
+                
                 lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5
             End If
 
         ElseIf lv Is ListView4 Then ' Tab4: 主旨 / 大小 / 收到時間 / 寄件者 / 相似度 / EntryID
             If lv.Columns.Count >= 5 Then
                 lv.Columns(1).Width = CInt(w * 0.13)    ' 大小
-                lv.Columns(2).Width = CInt(w * 0.18)    ' 收到時間
+                lv.Columns(2).Width = CInt(w * 0.17)    ' 收到時間 (by Gemini 3 Flash, 2026/05/06: 統一改為 17%)
                 lv.Columns(3).Width = CInt(w * 0.18)    ' 寄件者
                 lv.Columns(4).Width = CInt(w * 0.08)    ' 相似度
                 lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03

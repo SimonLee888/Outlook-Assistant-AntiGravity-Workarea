@@ -657,10 +657,10 @@ Module modToBeDelete
         '' todo: 3. for each item + for each attach 的迴圈, 是否改用items.setColumn 來限制欄位加快速度?
         '' todo: 4. 有無檔名+有無大小限制, 各種組合, 是否有更好的邏輯判斷式, 或是判斷順序?
         'If Not CheckAttachName.Checked OrElse TextBox3.Text.Length = 0 Then
-        '    Await ShowResultToLv3(filteredBySize) '不管附件檔名, 只篩附件和大小
+        '    Await ShowLv3Result(filteredBySize) '不管附件檔名, 只篩附件和大小
         'Else ' 進一步篩選附件檔名, 及指定關鍵字
         '    Dim filteredByKeyword As List(Of MailItem) = Await FilterAttachByKeywordAsync3(filteredBySize, TextBox3.Text)
-        '    Await ShowResultToLv3(filteredByKeyword)
+        '    Await ShowLv3Result(filteredByKeyword)
         'End If
         '' todo: 5. 試試以下幾個DASL 屬性 (是MAPI Extention??)
         ''DASL Name http: //schemas.microsoft.com/mapi/proptag/0x3707001F

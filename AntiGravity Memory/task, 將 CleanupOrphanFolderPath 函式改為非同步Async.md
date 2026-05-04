@@ -1,0 +1,5 @@
+- `[x]` 將 `CleanupOrphanFolderPath` 函式改為 `Async Function CleanupOrphanFolderPathAsync`
+- `[x]` 將內部 SQLite DELETE 與 SELECT 邏輯使用 `Await Task.Run()` 包裝，移至背景執行緒
+- `[x]` 修正 `SaveCachesToDB` 呼叫點，加入 `Await`
+- `[x]` 修正 `RenewCacheToDB` 呼叫點，加入 `Await`
+- `[x]` 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼

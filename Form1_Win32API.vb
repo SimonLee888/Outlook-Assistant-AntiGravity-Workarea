@@ -102,20 +102,20 @@ Partial Class Form1
     ' ListView 雙緩衝
     Private Const LVM_SETEXTENDEDLISTVIEWSTYLE As Integer = &H1036
     Private Const LVS_EX_DOUBLEBUFFER As Integer = &H10000
-    Private Const SWP_NOZORDER As Integer = &H4                     ' debugForm resize用
-    Private Const SWP_NOACTIVATE As Integer = &H10                  ' debugForm resize用
-    Private Const SWP_NOREDRAW As Integer = &H8                     ' debugForm resize 時閃爍, 改手動redraw
-    Private Const RDW_ALLCHILDREN As Integer = &H80                 ' debugForm resize 時閃爍, 改手動redraw
-    Private Const RDW_INVALIDATE As Integer = &H1                   ' debugForm resize 時閃爍, 改手動redraw
-    Private Const RDW_UPDATENOW As Integer = &H100                  ' debugForm resize 時閃爍, 改手動redraw
-    Private Const RDW_ERASE As Integer = &H4                        ' 2026/03/28 by Gemini: 補上缺失定義
-    Private Const RDW_FRAME As Integer = &H400                      ' 2026/03/28 by Gemini: 補上缺失定義
+    Private Const SWP_NOZORDER As Integer = &H4                 ' debugForm resize用
+    Private Const SWP_NOACTIVATE As Integer = &H10              ' debugForm resize用
+    Private Const SWP_NOREDRAW As Integer = &H8                 ' debugForm resize 時閃爍, 改手動redraw
+    Private Const RDW_ALLCHILDREN As Integer = &H80             ' debugForm resize 時閃爍, 改手動redraw
+    Private Const RDW_INVALIDATE As Integer = &H1               ' debugForm resize 時閃爍, 改手動redraw
+    Private Const RDW_UPDATENOW As Integer = &H100              ' debugForm resize 時閃爍, 改手動redraw
+    Private Const RDW_ERASE As Integer = &H4                    ' 2026/03/28 by Gemini: 補上缺失定義
+    Private Const RDW_FRAME As Integer = &H400                  ' 2026/03/28 by Gemini: 補上缺失定義
 
     ' ↓ 新增 (2026-03-20) ListView1 進入資料夾用
-    Private Const TVM_SELECTITEM As Integer = &H110B                ' = &H1100 + 11
-    Private Const TVGN_CARET As Integer = &H9                       ' SendMessage 選取 Treeview 游標節點
-    Private Const LVM_SETITEMCOUNT As Integer = &H1000 + 47         ' = &H102F '
-    Private Const WM_SETREDRAW As Integer = &HB                     ' 2026/3/26 by Gemini
+    Private Const TVM_SELECTITEM As Integer = &H110B            ' = &H1100 + 11
+    Private Const TVGN_CARET As Integer = &H9                   ' SendMessage 選取 Treeview 游標節點
+    Private Const LVM_SETITEMCOUNT As Integer = &H1000 + 47     ' = &H102F '
+    Private Const WM_SETREDRAW As Integer = &HB                 ' 2026/3/26 by Gemini
 #End Region
 #End Region
 
@@ -179,35 +179,6 @@ Partial Class Form1
         End Function
     End Class
 
-    Private Function GetMailCountRecursiveLegacy(folder As Outlook.Folder) As Integer
-        _dbg("開始", folder.Name)
-        Dim value As Integer
-        If _cacheMailCountAll.TryGetValue(folder, value) Then Return value ' 檢查快取中是否已存在值, 若有則直接返回
-        ' 改成先用 Parallel.ForEach 遍歷子文件夾並且並行處理
-        Dim totalMailCount As Integer = 0
-        Dim countingBag As New ConcurrentBag(Of Integer)()
-        Try
-            ' 5/21記錄: 模仿GetFolderSizeLegacy那一句超快速的LINQ, 但測試結果沒有現在這個快, 所以決定保留這個
-            ' 2026/3/20, 重寫了底層GetMailCountAll() 但是不知為何效能還是比不過現在下面這個遞迴版本?? (todo: 暫時先保留)
-            ' 原因: 原版遞迴只走一遍 COM 資料夾樹，新版走了兩遍COM:
-            ' 第一遍: GetSubtreeToList()    → BFS 遍歷，存取每個 folder.Folders
-            ' 第二遍: For Each allFolders   → GetMailCountL3() 再讀每個資料夾一次
-            ' 2026/3/22, 導入Redemption, 應該可以刪掉這裡了? 還是讓Redemption 變成on-demand, 需要才啟動?
-            'Parallel.ForEach(folder.Folders.Cast(Of Outlook.Folder),' 取得子資料夾的郵件數量並添加到 ConcurrentBag 中
-            '                 Sub(subFolder As Outlook.Folder)
-            '                     countingBag.Add(GetMailCountRecursive(subFolder))
-            '                 End Sub)
-            'totalMailCount = countingBag.Sum() ' 累加所有子資料夾的郵件數量
-            ''' 最後再獲取選取文件夾自身的郵件數量 (改用MAPI table 的PR_CONTENT_COUNT屬性來getmailcount)
-            ''Const PR_CONTENT_COUNT As String = "http://schemas.microsoft.com/mapi/proptag/0x36020003"
-            ''totalMailCount += folder.PropertyAccessor.GetProperty(PR_CONTENT_COUNT)
-            totalMailCount += GetMailCountL3(folder)  ' 單一目錄的mail count改成重寫的統一底層函數, 2026/3/20
-            _cacheMailCountAll.TryAdd(folder, totalMailCount) ' 第一次計算後就存入快取
-        Catch
-        End Try
-        Return totalMailCount
-
-    End Function
     Private Async Function GetTotalFolderCountAsync(folder As Outlook.Folder) As Task(Of Integer)
         _dbg("開始", folder.Name)
         Dim value As Integer
@@ -313,7 +284,73 @@ Partial Class Form1
         Return totalSize
 
     End Function
+    Private Function GetMailCountRecursiveLegacy(folder As Outlook.Folder) As Integer
+        _dbg("開始", folder.Name)
+        Dim value As Integer
+        If _cacheMailCountAll.TryGetValue(folder, value) Then Return value ' 檢查快取中是否已存在值, 若有則直接返回
+        ' 改成先用 Parallel.ForEach 遍歷子文件夾並且並行處理
+        Dim totalMailCount As Integer = 0
+        Dim countingBag As New ConcurrentBag(Of Integer)()
+        Try
+            ' 5/21記錄: 模仿GetFolderSizeLegacy那一句超快速的LINQ, 但測試結果沒有現在這個快, 所以決定保留這個
+            ' 2026/3/20, 重寫了底層GetMailCountAll() 但是不知為何效能還是比不過現在下面這個遞迴版本?? (todo: 暫時先保留)
+            ' 原因: 原版遞迴只走一遍 COM 資料夾樹，新版走了兩遍COM:
+            ' 第一遍: GetSubtreeToList()    → BFS 遍歷，存取每個 folder.Folders
+            ' 第二遍: For Each allFolders   → GetMailCountL3() 再讀每個資料夾一次
+            ' 2026/3/22, 導入Redemption, 應該可以刪掉這裡了? 還是讓Redemption 變成on-demand, 需要才啟動?
+            'Parallel.ForEach(folder.Folders.Cast(Of Outlook.Folder),' 取得子資料夾的郵件數量並添加到 ConcurrentBag 中
+            '                 Sub(subFolder As Outlook.Folder)
+            '                     countingBag.Add(GetMailCountRecursive(subFolder))
+            '                 End Sub)
+            'totalMailCount = countingBag.Sum() ' 累加所有子資料夾的郵件數量
+            ''' 最後再獲取選取文件夾自身的郵件數量 (改用MAPI table 的PR_CONTENT_COUNT屬性來getmailcount)
+            ''Const PR_CONTENT_COUNT As String = "http://schemas.microsoft.com/mapi/proptag/0x36020003"
+            ''totalMailCount += folder.PropertyAccessor.GetProperty(PR_CONTENT_COUNT)
+            totalMailCount += GetMailCountL3(folder)  ' 單一目錄的mail count改成重寫的統一底層函數, 2026/3/20
+            _cacheMailCountAll.TryAdd(folder, totalMailCount) ' 第一次計算後就存入快取
+        Catch
+        End Try
+        Return totalMailCount
 
+    End Function
+
+    Private Function CalculateSimilarity(strA As String, strB As String) As Double
+        ' by Gemini, 2026/04/04: Issue 1 移除 _dbg (Tab5 高頻呼叫，N封×2個函數=2N行輸出) 
+        ' 計算編輯距離
+        Dim editDistance As Integer = LevenshteinDistance(strA, strB)
+
+        ' 將編輯距離歸一化為範圍在 0 到 1 之間的值
+        Dim maxLength As Integer = Math.Max(strA.Length, strB.Length)
+        Dim similarity As Double = 1 - CDbl(editDistance) / maxLength
+        Return similarity
+
+    End Function
+    Private Function LevenshteinDistance(strA As String, strB As String) As Integer
+        ' by Gemini, 2026/04/04: Issue 1 移除 _dbg (Tab5 高頻呼叫，同上) 
+        ' 計算 Levenshtein 編輯距離的輔助函數
+        Dim lenA As Integer = strA.Length
+        Dim lenB As Integer = strB.Length
+        Dim distance(lenA, lenB) As Integer
+        For i As Integer = 0 To lenA : distance(i, 0) = i : Next
+        For j As Integer = 0 To lenB : distance(0, j) = j : Next
+        For j As Integer = 1 To lenB
+            For i As Integer = 1 To lenA
+                '' 改前 (5行)
+                'If strA(i - 1) = strB(j - 1) Then
+                '    distance(i, j) = distance(i - 1, j - 1)
+                'Else
+                '    distance(i, j) = Math.Min(Math.Min(distance(i - 1, j) + 1,
+                '                                       distance(i, j - 1) + 1), distance(i - 1, j - 1) + 1)
+                'End If
+
+                ' 改後 (1行)
+                distance(i, j) = If(strA(i - 1) = strB(j - 1),
+                    distance(i - 1, j - 1), Math.Min(Math.Min(distance(i - 1, j) + 1,
+                                                              distance(i, j - 1) + 1), distance(i - 1, j - 1) + 1))
+            Next
+        Next
+        Return distance(lenA, lenB)
+    End Function
     Private Async Sub CacheSnifferAsync(cToken As System.Threading.CancellationToken)
         ' === CacheSniffer — 背景快取預讀系統 (B4) ===
         ' ===============================================================================

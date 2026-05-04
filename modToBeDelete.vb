@@ -1,97 +1,15 @@
-Imports System.Collections.Concurrent
+﻿Imports System.Collections.Concurrent
 Imports System.ComponentModel
 Imports System.Runtime.InteropServices
 Imports System.Threading
 Imports System.Windows.Forms.VisualStyles.VisualStyleElement
 Imports Microsoft.Office.Interop
 Imports Microsoft.Office.Interop.Outlook
-Module moduleStore
+Module modToBeDelete
     Private folderSizeCache As New Dictionary(Of Outlook.Folder, Long)
     Private ProgressBar1 As Object
     Private ProgressBar2 As Object
-    Private sw0 As Object
-    Private Async Sub tmrPreCache_Tick(sender As Object, e As EventArgs)
-        ' DebugForm.AddMessage("Begin:")
-        'tmrPreCache.Enabled = False    ' 避免重覆啟動
-        'Dim swa, swb As New Stopwatch
-        'swa.Start() : swb.Start()
-        'For Each store In PstStoreList
-        '    Dim root As Outlook.Folder = store.GetRootFolder
-        '    Dim folderQueue As List(Of Outlook.Folder) = Await Task.Run(Function() GetFolderListByTierAsync(root, preCacheTierIndex))
-        '    For Each f As Outlook.Folder In folderQueue
-        '        Debug.Items.Add("Processing: " & f.FolderPath)
-        '        Dim cache1 = Task.Run(Function() GetTotalFolderCountAsync(f))
-        '        Dim cache2 = Task.Run(Function() GetMailCountByMAPINew(f))
-        '    Next
-        '    swa.Stop()
-        '    Debug.Items.Add(folderQueue.Item(0).FolderPath & " : " & folderQueue.Count & " (" & swa.Elapsed.TotalSeconds.ToString("##,#0.00)"))
-        '    swa.Restart()
-        'Next
-        'If preCacheTierIndex < preCacheMaxTier Then
-        '    preCacheTierIndex += 1 : tmrPreCache.Enabled = True     ' 開始下一輪的預讀
-        '    'Else
-        '    '    tmrPreCache.Enabled = False
-        'End If
-        'Debug.Items.Add("total time: " & swb.Elapsed.TotalSeconds.ToString("##,#0.00)"))
-        'Debug.Items.Add("")
 
-    End Sub
-    Private Sub CacheTotalFolderSize(folder As Outlook.Folder)
-        System.Console.WriteLine($"開始cache資料夾: {Form1.SafeGetPath(folder)}")
-        ' 檢查快取中是否已經存在該資料夾的大小值
-        If folderSizeCache.ContainsKey(folder) Then Return
-        Dim folderSize As Long = 0
-        ' 遞迴計算所有子資料夾的大小
-        For Each subFolder As Outlook.Folder In folder.Folders
-            CacheTotalFolderSize(subFolder)
-            If folderSizeCache.ContainsKey(subFolder) Then
-                folderSize += folderSizeCache(subFolder)
-            End If
-        Next
-        ' 計算當前資料夾中所有項目的大小
-        For Each item As Object In folder.Items
-            If TypeOf item Is Outlook.MailItem Then
-                folderSize += DirectCast(item, Outlook.MailItem).Size
-            End If
-        Next
-        ' 將結果存入快取
-        folderSizeCache(folder) = folderSize
-        System.Console.WriteLine($"完成cache資料夾: {Form1.SafeGetPath(folder)}")
-
-    End Sub
-    Private Sub LoadSubFolders(folder As Outlook.Folder, nodes As TreeNodeCollection, tvwTarget As TreeView)
-        'Dim sortedSubFolders As List(Of Outlook.Folder) = GetSortedSubFoldersAsync(folder).Result
-        'For Each subFolder As Outlook.Folder In sortedSubFolders
-        '    Dim subNode As TreeNode = Nothing
-        '    tvwTarget.Invoke(Sub() subNode = nodes.Add(subFolder.Name))
-        '    subNode.Tag = subFolder : TotalFolderCount += 1
-        '    LoadSubFolders(subFolder, subNode.Nodes, tvwTarget)
-        'Next
-        'tvwTarget.BeginInvoke(Sub()
-        '                          tvwTarget.EndUpdate()
-        'ProgressBar2.Text = "載入所有資料夾花費了 " & sw0.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
-        '                      End Sub)
-
-    End Sub
-    Private Function GetSortedSubFoldersAsync(folder As Outlook.Folder) As Object
-        Throw New NotImplementedException()
-    End Function
-    Private Async Function LoadSubFoldersAsync(folder As Outlook.Folder, nodes As TreeNodeCollection, tvwTarget As TreeView) As Task
-        Dim sortedSubFolders As List(Of Outlook.Folder) = GetSortedSubFoldersAsync(folder)
-        'Dim tasks = sortedSubFolders.Select(Async Function(subFolder)
-        '                                        Dim subNode As TreeNode = Nothing
-        '                                        tvwTarget.Invoke(Sub() '如何在加入之前先刪除第一個節點就好?
-        '                                                             'nodes(0).Remove()
-        '                                                             subNode = nodes.Add(subFolder.Name) 'fixme: 是否應該在這裡檢查重覆節點? (ps. 好像沒用)
-        '                                                         End Sub)
-        '                                        Await Task.Run(Sub()
-        '                                                           subNode.Tag = subFolder : TotalFolderCount += 1
-        '                                                       End Sub)
-        '                                        Await LoadSubFoldersAsync(subFolder, subNode.Nodes, tvwTarget)
-        '                                    End Function)
-        'Await Task.WhenAll(tasks)
-
-    End Function
     Private Async Sub AddSubFoldersToTreeViewByBgWorker(folder As Outlook.Folder, nodes As TreeNodeCollection, tvwTarget As TreeView)
         '這個版本A還不錯, 可以正確執行, 資料夾正確, UI 沒有閃爍, 在背景讀取很好, 執行緒也未發生衝突, 是好的架構, 但是初次顥示有點慢, 按下後大約一秒才出現form.show,
         '雖然沒有占用UI執行緒, 但是全部的讀取時間超過二秒, 比我原來的慢很多, 這樣是正常的嗎? 是因為backgroundworker的執行緒優先權較低嗎?
@@ -331,26 +249,32 @@ Module moduleStore
         Return itemSize
 
     End Function
-    Private Sub ExpandTreeToDefaultInbox(treeview As TreeView)
-        'DebugForm.AddMessage2("Begin: ", treeview.Name)
-        '    If treeview.Nodes.Count > 0 Then
-        '        treeview.Nodes(0).Expand()
-        '        For i As Integer = 0 To treeview.Nodes.Count - 1
-        '            Dim node As TreeNode = treeview.Nodes(0).Nodes(i)
-        '            If node.Text.Contains("Inbox") Or node.Text.Contains("收件匣") Then
-        '                If TypeOf treeview Is MultiSelectTreeView Then     '检查传入的treeview类型, 如果是MultiSelectTreeView，使用SelectedNodes属性
-        '                    Dim multiSelectTreeView As MultiSelectTreeView = CType(treeview, MultiSelectTreeView)
-        '                    multiSelectTreeView.ClearSelectedNodes()
-        '                    multiSelectTreeView.AddNode(node)
-        '                Else                                               '如果是普通的TreeView，使用原有的SelectedNode属性
-        '                    treeview.SelectedNode = node : node.EnsureVisible()
-        '                    treeview.Focus() : Exit Sub
-        '                End If
-        '            End If
-        '        Next
-        '    End If
 
-    End Sub
+    Private Async Function GetInfoForListview(folder As Outlook.Folder, Optional iamSub As Boolean = True) As Task(Of ListViewItem)
+        DebugForm.AddMessage3("Begin: ", folder.Name)
+        'lblStatus1.Text = "正在處理: " & folder.Name
+        ''Dim s1Task = Task.Run(Function() GetTotalFolderCountAsync(folder)) 'sw1
+        ''Dim s2Task = Task.Run(Function() GetTotalFolderCountAsync(folder))  'sw2 (5/21最後決定: 二個函數快慢互有變化, 但GetTotalFolderCountAsync()的穩定性較好, 比New()的標準差來得小, 所以決定使用這個)
+        ''Dim s3Task = Task.Run(Function() GetMailCountByMAPI_Old(folder))  'sw3
+        'Dim s4Task = Task.Run(Function() GetMailCountByMAPINew(folder))     'sw4 (5/21最後決定: 這個還是比較快, 不知道為什麼
+        ''Dim s5Task = Task.Run(Function() GetMailCountByLINQNew(folder))    'sw5
+        ''Await Task.WhenAll(s2Task, s3Task) ' 取消這一行就不會在treeview快速亂點的時候, 舊的還沒算完又顯示到下一個的畫面上了
+        '' 2026/3/6: ✅ 改成 Async Function，直接 Await，不再用 Task.Run 包 COM 呼叫，不再用 .Result 阻塞
+        'Dim s2Task As Integer = Await GetTotalFolderCountAsync(folder)
+        ''Dim s4Task As Integer = Await GetMailCountByMAPINew(folder)
+        'Try
+        '    Dim FolderName As String = If(iamSub, " - " & folder.Name, folder.Name)
+        '    Dim s1 As String = folder.Items.Count.ToString("###,###,##0")
+        '    Dim s2 As String = s2Task.ToString("###,###,##0")
+        '    Dim s3 As String = s4Task.Result.ToString("###,###,##0")
+        '    Dim s4 As String = "", s4value As Integer
+        '    If folderSizeCache.TryGetValue(folder, s4value) Then s4 = (s4value / 1024).ToString("###,###,###,##0KB")
+        '    Return New ListViewItem({FolderName, s1, s2, s3, s4})
+        'Catch
+        'End Try
+        Return Nothing
+
+    End Function
     Private Async Sub TreeView1_AfterSelect(sender As Object, e As TreeViewEventArgs) 'Handles TreeView1.AfterSelect
         DebugForm.AddMessage3("Begin: ")
         '    Dim stopwatch As New Stopwatch() : stopwatch.Start() ' 開始計時
@@ -419,31 +343,6 @@ Module moduleStore
         '    TreeView1.Enabled = True : TreeView1.Focus() : Cursor = Cursors.Default
 
     End Sub
-    Private Async Function GetInfoForListview(folder As Outlook.Folder, Optional iamSub As Boolean = True) As Task(Of ListViewItem)
-        DebugForm.AddMessage3("Begin: ", folder.Name)
-        'lblStatus1.Text = "正在處理: " & folder.Name
-        ''Dim s1Task = Task.Run(Function() GetTotalFolderCountAsync(folder)) 'sw1
-        ''Dim s2Task = Task.Run(Function() GetTotalFolderCountAsync(folder))  'sw2 (5/21最後決定: 二個函數快慢互有變化, 但GetTotalFolderCountAsync()的穩定性較好, 比New()的標準差來得小, 所以決定使用這個)
-        ''Dim s3Task = Task.Run(Function() GetMailCountByMAPI_Old(folder))  'sw3
-        'Dim s4Task = Task.Run(Function() GetMailCountByMAPINew(folder))     'sw4 (5/21最後決定: 這個還是比較快, 不知道為什麼
-        ''Dim s5Task = Task.Run(Function() GetMailCountByLINQNew(folder))    'sw5
-        ''Await Task.WhenAll(s2Task, s3Task) ' 取消這一行就不會在treeview快速亂點的時候, 舊的還沒算完又顯示到下一個的畫面上了
-        '' 2026/3/6: ✅ 改成 Async Function，直接 Await，不再用 Task.Run 包 COM 呼叫，不再用 .Result 阻塞
-        'Dim s2Task As Integer = Await GetTotalFolderCountAsync(folder)
-        ''Dim s4Task As Integer = Await GetMailCountByMAPINew(folder)
-        'Try
-        '    Dim FolderName As String = If(iamSub, " - " & folder.Name, folder.Name)
-        '    Dim s1 As String = folder.Items.Count.ToString("###,###,##0")
-        '    Dim s2 As String = s2Task.ToString("###,###,##0")
-        '    Dim s3 As String = s4Task.Result.ToString("###,###,##0")
-        '    Dim s4 As String = "", s4value As Integer
-        '    If folderSizeCache.TryGetValue(folder, s4value) Then s4 = (s4value / 1024).ToString("###,###,###,##0KB")
-        '    Return New ListViewItem({FolderName, s1, s2, s3, s4})
-        'Catch
-        'End Try
-        Return Nothing
-
-    End Function
     Private Async Sub TreeView2_AfterSelect(sender As Object, e As TreeViewEventArgs) 'Handles TreeView2.AfterSelect
         DebugForm.AddMessage3("Begin: TreeView2_AfterSelect()")
         '    ' 開始計時
@@ -521,22 +420,7 @@ Module moduleStore
         DebugForm.AddMessage3("End: ")
 
     End Sub
-    Private Sub CheckSub2_CheckedChanged(sender As Object, e As EventArgs) ' Handles CheckSub2.CheckedChanged
-        DebugForm.AddMessage3("Begin: ", sender.Name)
-        '    ' 如果有選定節點,則手動呼叫 TreeView2_AfterSelect 事件
-        '    Dim selectedNode = TreeView2.SelectedNode ' 獲取目前選定的 TreeNode
-        '    If TreeView2.Visible = True And selectedNode IsNot Nothing Then TreeView2_AfterSelect(TreeView2, New TreeViewEventArgs(selectedNode))
-        '    'If SimTreeView2.Visible = True Then
-        '    '    If SimTreeView2.SelectedNodes.Count > 1 Then
-        '    '        ' 使用第一個選中的節點作為參數
-        '    '        SimTreeView2_AfterSelect(SimTreeView2, New TreeViewEventArgs(SimTreeView2.SelectedNodes(0)))
-        '    '    Else
-        '    '        SimTreeView2_AfterSelect(SimTreeView2, New TreeViewEventArgs(SimTreeView2.SelectedNode))
-        '    '    End If
-        '    '    SimTreeView2.Focus()
-        '    'End If
 
-    End Sub
     Private Function QueueAllFolderNodes(treeView As TreeView) As List(Of TreeNode)
         ' 獲取 TreeView 中所有資料夾節點的列表（廣度優先）
         Dim nodeList As New List(Of TreeNode)
@@ -599,6 +483,7 @@ Module moduleStore
         Return folderList
 
     End Function
+
     Private Function CountByYears(selectedFolder As Outlook.Folder) As Dictionary(Of Integer, Integer)
         '' 建立一個字典來存儲每個年份的郵件數量
         'Dim yearCounts As New Dictionary(Of Integer, Integer)()
@@ -714,6 +599,22 @@ Module moduleStore
         '    Return yearCounts
 
     End Function
+    Private Sub CheckSub2_CheckedChanged(sender As Object, e As EventArgs) ' Handles CheckSub2.CheckedChanged
+        DebugForm.AddMessage3("Begin: ", sender.Name)
+        '    ' 如果有選定節點,則手動呼叫 TreeView2_AfterSelect 事件
+        '    Dim selectedNode = TreeView2.SelectedNode ' 獲取目前選定的 TreeNode
+        '    If TreeView2.Visible = True And selectedNode IsNot Nothing Then TreeView2_AfterSelect(TreeView2, New TreeViewEventArgs(selectedNode))
+        '    'If SimTreeView2.Visible = True Then
+        '    '    If SimTreeView2.SelectedNodes.Count > 1 Then
+        '    '        ' 使用第一個選中的節點作為參數
+        '    '        SimTreeView2_AfterSelect(SimTreeView2, New TreeViewEventArgs(SimTreeView2.SelectedNodes(0)))
+        '    '    Else
+        '    '        SimTreeView2_AfterSelect(SimTreeView2, New TreeViewEventArgs(SimTreeView2.SelectedNode))
+        '    '    End If
+        '    '    SimTreeView2.Focus()
+        '    'End If
+
+    End Sub
     Private Sub UpdateCounterProgress(ByRef processedCount As Integer, selectedFolderItemCount As Integer, includeSubFolders As Boolean)
         '    ' 6/1進度顯示終於正確:
         '    ' 1. 使用_intProcessedCount和_intTotalMailCount, 二個全域變數來追踪統計完整郵件數量
@@ -734,6 +635,7 @@ Module moduleStore
         '    lblStatus1.Text = $"{processedCount} / {totalCount}"
 
     End Sub
+
     ' 舊的 Bt3_Click 事件處理器，保留以供參考，已被改寫為上面新的版本
     Private Async Sub Button8_Click(sender As Object, e As EventArgs) ' Handles Button8.Click
         DebugForm.AddMessage3("Begin: ")

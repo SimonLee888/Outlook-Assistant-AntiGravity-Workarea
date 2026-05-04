@@ -1,7 +1,7 @@
-<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
+ï»¿<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
 Partial Class DebugForm
     Inherits System.Windows.Forms.Form
-    'Form ÂĞ¼g Dispose ¥H²M°£¤¸¥ó²M³æ¡C
+    'Form è¦†å¯« Dispose ä»¥æ¸…é™¤å…ƒä»¶æ¸…å–®ã€‚
     <System.Diagnostics.DebuggerNonUserCode()> _
     Protected Overrides Sub Dispose(ByVal disposing As Boolean)
         Try
@@ -13,11 +13,11 @@ Partial Class DebugForm
         End Try
 
     End Sub
-    '¬° Windows Form ³]­p¤u¨ãªº¥²­n¶µ
+    'ç‚º Windows Form è¨­è¨ˆå·¥å…·çš„å¿…è¦é …
     Private components As System.ComponentModel.IContainer
-    'ª`·N: ¥H¤U¬° Windows Form ³]­p¤u¨ã©Ò»İªºµ{§Ç
-    '¥i¥H¨Ï¥Î Windows Form ³]­p¤u¨ã¶i¦æ­×§ï¡C
-    '½Ğ¤Å¨Ï¥Îµ{¦¡½X½s¿è¾¹¶i¦æ­×§ï¡C
+    'æ³¨æ„: ä»¥ä¸‹ç‚º Windows Form è¨­è¨ˆå·¥å…·æ‰€éœ€çš„ç¨‹åº
+    'å¯ä»¥ä½¿ç”¨ Windows Form è¨­è¨ˆå·¥å…·é€²è¡Œä¿®æ”¹ã€‚
+    'è«‹å‹¿ä½¿ç”¨ç¨‹å¼ç¢¼ç·¨è¼¯å™¨é€²è¡Œä¿®æ”¹ã€‚
     <System.Diagnostics.DebuggerStepThrough()> _
     Private Sub InitializeComponent()
         Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(DebugForm))

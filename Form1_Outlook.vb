@@ -60,7 +60,7 @@ Partial Class Form1
     ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
     Private Shared _cacheFolderBasicMailInfos As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer))
 
-    Const BATCH_SIZE As Integer = 500  ' 2026/3/24 by Gemini: GetTable.GetArray() 的時候每次批量讀取的筆數
+    Const BATCH_SIZE As Integer = 512  ' 2026/3/24 by Gemini: GetTable.GetArray() 的時候每次批量讀取的筆數
     Private Structure FolderSortInfo
         ' by Gemini, 2026/03/29: 用於 GetSortedSubFolders 排序優化，減少 COM 屬性讀取次數 (O(N) vs O(N log N))
         Dim FolderObj As Outlook.Folder
@@ -311,7 +311,8 @@ Partial Class Form1
         If _db IsNot Nothing Then
             Dim dbIDs = DbGetOrderedSubFolderIDs(fPath, _showAllFolders)
             If dbIDs IsNot Nothing Then
-                Dim dbResults As New List(Of Outlook.Folder)
+                ' 預分配容量為 512，足以涵蓋多數資料夾搜尋結果，減少陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
+                Dim dbResults As New List(Of Outlook.Folder)(512)
                 For Each row In dbIDs
                     Try
                         ' DbGetSubFolderIDList 回傳的是 (eid, sid, path) 的具名 Tuple 列表 by Gemini 3.0 flash, 2026/04/16
@@ -330,7 +331,8 @@ Partial Class Form1
 
         ' ③ 傳統 OOM 分支 (Fallback): 快取未命中時才打 COM 掃描
         ' 收集子資料夾並快取屬性 (減少 COM 屬性重複呼叫)
-        Dim infoList As New List(Of FolderSortInfo)
+        ' 預分配容量為 512，優化資料夾排序時的暫存資訊處理 (by Gemini 3 Flash, 2026/05/04)
+        Dim infoList As New List(Of FolderSortInfo)(512)
         Dim subs As Outlook.Folders = pFolder.Folders
         Try
             For Each subF As Outlook.Folder In subs
@@ -363,7 +365,8 @@ Partial Class Form1
 
         ' 2024/5/20昨天才說不會更快了, 今天改用Nodes.AddRange(), 又更快了一點, 連BeginUpdate/EndUpdate都不需要了
         ' 遍歷 storeList 並創建節點, 加進List而不是直接加到Treeview.Nodes
-        Dim nodeList As New List(Of TreeNode) ' 創建一個 TreeNode 的 List 來暫存所有要添加的節點
+        ' 預分配容量為 64，減少 TreeView 節點批次添加時的 Resize 次數 (by Gemini 3 Flash, 2026/05/04)
+        Dim nodeList As New List(Of TreeNode)(64) ' 創建一個 TreeNode 的 List 來暫存所有要添加的節點
         For Each store In storeList
             Dim root As Outlook.Folder = store.GetRootFolder
             Dim node As New TreeNode(root.Name) With {.Tag = root}
@@ -391,7 +394,8 @@ Partial Class Form1
             selectedNode.Nodes.Clear()  '清除原本暫代的假node ":::"
             ' 5/20昨天才說不會更快了, 今天改用Nodes.AddRange(), 又更快了一點, 連BeginUpdate/EndUpdate都不需要了
             ' 遍歷 storeList 並創建節點, 先加進List而不是直接加到Treeview.Nodes
-            Dim nodeList As New List(Of TreeNode) ' 創建一個 TreeNode 的 List 來暫存所有要添加的節點
+            ' 預分配容量為 64，優化多層級資料夾展開時的節點生成 (by Gemini 3 Flash, 2026/05/04)
+            Dim nodeList As New List(Of TreeNode)(64) ' 創建一個 TreeNode 的 List 來暫存所有要添加的節點
             For Each folder As Outlook.Folder In sortedFolders
                 Dim node As New TreeNode(folder.Name) With {.Tag = folder}
                 Try
@@ -439,7 +443,8 @@ Partial Class Form1
         ''' 2026/04/16 by Gemini: 升級回傳 Tuple (Folder, fPath)，消除呼叫端對 COM .FolderPath 的一次性集體讀取
         ''' </summary>
         _dbg(" ├ 開始")
-        Dim fList As New List(Of (Folder As Outlook.Folder, fPath As String))
+        ' 預分配容量為 512，優化多選資料夾後的路徑合併清單處理 (by Gemini 3 Flash, 2026/05/04)
+        Dim fList As New List(Of (Folder As Outlook.Folder, fPath As String))(512)
         Dim addedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
 
         For Each node As TreeNode In selectedNodes
@@ -484,7 +489,8 @@ Partial Class Form1
         ' 注意: DB 存放的是 (EntryID, StoreID, FolderPath)，我們在這裡重建 Tuple
         Dim dbIDs = DbGetSubFolderIDList(rootPath, _showAllFolders)                ' ② DB lazy load
         If dbIDs IsNot Nothing Then
-            Dim dbResults As New List(Of (Folder As Outlook.Folder, fPath As String))
+            ' 預分配容量為 512，優化從 DB 載入資料夾子樹時的處理速度 (by Gemini 3 Flash, 2026/05/04)
+            Dim dbResults As New List(Of (Folder As Outlook.Folder, fPath As String))(512)
             For Each row In dbIDs
                 Try
                     ' DbGetSubFolderIDList 回傳的是 (eid, sid, path) 的具名 Tuple 列表 by Gemini 3.0 flash, 2026/04/16
@@ -832,7 +838,7 @@ Partial Class Form1
                                                         Try
                                                             rdoMsg = TryCast(_rdo.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
                                                             If rdoMsg IsNot Nothing Then
-                                                                Dim list As New List(Of String)()
+                                                                Dim list As New List(Of String)(512)
                                                                 For i As Integer = 1 To rdoMsg.Attachments.Count    ' COM 的 index 從 1 開始而不是0
                                                                     list.Add(rdoMsg.Attachments.Item(i).FileName)
                                                                 Next
@@ -881,7 +887,7 @@ Partial Class Form1
         ' 設定並發數：嘗試設為 CPU 核心數的 4 倍，壓榨 SSD 的 Queue Depth
         Dim maxConcurrency As Integer = Environment.ProcessorCount * 4
         Dim throttler As New SemaphoreSlim(maxConcurrency)
-        Dim tasks As New List(Of Task)()
+        Dim tasks As New List(Of Task)(32)
 
         For Each m As MailItemInfo In sourceList
             Dim mail = m ' 在 lambda 中避免變數捕獲問題
@@ -894,7 +900,7 @@ Partial Class Form1
                                            Try
                                                rdoMsg = TryCast(_rdo.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
                                                If rdoMsg IsNot Nothing Then
-                                                   Dim list As New List(Of String)()
+                                                   Dim list As New List(Of String)(512)
                                                    For i As Integer = 1 To rdoMsg.Attachments.Count
                                                        list.Add(rdoMsg.Attachments.Item(i).FileName)
                                                    Next
@@ -1394,7 +1400,8 @@ Partial Class Form1
         Dim table As Outlook.Table = Nothing
 
         Dim strFilterHasAttachment As String = "@SQL=" & Chr(34) & "urn:schemas:httpmail:hasattachment" & Chr(34) & " = True"
-        Dim result As New List(Of MailItemInfo)
+        ' 預分配容量為 4096，顯著降低掃描大量附件郵件時的記憶體配置開銷 (by Gemini 3 Flash, 2026/05/04)
+        Dim result As New List(Of MailItemInfo)(4096)
 
         ' 2026/04/22 by Gemini 3.1 Pro: 提前取得路徑，讓此資料夾內的所有郵件都能獲得歸屬路徑，且只需 1 次 COM 存取
         Dim fPath As String = ""
@@ -1453,7 +1460,8 @@ Partial Class Form1
 
         If _iLikeNoisy Then _dbg("    ├ 開始 (掃描)", fName)
 
-        Dim resultList As New List(Of (MailItemInfo, String))
+        ' 預分配容量為 4096，優化批次讀取郵件基本資訊時的清單填充 (by Gemini 3 Flash, 2026/05/04)
+        Dim resultList As New List(Of (MailItemInfo, String))(4096)
         Dim table As Outlook.Table = Nothing
         Try
             table = folder.GetTable()
@@ -1505,7 +1513,7 @@ Partial Class Form1
     Private Function GetAttachFilenameL3(mail As MailItemInfo) As List(Of String)
         ' by Gemini, 2026/04/04: 取得郵件的附件檔名清單 (純 Layer3 邏輯，不做快取)
         If _iLikeNoisy Then _dbg("    ├ 開始", mail.Subject)
-        Dim result As New List(Of String)()
+        Dim result As New List(Of String)(4096)
 
         ' ⓪ Redemption 優先: 繞過 OOM 開信的記憶體開銷，直接透過 MAPI Table 抓取檔名
         If _rdo IsNot Nothing Then
@@ -1577,7 +1585,8 @@ Partial Class Form1
         Dim sw As New Stopwatch() : sw.Start()
         Dim swThrottle As New Stopwatch() : swThrottle.Start()
 
-        Dim result As New List(Of (Folder As Outlook.Folder, fPath As String))
+        ' 預分配容量為 512，足以涵蓋 90% 以上用戶的資料夾數量，避免 BFS 過程中的陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
+        Dim result As New List(Of (Folder As Outlook.Folder, fPath As String))(512)
         result.Add((rootFolder, rootPath))
 
         If Not includeSubF Then
@@ -1587,30 +1596,36 @@ Partial Class Form1
         End If
 
         ' BFS COM 掃描 (快取 miss 時走此路徑)
-        Dim queue As New Queue(Of (Folder As Outlook.Folder, Path As String))
+        Dim queue As New Queue(Of (Folder As Outlook.Folder, Path As String))(512)
         queue.Enqueue((rootFolder, rootPath))
         Try
             While queue.Count > 0
                 Dim current = queue.Dequeue()
                 Try
-                    For Each subF As Outlook.Folder In current.Folder.Folders
-                        ' 2026/04/24 by Gemini 3.0 flash: 將可能發生 COM 崩潰的讀取點全部加上安全保護
-                        Dim fName As String = ""
-                        Try : fName = subF.Name : Catch : Continue For : End Try
+                    ' 優化第六點：提取 Folders 集合並在 Finally 顯式釋放，防止 BFS 過程中的 RCW 洩漏 (by Gemini 3 Flash, 2026/05/05)
+                    Dim subFolders As Outlook.Folders = current.Folder.Folders
+                    Try
+                        For Each subF As Outlook.Folder In subFolders
+                            ' 2026/04/24 by Gemini 3.0 flash: 將可能發生 COM 崩潰的讀取點全部加上安全保護
+                            Dim fName As String = ""
+                            Try : fName = subF.Name : Catch : Continue For : End Try
 
-                        ' ✅ 通過參數傳遞 childPath，IsMailFolder 內部不再重複呼叫 COM
-                        Dim childPath As String = current.Path & "\" & fName
-                        Dim isMail As Boolean = IsMailFolder(subF, childPath)
-                        If Not _showAllFolders AndAlso Not isMail Then Continue For
+                            ' ✅ 通過參數傳遞 childPath，IsMailFolder 內部不再重複呼叫 COM
+                            Dim childPath As String = current.Path & "\" & fName
+                            Dim isMail As Boolean = IsMailFolder(subF, childPath)
+                            If Not _showAllFolders AndAlso Not isMail Then Continue For
 
-                        ' ✅ 加強 EntryID/StoreID 讀取的安全性
-                        Try
-                            _cacheFolderIDs.TryAdd(childPath, (subF.EntryID, subF.StoreID, isMail, TextHasChineseChar(fName)))
-                        Catch : End Try
+                            ' ✅ 加強 EntryID/StoreID 讀取的安全性
+                            Try
+                                _cacheFolderIDs.TryAdd(childPath, (subF.EntryID, subF.StoreID, isMail, TextHasChineseChar(fName)))
+                            Catch : End Try
 
-                        result.Add((subF, childPath))   ' ✅ 同步存入預計好的路徑，不再打 COM
-                        queue.Enqueue((subF, childPath))
-                    Next
+                            result.Add((subF, childPath))   ' ✅ 同步存入預計好的路徑，不再打 COM
+                            queue.Enqueue((subF, childPath))
+                        Next
+                    Finally
+                        TryMarshalRelease(subFolders)
+                    End Try
                 Catch ex As System.Exception
                     If _iLikeNoisy Then _dbg("    ├ ① OOM 失敗", ExtractFolderName(current.Path) & " - " & ex.Message)
                 End Try
@@ -2023,10 +2038,16 @@ Partial Class Form1
             Dim count As Integer = GetMailCountL3(rootFolder)     ' 本層 mailcount
             If count >= 0 Then totalCount += count
             Await Task.Yield()
-            For Each f As Outlook.Folder In rootFolder.Folders
-                Dim subCount As Long = Await GetMailCountAllL3(f, cToken:=cToken) ' 遞迴，傳遞 cToken
-                If subCount >= 0 Then totalCount += subCount
-            Next
+            ' 優化第六點：提取 Folders 集合並在 Finally 顯式釋放，防止遞迴過程中的 RCW 洩漏 (by Gemini 3 Flash, 2026/05/05)
+            Dim subFolders As Outlook.Folders = rootFolder.Folders
+            Try
+                For Each f As Outlook.Folder In subFolders
+                    Dim subCount As Long = Await GetMailCountAllL3(f, cToken:=cToken) ' 遞迴，傳遞 cToken
+                    If subCount >= 0 Then totalCount += subCount
+                Next
+            Finally
+                TryMarshalRelease(subFolders)
+            End Try
             If _iLikeNoisy Then _dbg("    ├ 結束", $"③ 遞迴fallback成功: {rName} | total={totalCount}")
             Return totalCount
         Catch ex As System.Exception
@@ -2185,7 +2206,7 @@ Partial Class Form1
         ' 範例: "\\A\B\C" -> {"\\A\B", "\\A"}
         ' by Gemini 3.0 flash, 2026/04/24
         ' ---------------------------------------------------------------
-        Dim ancestors As New List(Of String)
+        Dim ancestors As New List(Of String)(8)
         Dim current = GetParentPath(fPath)
         While Not String.IsNullOrEmpty(current)
             ancestors.Add(current)

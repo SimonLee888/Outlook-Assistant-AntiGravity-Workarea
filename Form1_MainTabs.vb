@@ -39,22 +39,31 @@ Partial Class Form1
     Private _lv2DataMonth As ConcurrentDictionary(Of Integer, Integer) = Nothing ' Tab2 月份視圖 session 快取 (已合併多資料夾)；_tab2MonthViewYear 記錄對應年份 (方案A：單一變數) 
     Private _tab2FolderList As List(Of (Folder As Outlook.Folder, fPath As String)) = Nothing    ' 記住目前 Tab2 的資料夾清單，供月份展開使用
 
-    Private _lv3MailList As New List(Of MailItemInfo)()             ' by Gemini, 2026/04/10: Tab3 顯示資料庫 (虛擬模式核心)
-    Private lv3SortOrder As SortOrder = SortOrder.Ascending         ' 設置初始排序方式為升序
-    Private lv3LastSortColumn As Integer = -1                       ' 儲存上一次點選的列索引
+    ' ── Tab5 SimTree 多選控制項 (2026/05/01 by Claude: 取代舊版 TreeView5，對齊 Tab1~4 操作行為) ──
+    ' Private WithEvents SimTree5 As SimTree = Nothing
+    Private _includeSubTab5 As Boolean = True   ' Tab5 永遠包含子資料夾 (重複郵件需要完整掃描)
+
+    ' 預分配容量為 2048，因應 Tab3 可能載入的大量郵件資訊，顯著降低記憶體配置開銷 (by Gemini 3 Flash, 2026/05/04)
+    Private _lv3MailList As New List(Of MailItemInfo)(2048)             ' by Gemini, 2026/04/10: Tab3 顯示資料庫 (虛擬模式核心)
+    Private lv3SortOrder As SortOrder = SortOrder.Ascending             ' 設置初始排序方式為升序
+    Private lv3LastSortColumn As Integer = -1                           ' 儲存上一次點選的列索引
 
     Private _currentTabIdx As Integer = 0
-    Private _isTab4ShowingResults As Boolean = False                ' ✅ 2026/04/20 by Gemini 2.0 Flash: 標記 Tab4 左側樹目前顯示的是搜尋結果模式
-    Private _tab4SortGroupsByCount As Boolean = True                ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記錄排序方式 (True=數量, False=主旨)
-    Private _tab4LastSearchFolders As New List(Of Outlook.Folder)() ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶最後一次搜尋的多個資料夾
+    Private _isTab4ShowingResults As Boolean = False                    ' ✅ 2026/04/20 by Gemini 2.0 Flash: 標記 Tab4 左側樹目前顯示的是搜尋結果模式
+    Private _tab4SortGroupsByCount As Boolean = True                    ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記錄排序方式 (True=數量, False=主旨)
+    ' 預分配容量為 512，足以涵蓋多數搜尋路徑結構，減少陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
+    Private _tab4LastSearchFolders As New List(Of Outlook.Folder)(32)   ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶最後一次搜尋的多個資料夾
     Private _tab4LastTopicResults As Dictionary(Of String, List(Of MailItemInfo)) = Nothing ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記憶搜尋結果，供 F6 操作使用
-    Private _tab4FolderTreeNodesBackup As New List(Of TreeNode)()   ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶資料夾模式下的節點狀態 (含展開狀態)
-    Private _tab4LastClickedFolderNode As TreeNode = Nothing        ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶進入結果模式前的最後一個選中節點
+    ' 預分配容量為 512，以減少大資料量下 UI 節點備份的 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
+    Private _tab4FolderTreeNodesBackup As New List(Of TreeNode)(32)     ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶資料夾模式下的節點狀態 (含展開狀態)
+    Private _tab4LastClickedFolderNode As TreeNode = Nothing            ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶進入結果模式前的最後一個選中節點
 
-    Private _lv4SortOrder As SortOrder = SortOrder.Ascending        ' by Gemini 3 Flash, 2026/04/19: 加入 ListView4 專屬排序狀態 (避免與 LV3 共用變數互相干擾)
-    Private _lv4LastSortColumn As Integer = -1                      ' by Gemini 3 Flash, 2026/04/19: 加入 ListView4 專屬排序狀態 (避免與 LV3 共用變數互相干擾)
-    Private _lv4LastHoverItem As ListViewItem = Nothing             ' by Gemini 3 Flash, 2026/04/19: 自訂 ListView4 ToolTip 延遲顯示邏輯
-    Private _lv4GroupSortByCount As Boolean = False                 ' by Gemini 3 Flash, 2026/04/20: 記錄 Tab4 ListView4 分組排序模式 (False:按主旨, True:按數量)
+    Private _lv4SortOrder As SortOrder = SortOrder.Ascending            ' by Gemini 3 Flash, 2026/04/19: 加入 ListView4 專屬排序狀態 (避免與 LV3 共用變數互相干擾)
+    Private _lv4LastSortColumn As Integer = -1                          ' by Gemini 3 Flash, 2026/04/19: 加入 ListView4 專屬排序狀態 (避免與 LV3 共用變數互相干擾)
+    Private _lv4LastHoverItem As ListViewItem = Nothing                 ' by Gemini 3 Flash, 2026/04/19: 自訂 ListView4 ToolTip 延遲顯示邏輯
+    Private _lv4GroupSortByCount As Boolean = False                     ' by Gemini 3 Flash, 2026/04/20: 記錄 Tab4 ListView4 分組排序模式 (False:按主旨, True:按數量)
+    Private _lv4BodyCache As New ConcurrentDictionary(Of String, String) ' by Gemini 3 Flash, 2026/04/26: Tab4 相似度計算用的 Body 快取 (session 級，避免重複讀取 Outlook mailitem.Body)
+    Private _lv4SimCts As CancellationTokenSource = Nothing             ' by Gemini 3 Flash, 2026/04/26: 用於游標快速移動時, 取消前一次未完成的相似度計算任務
 
     Private Structure ProgressReport            ' by Gemini, 2026/04/02: 統一進度回報結構，用於 IProgress(Of T)
         Dim CurrentCount As Integer             ' 目前完成數 (郵件數、資料夾數或位元組)
@@ -202,7 +211,7 @@ Partial Class Form1
         ' 解法: 用 HashSet 快速查找，若某節點的任一祖先也在選中清單裡，就跳過該節點。      
         '       只保留「沒有任何祖先被選中」的節點，確保每封郵件只被計算一次。
         Dim selectedSet As New HashSet(Of TreeNode)(selectedNodes)
-        Dim dedupedNodes As New List(Of TreeNode)
+        Dim dedupedNodes As New List(Of TreeNode)(64) ' 預分配容量為 64，優化多選時的 List 操作效能 (by Gemini 3 Flash, 2026/05/04)
         For Each node As TreeNode In selectedNodes
             Dim isDescendantOfSelected As Boolean = False
             Dim ancestor As TreeNode = node.Parent
@@ -223,7 +232,8 @@ Partial Class Form1
         ProgressBar1.Text = "" : ProgressBar2.Text = ""
 
         Try
-            Dim allItems As New List(Of ListViewItem)
+            ' 預分配容量為 128，優化大資料夾下的 UI 項目渲染效能 (by Gemini 3 Flash, 2026/05/04)
+            Dim allItems As New List(Of ListViewItem)(128)
             Dim subTotalMail As Long = 0
             Dim subTotalFolders As Integer = 0
             Dim multiMode As Boolean = dedupedNodes.Count > 1  ' 以去重後數量判斷
@@ -339,17 +349,42 @@ Partial Class Form1
             '     Dim item As ListViewItem = FindLvItemByName(lv, itemName) ' 找出剛才退出前的資料夾
             '     If item IsNot Nothing Then item.Selected = True : item.Focused = True : lv.Focus()
             ' End If
-                        ' 2026/04/22 by Gemini 3.1 Pro: 依照使用者要求，不管在哪裡，ESC 直接焦點回歸左側樹狀結構
+            ' 2026/04/22 by Gemini 3.1 Pro: 依照使用者要求，不管在哪裡，ESC 直接焦點回歸左側樹狀結構，取消上面複雜的「退回上一層」邏輯
             SimTree1.Focus()
             e.Handled = True
             e.SuppressKeyPress = True
 
-        ElseIf e.Control AndAlso e.KeyCode = Keys.A Then                    ' Ctrl-A 全選 listview1 所有項目
+        ElseIf e.Control AndAlso e.KeyCode = Keys.A Then    ' Ctrl-A 全選 listview1 所有項目
             lv.BeginUpdate()
             For Each item As ListViewItem In lv.Items
                 item.Selected = True
             Next
             lv.EndUpdate()
+            e.Handled = True
+            e.SuppressKeyPress = True
+
+        ElseIf e.Control AndAlso e.KeyCode = Keys.C Then    ' Ctrl-C 複製選取列到剪貼簿 (by Claude Sonnet 4.6, 2026/04/27)
+            ' 格式: Tab 分隔欄位，換行分隔列，直接貼入 Excel 即可對齊欄位
+            If lv.SelectedItems.Count = 0 Then Return
+            Dim sb As New System.Text.StringBuilder
+
+            ' 先加入標題列 (by Gemini 3.1 Pro, 2026/04/27)
+            Dim headers As New List(Of String)(64) ' 預分配容量為 64，優化多欄位的 List 操作效能 (by Gemini 3 Flash, 2026/05/04)
+            For Each col As ColumnHeader In lv.Columns
+                headers.Add(col.Text.Trim())
+            Next
+            sb.AppendLine(String.Join(vbTab, headers))
+
+            For Each item As ListViewItem In lv.SelectedItems
+                Dim cols As New List(Of String)(64) ' 預分配容量為 64，優化多欄位的 List 操作效能 (by Gemini 3 Flash, 2026/05/04)
+                For Each si As ListViewItem.ListViewSubItem In item.SubItems   ' by Claude Sonnet 4.6, 2026/04/27: sub 是 VB 保留字，改用 si
+                    ' 去除頭尾空白，以及 "-"、"▸" 等視覺裝飾字元
+                    cols.Add(si.Text.Trim(" "c, "-"c, "▸"c, "▶"c))
+                Next
+                sb.AppendLine(String.Join(vbTab, cols))
+            Next
+            Clipboard.SetText(sb.ToString())
+            ProgressBar2.Text = $"已複製標題與 {lv.SelectedItems.Count:N0} 列到剪貼簿。"
             e.Handled = True
             e.SuppressKeyPress = True
         End If
@@ -467,20 +502,23 @@ Partial Class Form1
         ' 展開 SelectedNode 只觸發一次 BeforeExpand → LoadSubFolderToTreeView，這是正確且必要的。
         ' 問題出在舊版後續的 TreeView1.SelectedNode = foundNode:
         '       WinForms setter 內部呼叫 Win32 TVM_ENSUREVISIBLE，TVM_ENSUREVISIBLE 沿祖先鏈逐一 Expand()，
-        '       每個都觸發 BeforeExpan，d → LoadSubFolderToTreeView，即使 foundNode 是直屬子節點也如此 (Win32 層不知道它已可見) 。
+        '       每個都觸發 BeforeExpand → LoadSubFolderToTreeView，即使 foundNode 是直屬子節點也如此 (Win32 層不知道它已可見) 。
         '
         ' 修正方案:
-        '   ① SelectedNode.Expand()         → 只展開父節點，載入真實子節點 (一次 BeforeExpand，正確)
+        '   ① parentNode.Expand()            → 只展開父節點，載入真實子節點 (一次 BeforeExpand，正確)
         '   ② 在真實子節點裡找 foundNode     → 不遞迴 (FindNodeByName 每個節點都 Expand()，已知錯誤)
-        '   ③ foundNode.Tag判斷folder.count → 確認目標資料夾有子資料夾才進入
-        '   ④ SendMessage TVM_SELECTITEM    → 直接在 Win32 層選取 foundNode，
-        '      繞過 WinForms setter 的 EnsureVisible 路徑，不再展開任何額外節點。
-        '      Win32 TVM_SELECTITEM 仍會發出 TVN_SELCHANGED，
-        '      WinForms 收到後自動觸發 SimTree1_AfterSelect，行為與原本完全一致。
+        '   ③ foundNode.Tag判斷folder.count  → 確認目標資料夾有子資料夾才進入
+        '   ④ SimTree1 選取方法              → 更新 _selectedNodes + 觸發 AfterSelect
         '
         ' ★ 2026/04/13 by Simon/Claude: SimTree1 升級後，Tag 改為 ValueTuple:
         '   群組標題行 & 合計列 → Tag = Nothing → 直接 Return，不進入
         '   一般子資料夾行     → Tag = (SubFolder, ParentNode) → 從 ParentNode 直接取得父節點，不再依賴 TreeView1.SelectedNode
+        '
+        ' ★ 2026/04/30 by Simon/Claude: 修正④步 SendMessage TVM_SELECTITEM 的根本缺陷
+        '   原本用 Win32 TVM_SELECTITEM 觸發 TVN_SELCHANGED → AfterSelect，但此路徑
+        '   完全繞過 SimTree 內部的 _selectedNodes 清單，導致 AfterSelect 讀到的
+        '   SimTree1.SelectedNodes 仍是舊選取（父資料夾），不是 foundNode，統計算錯資料夾。
+        '   修正：改呼叫 SimTree 自己的選取方法，與 ExpandTvToDefaultInbox 的路徑一致。
         _dbg(" ├ 開始", selectedItem.SubItems(0).Text)
 
         ' 群組標題行 / 合計列的 Tag 是 Nothing，不可進入
@@ -523,14 +561,100 @@ Partial Class Form1
         End If
         foundNode.EnsureVisible()
 
-        ' ④ 用 Win32 直接選取，繞過 WinForms SelectedNode setter 的 EnsureVisible 路徑
-        '    Win32 TVM_SELECTITEM 仍會發出 TVN_SELCHANGED → SimTree1.AfterSelect → SimTree1_AfterSelect
-        SendMessage(SimTree1.Handle, TVM_SELECTITEM, New IntPtr(TVGN_CARET), foundNode.Handle)
+        ' ④ SimTree 選取方法：更新 _selectedNodes 並手動觸發 AfterSelect
+        ' 2026/04/30 by Simon/Claude: 取代原本的 SendMessage TVM_SELECTITEM
+        '   TVM_SELECTITEM 只改 Win32 游標節點，不更新 SimTree._selectedNodes，
+        '   導致 AfterSelect 讀到舊的 SelectedNodes，統計算錯資料夾。
+        '   改用 SimTree 自己的方法，與 ExpandTvToDefaultInbox 的路徑完全一致。
+        SimTree1.ClearSelectedNodes()
+        SimTree1.AddSelectedNode(foundNode)
+        SimTree1.FireAfterSelect(foundNode)
         ListView1.Focus()
         If ListView1.Items.Count > 0 Then ListView1.Items(0).Selected = True
         _dbg("結束")
 
     End Sub
+    Private Function BuildLv1GroupHeader(rootEntry As FolderBfsEntry, parentNode As TreeNode) As ListViewItem
+        ' 群組標題行：取代舊版的 isRoot=True 第一列
+        ' 顯示選中資料夾本身的完整統計 (TotalMailCount / TotalSubCount) 
+        ' 欄位: ▸ 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小 (5欄回归) 
+        ' Tag = Nothing：EnterSelectedFolder 與 ComputeFolderSize 看到 Nothing 直接跳過
+        ' 2026/04/13 by Simon/Claude: B方案 — 統一格式，單選與多選皆顯示群組標題行
+        ' 2026/04/13 v2: 移除「所屬父資料夾」欄 (該欄內容永遠等於標題行本身，元余) 
+        _dbg("    ├ 開始")
+
+        Dim sizeStr As String = "- "
+        Dim sizeVal As Long
+        If _cacheFolderSizeAll.TryGetValue(SafeGetPath(rootEntry.Folder), sizeVal) AndAlso sizeVal > 0 Then
+            sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB "
+        End If
+
+        Dim directMailStr As String = rootEntry.DirectMailCount.ToString("N0") & " "
+        Dim totalSubStr As String = rootEntry.TotalSubCount.ToString("N0") & " "
+        Dim totalMailStr As String = rootEntry.TotalMailCount.ToString("N0") & " "
+
+        ' 欄位順序: 名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
+        Dim lvi As New ListViewItem({"▸ " & rootEntry.Folder.Name, directMailStr, totalSubStr, totalMailStr, sizeStr})
+        lvi.Font = New Font(ListView1.Font, _fontBold)
+        lvi.BackColor = SystemColors.GradientInactiveCaption
+        lvi.Tag = Nothing
+        Return lvi
+        _dbg("    ├ 結束") ' by Gemini, 2026/04/10
+
+    End Function
+    Private Function BuildLv1Item(entry As FolderBfsEntry, parentNode As TreeNode) As ListViewItem
+        ' 組裝 ListView1 的單一資料列 (直屬子資料夾) 
+        ' 欄位: 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小(Lazy)
+        ' 2026/04/13 by Simon/Claude: B方案升級
+        '   - 移除 isRoot 參數 (群組標題行已獨立為 BuildLv1GroupHeader) 
+        '   - 移除 parentFolderName 參數 (該欄元余，已移除) 
+        '   - parentNode 存入 Tag ValueTuple，供 EnterSelectedFolder 使用
+        '   - Tag 改為 ValueTuple(SubFolder, ParentNode)，ComputeFolderSize 同步更新
+        ' 舊版註記: by Gemini, 2026/03/31: 視覺優化重構
+        '   1. 資料夾名稱：还原開頭縮排空白 (" - ")，保持整齊。
+        '   2. 防止切邊：斜體時字串結尾補一格空白。
+
+        Dim isItalicFolder As Boolean = Not IsMailFolder(entry.Folder)
+        Dim displayName As String = " - " & entry.Folder.Name
+        If isItalicFolder Then displayName &= " "
+
+        ' 大小: Lazy，從快取讀；未計算過則留空，等 ColumnClick 或右鍵選單觸發計算
+        Dim sizeStr As String = "- "
+        Dim sizeVal As Long
+        If _cacheFolderSizeAll.TryGetValue(SafeGetPath(entry.Folder), sizeVal) AndAlso sizeVal > 0 Then sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB"
+        ' 統計數字字串化 (字串結尾一律補一格空白，確保斜體與正常字體對齊且不切邊)
+        Dim directMailStr As String = entry.DirectMailCount.ToString("N0") & " "
+        Dim totalSubStr As String = entry.TotalSubCount.ToString("N0") & " "
+        Dim totalMailStr As String = entry.TotalMailCount.ToString("N0") & " "
+        If sizeStr <> "- " Then sizeStr &= " "
+
+        ' 欄位順序: 名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
+        Dim lvi As New ListViewItem({displayName, directMailStr, totalSubStr, totalMailStr, sizeStr})
+        ' by Gemini, 2026/03/29: 特殊顯示非郵件資料夾 (斜體 + 灰色)
+        If isItalicFolder Then
+            lvi.ForeColor = Color.DarkGray
+            lvi.Font = New Font(ListView1.Font, _fontItalic)
+        End If
+
+        ' 2026/04/13 by Simon/Claude: Tag 改為 ValueTuple，ComputeFolderSize 與 EnterSelectedFolder 同步更新
+        lvi.Tag = (SubFolder:=entry.Folder, ParentNode:=parentNode)
+        Return lvi
+
+    End Function
+    Private Function BuildLv1SumRow(selectedCount As Integer, totalSub As Integer, totalMail As Long) As ListViewItem
+        ' 合計列：多選模式才插入，顯示跨資料夾加總。Tag = Nothing
+        ' Tag = Nothing：同群組標題行，不可進入
+        ' 2026/04/13 by Simon/Claude: B方案新增，5欄格式
+        Dim totalMailStr As String = totalMail.ToString("N0") & " "
+        Dim totalSubStr As String = totalSub.ToString("N0") & " "
+        Dim lvi As New ListViewItem({"▶ 合計 (" & selectedCount.ToString("N0") & " 個資料夾) ", "", totalSubStr, totalMailStr, ""})
+        lvi.Font = New Font(ListView1.Font, _fontBold)
+        lvi.BackColor = Color.FromArgb(220, 235, 252)
+        lvi.ForeColor = Color.FromArgb(0, 70, 140)
+        lvi.Tag = Nothing
+        Return lvi
+
+    End Function
 #End Region
 #Region "  └ 輔助函數"
     ' 以下為 ComputeFolderStatsAsync 專用的拆分子函數 (Steps 1~5)
@@ -539,8 +663,9 @@ Partial Class Form1
         ' 產出: 所有走訪過的資料夾陣列，每個元素皆紀錄了其 ParentIndex。
         If _iLikeNoisy Then _dbg("    ├ 開始", rootFolder.Name)
 
-        Dim allEntries As New List(Of FolderBfsEntry)
-        Dim queue As New Queue(Of (folderObj As Outlook.Folder, parentIdx As Integer, path As String))
+        ' 預分配容量為 512，足以涵蓋 90% 以上用戶的資料夾數量，避免 BFS 過程中的陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
+        Dim allEntries As New List(Of FolderBfsEntry)(512)
+        Dim queue As New Queue(Of (folderObj As Outlook.Folder, parentIdx As Integer, path As String))(512)
         queue.Enqueue((rootFolder, -1, SafeGetPath(rootFolder)))
 
         ' by Gemini, 2026/04/05: 每 100ms 主動讓出執行緒並檢查中斷，兼顧效能與靈敏度
@@ -586,7 +711,9 @@ Partial Class Form1
 
                 ' 未命中，或是 root (不論有無快取) → 展開直屬子資料夾
                 ' 傳入 fPath 給 GetSortedSubFolders 省去內部重爬 COM，並用字串組裝下一層路徑 (by Gemini 3.1 Pro)
-                For Each subFolder As Outlook.Folder In GetSortedSubFolders(curr.folderObj, fPath)
+                ' 優化第七點：將 GetSortedSubFolders 提取至變數，提升代碼可讀性並利於 Debug (by Gemini 3 Flash, 2026/05/05)
+                Dim sortedSubs = GetSortedSubFolders(curr.folderObj, fPath)
+                For Each subFolder As Outlook.Folder In sortedSubs
                     queue.Enqueue((subFolder, myIdx, fPath & "\" & subFolder.Name))
                 Next
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii)  ' 2026/04/16 by Simon/Claude: 改用 SmartThrottle，省去 If/Restart/Task.Delay 三行套路
@@ -676,7 +803,8 @@ Partial Class Form1
         ' 負責: 找出 root 與直屬子資料夾 (ParentIndex=0) 組裝成新的 UI 呈現清單，並在最後發布結束進度。
         If _iLikeNoisy Then _dbg("    ├ 開始")
 
-        Dim result As New List(Of FolderBfsEntry)
+        ' 預分配容量為 512，對應 BFS 展開後的資料夾清單 (by Gemini 3 Flash, 2026/05/04)
+        Dim result As New List(Of FolderBfsEntry)(512)
         result.Add(allEntries(0))   ' index 0 = rootFolder 本身
 
         For i As Integer = 1 To allEntries.Count - 1
@@ -698,88 +826,6 @@ Partial Class Form1
 
         _dbg("    ├ 結束", $"回傳 {result.Count:N0} 列 (1 root + {result.Count - 1:N0} 直屬子資料夾)") ' by Gemini, 2026/04/10
         Return result
-
-    End Function
-
-    Private Function BuildLv1GroupHeader(rootEntry As FolderBfsEntry, parentNode As TreeNode) As ListViewItem
-        ' 群組標題行：取代舊版的 isRoot=True 第一列
-        ' 顯示選中資料夾本身的完整統計 (TotalMailCount / TotalSubCount) 
-        ' 欄位: ▸ 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小 (5欄回归) 
-        ' Tag = Nothing：EnterSelectedFolder 與 ComputeFolderSize 看到 Nothing 直接跳過
-        ' 2026/04/13 by Simon/Claude: B方案 — 統一格式，單選與多選皆顯示群組標題行
-        ' 2026/04/13 v2: 移除「所屬父資料夾」欄 (該欄內容永遠等於標題行本身，元余) 
-        _dbg("    ├ 開始")
-
-        Dim sizeStr As String = "- "
-        Dim sizeVal As Long
-        If _cacheFolderSizeAll.TryGetValue(SafeGetPath(rootEntry.Folder), sizeVal) AndAlso sizeVal > 0 Then
-            sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB "
-        End If
-
-        Dim directMailStr As String = rootEntry.DirectMailCount.ToString("N0") & " "
-        Dim totalSubStr As String = rootEntry.TotalSubCount.ToString("N0") & " "
-        Dim totalMailStr As String = rootEntry.TotalMailCount.ToString("N0") & " "
-
-        ' 欄位順序: 名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
-        Dim lvi As New ListViewItem({"▸ " & rootEntry.Folder.Name, directMailStr, totalSubStr, totalMailStr, sizeStr})
-        lvi.Font = New Font(ListView1.Font, _fontBold)
-        lvi.BackColor = SystemColors.GradientInactiveCaption
-        lvi.Tag = Nothing
-        Return lvi
-        _dbg("    ├ 結束") ' by Gemini, 2026/04/10
-
-    End Function
-    Private Function BuildLv1Item(entry As FolderBfsEntry, parentNode As TreeNode) As ListViewItem
-        ' 組裝 ListView1 的單一資料列 (直屬子資料夾) 
-        ' 欄位: 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小(Lazy)
-        ' 2026/04/13 by Simon/Claude: B方案升級
-        '   - 移除 isRoot 參數 (群組標題行已獨立為 BuildLv1GroupHeader) 
-        '   - 移除 parentFolderName 參數 (該欄元余，已移除) 
-        '   - parentNode 存入 Tag ValueTuple，供 EnterSelectedFolder 使用
-        '   - Tag 改為 ValueTuple(SubFolder, ParentNode)，ComputeFolderSize 同步更新
-        ' 舊版註記: by Gemini, 2026/03/31: 視覺優化重構
-        '   1. 資料夾名稱：还原開頭縮排空白 (" - ")，保持整齊。
-        '   2. 防止切邊：斜體時字串結尾補一格空白。
-
-        Dim isItalicFolder As Boolean = Not IsMailFolder(entry.Folder)
-        Dim displayName As String = " - " & entry.Folder.Name
-        If isItalicFolder Then displayName &= " "
-
-        ' 大小: Lazy，從快取讀；未計算過則留空，等 ColumnClick 或右鍵選單觸發計算
-        Dim sizeStr As String = "- "
-        Dim sizeVal As Long
-        If _cacheFolderSizeAll.TryGetValue(SafeGetPath(entry.Folder), sizeVal) AndAlso sizeVal > 0 Then sizeStr = (sizeVal \ 1024L).ToString("N0") & "KB"
-        ' 統計數字字串化 (字串結尾一律補一格空白，確保斜體與正常字體對齊且不切邊)
-        Dim directMailStr As String = entry.DirectMailCount.ToString("N0") & " "
-        Dim totalSubStr As String = entry.TotalSubCount.ToString("N0") & " "
-        Dim totalMailStr As String = entry.TotalMailCount.ToString("N0") & " "
-        If sizeStr <> "- " Then sizeStr &= " "
-
-        ' 欄位順序: 名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
-        Dim lvi As New ListViewItem({displayName, directMailStr, totalSubStr, totalMailStr, sizeStr})
-        ' by Gemini, 2026/03/29: 特殊顯示非郵件資料夾 (斜體 + 灰色)
-        If isItalicFolder Then
-            lvi.ForeColor = Color.DarkGray
-            lvi.Font = New Font(ListView1.Font, _fontItalic)
-        End If
-
-        ' 2026/04/13 by Simon/Claude: Tag 改為 ValueTuple，ComputeFolderSize 與 EnterSelectedFolder 同步更新
-        lvi.Tag = (SubFolder:=entry.Folder, ParentNode:=parentNode)
-        Return lvi
-
-    End Function
-    Private Function BuildLv1SumRow(selectedCount As Integer, totalSub As Integer, totalMail As Long) As ListViewItem
-        ' 合計列：多選模式才插入，顯示跨資料夾加總。Tag = Nothing
-        ' Tag = Nothing：同群組標題行，不可進入
-        ' 2026/04/13 by Simon/Claude: B方案新增，5欄格式
-        Dim totalMailStr As String = totalMail.ToString("N0") & " "
-        Dim totalSubStr As String = totalSub.ToString("N0") & " "
-        Dim lvi As New ListViewItem({"▶ 合計 (" & selectedCount.ToString("N0") & " 個資料夾) ", "", totalSubStr, totalMailStr, ""})
-        lvi.Font = New Font(ListView1.Font, _fontBold)
-        lvi.BackColor = Color.FromArgb(220, 235, 252)
-        lvi.ForeColor = Color.FromArgb(0, 70, 140)
-        lvi.Tag = Nothing
-        Return lvi
 
     End Function
 
@@ -823,7 +869,7 @@ Partial Class Form1
             Dim textRect As Rectangle = e.Bounds
             Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine
             If e.ColumnIndex = 0 Then
-                textRect.X += 3 : textRect.Width -= 3   ' 第一欄左側加 3px padding，避免文字貼欄邊
+                textRect.X += 2 : textRect.Width -= 2   ' 第一欄左側加 3px padding，避免文字貼欄邊
                 flags = flags Or TextFormatFlags.Left
             Else
                 flags = flags Or TextFormatFlags.Right
@@ -955,7 +1001,7 @@ Partial Class Form1
 
             ''Dim totalMailCount As Integer =                                                   ' 計算所有選定根資料夾的郵件總數作為進度分母
             ''    If(CheckSub2.Checked, rootFolders.Sum(Function(f) GetMailCountRecursive(f)),  ' CheckSubFolder2.Checked = True  → 含子資料夾: 各自完整子樹的總和
-            ''                          rootFolders.Sum(Function(f) GetMailCountL3(f)))           ' CheckSubFolder2.Checked = False → 只算選定的那一層
+            ''                          rootFolders.Sum(Function(f) GetMailCountL3(f)))         ' CheckSubFolder2.Checked = False → 只算選定的那一層
             ''' 2026/3/20, 重寫了底層GetMailCountAll() 效能還是比不過現在上面的遞迴版本
             '' 原因: 原版遞迴只走一遍 COM 資料夾樹，新版走了兩遍COM:
             '' 第一遍: GetSubtreeToList()  → BFS 遍歷，存取每個 folder.Folders
@@ -1072,6 +1118,39 @@ Partial Class Form1
             End If
             e.Handled = True
             e.SuppressKeyPress = True
+        ElseIf e.Control AndAlso e.KeyCode = Keys.A Then    ' Ctrl-A 全選 listview2 所有項目
+            lv.BeginUpdate()
+            For Each item As ListViewItem In lv.Items
+                item.Selected = True
+            Next
+            lv.EndUpdate()
+            e.Handled = True
+            e.SuppressKeyPress = True
+
+        ElseIf e.Control AndAlso e.KeyCode = Keys.C Then    ' Ctrl-C 複製選取列到剪貼簿 (by Claude Sonnet 4.6, 2026/04/27)
+            ' 格式: Tab 分隔欄位，換行分隔列，直接貼入 Excel 即可對齊欄位
+            If lv.SelectedItems.Count = 0 Then Return
+            Dim sb As New System.Text.StringBuilder
+
+            ' 先加入標題列 (by Gemini 3.1 Pro, 2026/04/27)
+            Dim headers As New List(Of String)(16) ' 預設容量 16，通常不會超過這麼多欄位
+            For Each col As ColumnHeader In lv.Columns
+                headers.Add(col.Text.Trim())
+            Next
+            sb.AppendLine(String.Join(vbTab, headers))
+
+            For Each item As ListViewItem In lv.SelectedItems
+                Dim cols As New List(Of String)(16) ' 預設容量 16，通常不會超過這麼多欄位
+                For Each si As ListViewItem.ListViewSubItem In item.SubItems   ' by Claude Sonnet 4.6, 2026/04/27: sub 是 VB 保留字，改用 si
+                    ' 去除頭尾空白，以及 "-"、"▸" 等視覺裝飾字元
+                    cols.Add(si.Text.Trim(" "c, "-"c, "▸"c, "▶"c))
+                Next
+                sb.AppendLine(String.Join(vbTab, cols))
+            Next
+            Clipboard.SetText(sb.ToString())
+            ProgressBar2.Text = $"已複製標題與 {lv.SelectedItems.Count:N0} 列到剪貼簿。"
+            e.Handled = True
+            e.SuppressKeyPress = True
         End If
         If _iLikeNoisy Then _dbg("結束")
 
@@ -1114,8 +1193,8 @@ Partial Class Form1
         '       滑鼠離開圖表後 ListView 的選取高亮也會消失
         ' 2026-03-18, by Claude.ai / 2026-04-04 by Gemini: 共用函數重構
         ' ---------------------------------------------------------------
-        _dbg("開始")
         If ListView2.SelectedItems.Count = 0 Then Return
+        _dbg("開始")
         If Chart2.Series.Count = 0 OrElse Chart2.Series(0).Points.Count = 0 Then Return  ' Chart 尚未載入資料，直接結束
 
         Dim selectedItem As ListViewItem = ListView2.SelectedItems(0)
@@ -1405,7 +1484,8 @@ Partial Class Form1
             ClearCt2Series()     ' ★ 空資料夾時也要清除 Chart2，否則前一個資料夾的圖表會殘留
             ListView2.Items.Add(New ListViewItem("找不到郵件"))
         Else
-            Dim items As New List(Of ListViewItem)
+            ' 預分配容量為 64，優化 Tab2 年度/月份視圖的 UI 項目渲染 (by Gemini 3 Flash, 2026/05/04)
+            Dim items As New List(Of ListViewItem)(64)
             Dim sortedYearCounts = yearCounts.OrderBy(Function(pair) pair.Key).ToList()
             For Each pair In sortedYearCounts
                 items.Add(New ListViewItem({pair.Key, pair.Value.ToString("N0") & " "}))
@@ -1424,7 +1504,8 @@ Partial Class Form1
         _dbg(" ├ 開始", selectedYear.ToString())
         ListView2.Items.Clear()
 
-        Dim itemsList As New List(Of ListViewItem)()    ' 建立一個 List 來暫存所有的 ListViewItem
+        ' 預分配容量為 16，減少暫存所有資料夾統計項目的 Resize 次數 (by Gemini 3 Flash, 2026/05/04)
+        Dim itemsList As New List(Of ListViewItem)(16)    ' 建立一個 List 來暫存所有的 ListViewItem
 
         ' 第一行: 返回按鈕
         Dim backItem As New ListViewItem("← 返回年度統計")
@@ -1628,7 +1709,7 @@ Partial Class Form1
         ' 處理 "── 2024 年月份分佈 ──" 這種標題格式，或是純數字 "2024"
         ' 如果字串包含 "年"，取 "年" 之前的數字
         Dim cleanText As String = text.Trim()
-        Dim yearIdx As Integer = cleanText.IndexOf(CChar("年"))
+        Dim yearIdx As Integer = cleanText.IndexOf("年"c)
         Dim numStr As String = ""
 
         If yearIdx >= 0 Then
@@ -1648,7 +1729,7 @@ Partial Class Form1
     End Function
     Private Function ParseMonthFromText(text As String) As Integer
         ' by Gemini, 2026/04/04: 從字串 (例如 "2024 / 03月" 或 "3月") 萃取出月份數字的共用邏輯
-        Dim moonIdx As Integer = text.IndexOf(CChar("月"))
+        Dim moonIdx As Integer = text.IndexOf("月"c)
         If moonIdx < 0 Then Return 0
 
         Dim numStr As String = ""
@@ -1703,10 +1784,10 @@ Partial Class Form1
         ' ✅ 取得資料點並計算顯示名稱 (修正年度檢視 AxisLabel 為空的問題)
         Dim dP As DataPoint = chart.Series(0).Points(pointIndex)
         Dim xLabel As String = If(Not String.IsNullOrEmpty(dP.AxisLabel), dP.AxisLabel, dP.XValue.ToString("0000"))
-        Dim headerText As String = If(xLabel.Contains(CChar("月")), "月份", "年份")
+        Dim headerText As String = If(xLabel.Contains("月"c), "月份", "年份")
 
         ' ✅ 動態數據標籤
-        Dim formattedX As String = If(xLabel.Contains(CChar("月")), xLabel, xLabel & "年")
+        Dim formattedX As String = If(xLabel.Contains("月"c), xLabel, xLabel & "年"c)
         dP.Label = $"{formattedX}:{dP.YValues(0):##0}"
         dP.IsValueShownAsLabel = True
         chart.Series(0).ToolTip = $"{headerText}: {xLabel}, 數量: {dP.YValues(0):##0}"
@@ -1814,7 +1895,8 @@ Partial Class Form1
 
             ' ── Step 3: 收集含附件的郵件清單 (透過 Layer2.5 快取) ──
             Dim progressPhase1 = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
-            Dim targetMails As New List(Of MailItemInfo)
+            ' 預分配容量為 4096，顯著降低掃描大量郵件時的記憶體配置開銷 (by Gemini 3 Flash, 2026/05/04)
+            Dim targetMails As New List(Of MailItemInfo)(4096)
             Try
                 For i As Integer = 0 To folderList.Count - 1
                     ' 2026/04/16 by Gemini: 使用 Tuple 中的 .Folder 與預錄好的 fPaths(i)
@@ -1959,32 +2041,20 @@ Partial Class Form1
         _dbg("結束", "排序列表") ' by Gemini, 2026/04/10
 
     End Sub
-
+    Private Sub Lv3_DrawItem(sender As Object, e As DrawListViewItemEventArgs) Handles ListView3.DrawItem
+        ' ── ListView3 (Virtual Mode) OwnerDraw 實作 ──
+        ' VirtualMode 必須比較 Index，不能比較 Item 參照 (因為是動態生成的)
+        If _lastHoveredListItem IsNot Nothing AndAlso e.ItemIndex = _lastHoveredListItem.Index AndAlso Not e.Item.Selected Then
+            ' 攔截繪製，由 DrawSubItem 處理灰底
+        Else
+            e.DrawDefault = True
+        End If
+    End Sub
     ' by Gemini 3.1 Pro, 2026/04/21: 邏輯整合 (Tab3 & Tab4)，完整統一行為。
     ' 理由: Tab3 與 Tab4 的 ListView 皆為「搜尋結果」，行為高度一致 (Enter/雙擊/連動與路徑顯示)。
     ' 整合後可減少冗餘代碼，並確保滑鼠與熱鍵行為絕對一致。
     ' --------------------------------------------------------------
-    Private Sub HandleLv3Lv4_MouseClick(sender As Object, e As MouseEventArgs)
-        ''' <summary>
-        ''' 共通滑鼠點擊: 複製主旨與路徑預覽
-        ''' </summary>
-        Dim lv = DirectCast(sender, ListView)
-        Dim item As ListViewItem = lv.GetItemAt(e.X, e.Y)
-
-        If item IsNot Nothing AndAlso e.Button = MouseButtons.Left Then
-            ' 單擊左鍵複製主旨到剪貼簿，這原本是 ListView4 獨有的方便設計，現在擴展到 Tab3 共用 (by Gemini 3.1 Pro, 2026/04/21)
-            Clipboard.SetText(item.SubItems(0).Text)
-        End If
-        ' 路徑更新邏輯統一由 ShowPathToProgressBar 接管
-        ShowPathToProgressBar(sender, e)
-    End Sub
-    Private Sub HandleLv3Lv4_DoubleClick(sender As Object, e As EventArgs)
-        ''' <summary>
-        ''' 共通雙擊開啟
-        ''' </summary>
-        OpenMailByEntryID(GetSelectedEntryIDs(DirectCast(sender, ListView)))
-    End Sub
-    Private Sub HandleLv3Lv4_KeyDown(sender As Object, e As KeyEventArgs)
+    Private Sub HandleLv3Lv4Lv5_KeyDown(sender As Object, e As KeyEventArgs)
         ''' <summary>
         ''' 共通鍵盤按鍵 (Enter: 開啟, ESC: 目錄焦點歸位, Ctrl+A: 全選)
         ''' </summary>
@@ -2000,6 +2070,7 @@ Partial Class Form1
             ' 對應不同的 TreeView 給予控制權
             If lv Is ListView3 Then SimTree3.Focus()
             If lv Is ListView4 Then SimTree4.Focus()
+            If lv Is ListView5 Then SimTree5.Focus() ' 2026/05/03 by Gemini 3.1 Pro: 新增 Tab5 ESC 焦點歸位
             e.Handled = True
 
         ElseIf e.Control AndAlso e.KeyCode = Keys.A Then
@@ -2011,6 +2082,26 @@ Partial Class Form1
             e.Handled = True
             e.SuppressKeyPress = True
         End If
+    End Sub
+    Private Sub HandleLv3Lv4Lv5_MouseClick(sender As Object, e As MouseEventArgs)
+        ''' <summary>
+        ''' 共通滑鼠點擊: 複製主旨與路徑預覽
+        ''' </summary>
+        Dim lv = DirectCast(sender, ListView)
+        Dim item As ListViewItem = lv.GetItemAt(e.X, e.Y)
+
+        If item IsNot Nothing AndAlso e.Button = MouseButtons.Left Then
+            ' 單擊左鍵複製主旨到剪貼簿，這原本是 ListView4 獨有的方便設計，現在擴展到 Tab3 共用 (by Gemini 3.1 Pro, 2026/04/21)
+            Clipboard.SetText(item.SubItems(0).Text)
+        End If
+        ' 路徑更新邏輯統一由 ShowLv3Lv4Lv5PathToProgressBar 接管
+        ShowLv3Lv4Lv5PathToProgressBar(sender, e)
+    End Sub
+    Private Sub HandleLv3Lv4Lv5_DoubleClick(sender As Object, e As EventArgs)
+        ''' <summary>
+        ''' 共通雙擊開啟
+        ''' </summary>
+        OpenMailByEntryID(GetSelectedEntryIDs(DirectCast(sender, ListView)))
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
@@ -2048,7 +2139,8 @@ Partial Class Form1
         Dim maxCount As Integer = If(mustCountAttach, CInt(CountMax.Value), Integer.MaxValue)
 
         Dim processed As Integer = 0, total As Integer = sourceList.Count
-        Dim resultList As New List(Of MailItemInfo)
+        ' 預分配容量為 4096，優化搜尋結果清單的填充速度 (by Gemini 3 Flash, 2026/05/04)
+        Dim resultList As New List(Of MailItemInfo)(4096)
         Dim keyword As String = If(CheckAttachName.Checked, TextBox3.Text.Trim.ToLower(), "")
         Try
             For curMail As Integer = 0 To sourceList.Count - 1
@@ -2137,25 +2229,6 @@ Partial Class Form1
         _dbg("結束", $"{lviCount} 封 | {elapsedSeconds:0.00}s")
 
     End Sub
-    Private Sub ShowPathToProgressBar(sender As Object, e As EventArgs)
-        ''' <summary>
-        ''' 將目前ListviewItem 的 FolderPath 顯示於 ProgressBar2
-        ''' </summary>
-        Dim lv = DirectCast(sender, ListView)
-        If lv.SelectedIndices.Count = 0 Then Return
-
-        Dim path As String = ""
-        If lv.VirtualMode Then
-            ' Tab3 模式: 從 _lv3MailList 根據 SelectedIndices 取 FolderPath
-            Dim idx = lv.SelectedIndices(0)
-            If idx >= 0 AndAlso idx < _lv3MailList.Count Then path = _lv3MailList(idx).FolderPath
-        Else
-            ' Tab4 模式: 從 SelectedItems(0).Tag (MailItemInfo) 取 FolderPath
-            If TypeOf lv.SelectedItems(0).Tag Is MailItemInfo Then path = DirectCast(lv.SelectedItems(0).Tag, MailItemInfo).FolderPath
-        End If
-
-        If Not String.IsNullOrEmpty(path) Then ProgressBar2.Text = path
-    End Sub
     Private Sub OpenMailByEntryID(entryIDs As List(Of String))
         ' 2026/3/20, by Claude.ai, 建立獨立執行緒fire-and-forget
         ' 讓作業系統跟outlook.exe 自己去做它們的事, 我們不用等它開啟完畢, 可以直接回到自己的程式介面
@@ -2213,6 +2286,25 @@ Partial Class Form1
         nThread.Start()
 
     End Sub
+    Private Sub ShowLv3Lv4Lv5PathToProgressBar(sender As Object, e As EventArgs)
+        ''' <summary>
+        ''' 將目前ListviewItem 的 FolderPath 顯示於 ProgressBar2
+        ''' </summary>
+        Dim lv = DirectCast(sender, ListView)
+        If lv.SelectedIndices.Count = 0 Then Return
+
+        Dim path As String = ""
+        If lv.VirtualMode Then
+            ' Tab3 模式: 從 _lv3MailList 根據 SelectedIndices 取 FolderPath
+            Dim idx = lv.SelectedIndices(0)
+            If idx >= 0 AndAlso idx < _lv3MailList.Count Then path = _lv3MailList(idx).FolderPath
+        Else
+            ' Tab4 模式: 從 SelectedItems(0).Tag (MailItemInfo) 取 FolderPath
+            If TypeOf lv.SelectedItems(0).Tag Is MailItemInfo Then path = DirectCast(lv.SelectedItems(0).Tag, MailItemInfo).FolderPath
+        End If
+
+        If Not String.IsNullOrEmpty(path) Then ProgressBar2.Text = path
+    End Sub
 #End Region
 #Region "  └ 輔助函數"
     Private Function BuildFilterAttachment() As String
@@ -2236,7 +2328,7 @@ Partial Class Form1
         ''' <summary>
         ''' 取得目前選取節點的 EntryID 清單 (自動判斷 VirtualMode)
         ''' </summary>
-        Dim ids As New List(Of String)
+        Dim ids As New List(Of String)(32) ' 預設容量為 32，優化小批量選取的性能
         If lv.VirtualMode Then
             ' Tab3 模式: 使用 _lv3MailList
             For Each idx As Integer In lv.SelectedIndices
@@ -2279,7 +2371,7 @@ Partial Class Form1
         End If
 
         Dim cToken As CancellationToken = OkayNowYouHaveToken()
-        Dim selectedFolders As New List(Of Outlook.Folder)()
+        Dim selectedFolders As New List(Of Outlook.Folder)(32)
         For Each node In SimTree4.SelectedNodes
             Dim f = TryCast(node.Tag, Outlook.Folder)
             If f IsNot Nothing Then selectedFolders.Add(f)
@@ -2291,19 +2383,12 @@ Partial Class Form1
             _dbg("F5 刷新模式：引用歷史資料夾清單", selectedFolders.Count & " 個資料夾")
         End If
 
-        If selectedFolders.Count = 0 Then
-            _dbg("結束", "未選擇資料夾且無歷史紀錄")
-            MessageBox.Show("請先選擇資料夾 (可多選)，或先執行過一次搜尋以便使用 F5 刷新。", "提示")
-            Return
-        End If
-
-        _tab4LastSearchFolders = New List(Of Outlook.Folder)(selectedFolders) ' 記憶最後成功的搜尋目標清單
-
-        ' (✅ 2026/04/20 by Gemini 2.0 Flash: 恢復二欄佈局後，不再需要自動縮合左側邊欄)
+        If selectedFolders.Count = 0 Then Return
 
         Button4.Enabled = False : Cursor = Cursors.WaitCursor
         ListView4.Items.Clear()
         ProgressBar1.Text = "正在處理..." : ProgressBar2.Text = "開始掃描系列郵件..."
+        _tab4LastSearchFolders = New List(Of Outlook.Folder)(selectedFolders) ' 記憶最後成功的搜尋目標清單
 
         Dim sw As New Stopwatch() : sw.Start()
         Dim progress4 As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
@@ -2313,11 +2398,11 @@ Partial Class Form1
         Try
             ' ✅ 2026/04/21 by Gemini 3.0 flash: 呼叫共用核心 GetUniqueFolderList (內含路徑去重與子資料夾展開)
             ' 2026/04/22 by Gemini 3.1 Pro: 如果在結果模式刷新，SelectedNodes裝的是話題不是Folder。用偽造的 TreeNode 清單包裝歷史 Folder 傳交給底層。
-            Dim fakeNodes As New List(Of TreeNode)()
+            Dim fakeNodes As New List(Of TreeNode)(32)
             For Each f In selectedFolders
                 fakeNodes.Add(New TreeNode() With {.Tag = f})
             Next
-            Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, cToken:=cToken, progress:=progress4)
+            Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, progress:=progress4, cToken:=cToken)
             Dim targetFolderList = targetTupleList.Select(Function(x) x.Folder).ToList()
             Dim processed As Integer = 0
             For Each folder In targetFolderList
@@ -2328,8 +2413,8 @@ Partial Class Form1
                     If Not topicDict.ContainsKey(item.Topic) Then topicDict(item.Topic) = New List(Of MailItemInfo)()
                     topicDict(item.Topic).Add(item.Mail)
                 Next
-
                 processed += 1
+
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub() progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
@@ -2338,11 +2423,10 @@ Partial Class Form1
 
             ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記憶結果並呼叫共用渲染函數
             _tab4LastTopicResults = topicDict
-            RenderTab4Groups(topicDict)
+            RenderTv4Groups(topicDict)
 
             sw.Stop()
-            ProgressBar1.Text = $"找到 {SimTree4.Nodes.Count} 個系列 / 耗時 {sw.Elapsed.TotalSeconds:0.00} 秒"
-            ProgressBar2.Text = ""
+            ProgressBar1.Text = $"找到 {SimTree4.Nodes.Count} 個系列 / 耗時 {sw.Elapsed.TotalSeconds:0.00} 秒" : ProgressBar2.Text = ""
         Catch ex As System.Exception
             MessageBox.Show("掃描系列郵件時發生錯誤: " & ex.Message, "錯誤")
             _dbg("錯誤", ex.Message)
@@ -2353,7 +2437,8 @@ Partial Class Form1
         End Try
 
     End Sub
-    Private Sub SimTree4_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTree4.AfterSelect
+    Private Sub Tv4_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTree4.AfterSelect
+
         ' ✅ 2026/04/20 by Gemini 2.0 Flash: 新增雙模式選取邏輯
         ' 模式 A: 資料夾模式 (目前的行為是選取後僅供搜尋參考，不執行連動)
         _dbg("開始 (A:資料夾模式)", e.Node.Text)
@@ -2364,25 +2449,23 @@ Partial Class Form1
         Dim mailList As List(Of MailItemInfo) = TryCast(e.Node.Tag, List(Of MailItemInfo))
         If mailList Is Nothing Then Return
 
-        ' 每次點選新節點時，重置排序狀態為預設 (日期降冪)
-        _lv4SortOrder = SortOrder.Descending
-        _lv4LastSortColumn = 2 ' 收到日期所在的 index
-
-        ' 排序: 依據時間遞減 (越新的在越前面)
-        mailList.Sort(Function(a, b) b.ReceivedTime.CompareTo(a.ReceivedTime))
-
-        FillLv4(mailList)
+        _lv4SortOrder = SortOrder.Descending    ' 每次點選新節點時，重置排序狀態為預設 (日期降冪)
+        _lv4LastSortColumn = 2                  ' 收到日期所在的 index
+        mailList.Sort(Function(a, b) b.ReceivedTime.CompareTo(a.ReceivedTime))  ' 排序: 依據時間遞減 (越新的在越前面)
+        ShowResultToLv4(mailList)
         _dbg("結束", $"顯示 {mailList.Count} 封系列郵件")
+
     End Sub
-    Private Sub SimTree4_KeyDown(sender As Object, e As KeyEventArgs) Handles SimTree4.KeyDown
+    Private Sub Tv4_KeyDown(sender As Object, e As KeyEventArgs) Handles SimTree4.KeyDown
         ' ✅ 2026/04/20 by Gemini 2.0 Flash: 處理 SimTree4 的快捷鍵與模式切換
+        _dbg("開始", e.KeyCode.ToString())
+
         Select Case e.KeyCode
             Case Keys.Enter
-                If _isTab4ShowingResults AndAlso ListView4.Items.Count > 0 Then
-                    ' 在結果模式下按下 Enter 切換焦點到列表
-                    ListView4.Focus()
-                End If
+                ' 在結果模式下按下 Enter 切換焦點到列表
+                If _isTab4ShowingResults AndAlso ListView4.Items.Count > 0 Then ListView4.Focus()
                 e.Handled = True
+                e.SuppressKeyPress = True
 
             Case Keys.F5
                 ' 按下 F5 等同 Button4 (重新開始掃描系列郵件)
@@ -2394,7 +2477,7 @@ Partial Class Form1
                 ' ✅ 2026/04/20 by Gemini 2.0 Flash: 切換左側樹排序方式 (數量/名稱)
                 If _isTab4ShowingResults AndAlso _tab4LastTopicResults IsNot Nothing Then
                     _tab4SortGroupsByCount = Not _tab4SortGroupsByCount
-                    RenderTab4Groups(_tab4LastTopicResults)
+                    RenderTv4Groups(_tab4LastTopicResults)
                     _dbg("F6 按下：切換排序為", If(_tab4SortGroupsByCount, "數量", "主旨"))
                     e.Handled = True
                 End If
@@ -2430,15 +2513,24 @@ Partial Class Form1
                         SimTree4.EndUpdate()
                     End Try
 
-                    ProgressBar1.Text = "已恢復資料夾樹模式。"
-                    ProgressBar2.Text = ""
+                    ProgressBar1.Text = "已恢復資料夾樹模式。" : ProgressBar2.Text = ""
                     SimTree4.Focus() ' 將焦點還給左側
                     e.Handled = True
                     e.SuppressKeyPress = True ' ✅ by Gemini 3.0 flash, 2026/04/21: 徹底攔截，避免 KeyPress 重複執行退回邏輯
                 End If
         End Select
+
+    End Sub
+    Private Sub Lv4_DrawItem(sender As Object, e As DrawListViewItemEventArgs) Handles ListView4.DrawItem
+        ' by Gemini 3.1 Pro, 2026/04/26: 針對被 Hover 但未選取的項目，交由 DrawSubItem 自行畫上灰底；其餘讓系統自己畫
+        If e.Item Is _lastHoveredListItem AndAlso Not e.Item.Selected Then
+            ' 不設 DrawDefault = True，讓系統呼叫 DrawSubItem
+        Else
+            e.DrawDefault = True
+        End If
     End Sub
     Private Sub Lv4_ColumnClick(sender As Object, e As ColumnClickEventArgs) Handles ListView4.ColumnClick
+
         ' by Gemini 3 Flash, 2026/04/19: ListView4 欄位排序 (實體模式，參考 ListView3 的虛擬模式做法)
         _dbg("開始", $"點擊欄位: {e.Column}")
         Dim sw As New Stopwatch : sw.Start()
@@ -2482,19 +2574,115 @@ Partial Class Form1
                 Return
         End Select
 
-        ' 💡 重要：因為 LINQ 的 .ToList() 會產生新清單，所以必須把排序後的清單再塞回 Tag
-        SimTree4.SelectedNode.Tag = mailList
-
-        ' 重新填入 ListView
-        FillLv4(mailList)
-
+        SimTree4.SelectedNode.Tag = mailList    ' 💡 重要：因為 LINQ 的 .ToList() 會產生新清單，所以必須把排序後的清單再塞回 Tag
+        ShowResultToLv4(mailList)                  ' 重新填入 ListView
         sw.Stop()
         _dbg("結束", "排序完成")
 
     End Sub
+    Private Async Sub Lv4_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ListView4.SelectedIndexChanged
+
+        ' ---------------------------------------------------------------
+        ' Lv4_UpdateSimilarity — 選定郵件後，非同步計算並更新全列表內文相似度欄 (Index 4)
+        ' 2026/04/28 by Simon/Claude: 合併 Simon 架構 + Claude 的 L2.5/L3 分層與 NormalizeMailBody
+        '
+        ' 架構 (以 Simon 為主):
+        '   ① Task.Delay(100) — 避開 SelectedItems 過渡期為空的 Windows 原生兩次觸發
+        '   ② _lv4SimCts 取消機制 — 游標快速移動時取消前次未完成的計算，不讓舊任務蓋掉新結果
+        '   ③ 先同步標記全列表（基準=「Base」，其他=「...」），再逐封非同步計算
+        '   ④ Jaccard 計算放入 Task.Run 背景執行緒，真正不阻塞 UI
+        '   ⑤ EntryID 從 SubItems(5) 讀取（直接、輕量，不做 DirectCast）
+        '   ⑥ Body 讀取透過 L2.5 GetCachedMailBody（快取 → L3 COM），不跨群組殘留
+        '   ⑦ 比對範圍：全列表（不限同組），方便跨群組發現高相似度郵件
+        ' ---------------------------------------------------------------
+        Dim lv = DirectCast(sender, ListView)
+        If lv.Items.Count = 0 Then Return
+
+        ' 💡 提前檢查，避開 Windows 兩次觸發導致的重複日誌
+        If lv.SelectedItems.Count = 0 Then Return
+        _dbg("開始")
+
+        ' 💡 關鍵修正 1：微小延遲確保選取狀態穩定，避開 SelectedItems 在這100ms內快速移動游標導致的 SelectedItems 為空狀態造成exception
+        Await Task.Delay(100)
+        If lv.SelectedItems.Count = 0 Then Return
+
+        ' 取消前次未完成的計算任務 (還沒算完就快速移動游標的話，直接取消前次任務)
+        _lv4SimCts?.Cancel()
+        _lv4SimCts = New CancellationTokenSource()
+        Dim token As CancellationToken = _lv4SimCts.Token
+
+        ' 取得基準項目的 EntryID（從 SubItems(5) 讀取，輕量直接）
+        Dim baseItem As ListViewItem = lv.SelectedItems(0)
+        Dim baseEntryID As String = If(baseItem.SubItems.Count > 5, baseItem.SubItems(5).Text, "")
+        If String.IsNullOrEmpty(baseEntryID) Then Return
+
+        ' 取得基準郵件正規化 Body（L2.5 快取優先）
+        Dim baseBody As String = Await GetCachedMailBody(baseEntryID)
+        If String.IsNullOrEmpty(baseBody) Then Return
+
+        ' 💡 關鍵修正 2：先同步標記全列表初始狀態（UI 執行緒批次寫入，不閃爍）
+        Dim lviCompareList = lv.Items.Cast(Of ListViewItem)().ToList()
+        For Each item In lviCompareList
+            If item.SubItems.Count <= 4 Then Continue For
+            Dim thisID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
+            item.SubItems(4).Text = If(thisID = baseEntryID, "Base", "計算中")
+        Next
+
+        ' 逐封取 Body、背景計算 Jaccard、即時更新欄位
+        Try
+            ' 💡 2026/04/30 by Gemini 3.1 Pro: 兩階段處理。第一階段在 UI Context 循序拿 Body，確保若是 Cache Miss 去讀 COM 的安全性。
+            ' 預分配容量為 512，處理大量郵件內文比對時減少頻繁 Resize (by Gemini 3 Flash, 2026/05/04)
+            Dim mBodyList As New List(Of (Item As ListViewItem, TargetBody As String))(512)
+            For Each item In lviCompareList
+                If token.IsCancellationRequested Then Exit For
+                If item.SubItems.Count <= 4 Then Continue For
+
+                Dim targetID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
+                If targetID = baseEntryID OrElse String.IsNullOrEmpty(targetID) Then Continue For
+
+                Dim targetBody As String = Await GetCachedMailBody(targetID)
+                If String.IsNullOrEmpty(targetBody) Then
+                    item.SubItems(4).Text = "讀取失敗"
+                    Continue For
+                End If
+
+                mBodyList.Add((item, targetBody))
+            Next
+
+            If token.IsCancellationRequested Then Return
+
+            ' 💡 2026/04/30 by Gemini 3.1 Pro: 第二階段純 CPU 運算。剝離 UI 與 COM，利用多核心火力全開
+            Dim results((mBodyList.Count) - 1) As Double
+            Await Task.Run(Sub()
+                               Parallel.For(0, mBodyList.Count, Sub(i)
+                                                                    If token.IsCancellationRequested Then Return
+                                                                    Dim targetBody = mBodyList(i).TargetBody
+                                                                    'results(i) = CalculateSimilarity(baseBody, targetBody)
+                                                                    'results(i) = CharlesHash(baseBody, targetBody)
+                                                                    results(i) = JaccardSimilarity(baseBody, targetBody)
+                                                                End Sub)
+                           End Sub)
+            If token.IsCancellationRequested Then Return
+
+            ' 💡 2026/04/30 by Gemini 3.1 Pro: 第三階段批次更新 UI
+            For i = 0 To mBodyList.Count - 1
+                Dim item = mBodyList(i).Item
+                If item.ListView IsNot Nothing Then
+                    item.SubItems(4).Text = $"{CInt(results(i) * 100)}%"
+                End If
+            Next
+
+        Catch ex As OperationCanceledException
+            ' 正常取消，不需處理
+        End Try
+        _dbg("結束")
+
+    End Sub
     Private Async Sub Lv4_KeyDown(sender As Object, e As KeyEventArgs) Handles ListView4.KeyDown
+
         ' by Gemini 3.1 Pro, 2026/04/21: Tab4 專屬快捷鍵 (Delete, F5)
-        ' ESC 等共通快捷鍵已被遷移至 InitListView 掛載的 HandleLv3Lv4_KeyDown
+        ' ESC 等共通快捷鍵已被遷移至 InitListView 掛載的 HandleLv3Lv4Lv5_KeyDown
+        _dbg("開始", e.KeyCode.ToString())
         If e.KeyCode = Keys.Delete Then
             _dbg("快捷鍵", "偵測到 Delete (呼叫 HandleListView4Delete)")
             HandleLv4Delete(DirectCast(sender, ListView))
@@ -2507,28 +2695,27 @@ Partial Class Form1
             Await RefreshLv4MailsAsync(DirectCast(sender, ListView))
             e.Handled = True
         End If
+
     End Sub
-    ' ListView4 的 SelectedIndexChanged, MouseClick, MouseDoubleClick, KeyPress 
-    ' 已全數收斂至 InitListView 的通用 AddHandler 綁定中。
-    ' by Gemini 3.1 Pro, 2026/04/21: 
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Sub RenderTab4Groups(topicDict As Dictionary(Of String, List(Of MailItemInfo)))
+    Private Sub RenderTv4Groups(topicDict As Dictionary(Of String, List(Of MailItemInfo)))
         ''' <summary>
         ''' ✅ 2026/04/20 by Gemini 2.0 Flash: 根據目前的排序模式渲染 Tab4 的主旨群組樹
         ''' </summary>
+
+        _dbg("開始")
         If topicDict Is Nothing Then Return
-        _dbg("渲染系列清單", $"模式: {If(_tab4SortGroupsByCount, "按數量", "按主旨")}")
 
         SimTree4.BeginUpdate()
         SimTree4.Nodes.Clear()
         _isTab4ShowingResults = True
 
+        _dbg("渲染系列清單", $"模式: {If(_tab4SortGroupsByCount, "按數量", "按主旨")}")
         ' 根據旗標決定排序方式
         Dim sortedItems = If(_tab4SortGroupsByCount,
             topicDict.Where(Function(kvp) kvp.Value.Count > 1).OrderByDescending(Function(kvp) kvp.Value.Count).ThenBy(Function(kvp) kvp.Key),
             topicDict.Where(Function(kvp) kvp.Value.Count > 1).OrderBy(Function(kvp) kvp.Key))
-
         For Each kvp In sortedItems
             Dim node As New TreeNode($"{kvp.Key} ({kvp.Value.Count})") With {.Tag = kvp.Value}
             SimTree4.Nodes.Add(node)
@@ -2541,16 +2728,18 @@ Partial Class Form1
             Dim firstNode = SimTree4.Nodes(0)
             SimTree4.SelectedNode = firstNode
             SimTree4.Focus()
-            SimTree4_AfterSelect(SimTree4, New TreeViewEventArgs(firstNode))
+            Tv4_AfterSelect(SimTree4, New TreeViewEventArgs(firstNode))
         End If
-
         ProgressBar1.Text = $"找到 {SimTree4.Nodes.Count} 個系列 (排序: {If(_tab4SortGroupsByCount, "數量", "主旨")})"
+        _dbg("結束")
+
     End Sub
-    Private Sub FillLv4(mailList As List(Of MailItemInfo))
+    Private Sub ShowResultToLv4(mailList As List(Of MailItemInfo))
+
         ' by Gemini 3 Flash, 2026/04/20: 實作智慧分組 (排除 Re:/Fw:) 與動態排序邏輯
         ' 確保資料清單被記住，以便 F6 切換時使用
+        _dbg("開始")
         ListView4.Tag = mailList
-
         ListView4.BeginUpdate()
         ListView4.Items.Clear()
         ListView4.Groups.Clear()
@@ -2596,7 +2785,8 @@ Partial Class Form1
             End Select
 
             ' 收集該組的所有項目，再一次性 AddRange (by Gemini 3.0 flash, 2026/04/21)
-            Dim groupItems As New List(Of ListViewItem)
+            ' 預分配容量為 512，優化重複郵件掃描結果的 UI 清單組裝 (by Gemini 3 Flash, 2026/05/04)
+            Dim groupItems As New List(Of ListViewItem)(512)
             For Each mailItem In sortedItems
                 ' by Gemini 3.0 Flash, 2026/04/20: 郵件大小改為位元組(精細), 日期格式統一 yyyy/MM/dd (補零+置中需求)
                 Dim lvi As New ListViewItem({mailItem.Subject,
@@ -2616,73 +2806,11 @@ Partial Class Form1
         ' 4. 更新狀態列反饋 (by Gemini 3 Flash, 2026/04/20)
         Dim sortModeStr = If(_lv4GroupSortByCount, "數量排序", "名稱排序")
         ProgressBar2.Text = $"系列選中：{ListView4.Groups.Count:N0} 個主題，共 {mailList.Count:N0} 封郵件 (目前：{sortModeStr})"
-    End Sub
-    Private Sub HandleLv4Delete(lv As ListView)
-        ' by Gemini 3 Flash, 2026/04/20: 處理 ListView4 的刪除邏輯
-        Dim selCount As Integer = lv.SelectedItems.Count
-        If selCount = 0 Then Return
+        _dbg("結束")
 
-        If MessageBox.Show($"確定要將選中的 {selCount} 封郵件移到「刪除郵件」資料夾嗎？", "確認刪除",
-                           MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
-
-            Dim entryIDs As New List(Of String)
-            ' ✅ by Gemini 3.0 flash, 2026/04/21: 修正控制項名稱為 SimTree4
-            Dim mailList As List(Of MailItemInfo) = TryCast(SimTree4.SelectedNode?.Tag, List(Of MailItemInfo))
-
-            If mailList IsNot Nothing Then
-                ' 先收集 ID 並從原始清單中移除
-                ' ✅ by Gemini 3.0 flash, 2026/04/21: 改從 Tag 獲取郵件資訊以解決 Index 錯位問題
-                For Each item As ListViewItem In lv.SelectedItems
-                    If TypeOf item.Tag Is MailItemInfo Then
-                        Dim info = DirectCast(item.Tag, MailItemInfo)
-                        entryIDs.Add(info.EntryID)
-                        mailList.Remove(info) ' 備註：MailItemInfo 是 Structure，Remove 會依據內容自動對比
-                    End If
-                Next
-
-                ' 實體刪除 (移動到預設刪除資料夾)
-                MoveMailsToRecycle(entryIDs)
-
-                ' 重新整理 UI
-                FillLv4(mailList)
-                ProgressBar2.Text = $"已移動 {selCount} 封郵件至刪除郵件資料夾"
-            End If
-        End If
-    End Sub
-    Private Sub MoveMailsToRecycle(entryIDs As List(Of String))
-        ' by Gemini 3 Flash, 2026/04/20: 核心移動邏輯 (Layer3)
-        ' 建立背景執行緒執行移動，避免 UI 卡死
-        Dim th As New Thread(Sub()
-                                 Dim ns As Outlook.NameSpace = Nothing
-                                 Dim destFolder As Outlook.Folder = Nothing
-                                 Try
-                                     ns = _olApp.GetNamespace("MAPI")
-                                     ' 取得預設儲存空間的刪除郵件資料夾
-                                     destFolder = ns.GetDefaultFolder(Outlook.OlDefaultFolders.olFolderDeletedItems)
-
-                                     For Each id In entryIDs
-                                         Dim mail As Outlook.MailItem = Nothing
-                                         Try
-                                             mail = CType(ns.GetItemFromID(id), Outlook.MailItem)
-                                             mail.Move(destFolder)
-                                         Catch ex As System.Exception
-                                             _dbg("刪除失敗", $"ID: {id}, Error: {ex.Message}")
-                                         Finally
-                                             TryMarshalRelease(mail)
-                                         End Try
-                                     Next
-                                 Catch ex As System.Exception
-                                     _dbg("移動郵件失敗", ex.Message)
-                                 Finally
-                                     TryMarshalRelease(destFolder)
-                                     TryMarshalRelease(ns)
-                                 End Try
-                             End Sub)
-        th.SetApartmentState(ApartmentState.STA)
-        th.IsBackground = True
-        th.Start()
     End Sub
     Private Async Function RefreshLv4MailsAsync(lv As ListView) As Task
+
         ' by Gemini 3 Flash, 2026/04/20: 重新讀取目前系列郵件的最新資訊並更新 MailItemInfo
         _dbg("開始")
         ' ✅ by Gemini 3.0 flash, 2026/04/21: 修正控制項名稱為 SimTree4
@@ -2714,14 +2842,11 @@ Partial Class Form1
                 End Try
 
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
-                Await SmartThrottle(swThrottle, cToken:=CancellationToken.None, ThrottleFreq.Hii,
-                                          Sub() ProgressBar2.Text = $"正在重新讀取郵件資訊: {i + 1} / {total}...")
+                Await SmartThrottle(swThrottle, cToken:=CancellationToken.None, ThrottleFreq.Hii, Sub() ProgressBar2.Text = $"正在重新讀取郵件資訊: {i + 1} / {total}...")
             Next
 
-            ' 重新填寫列表 (保留目前的排序狀態，因為資料是原地更新)
-            FillLv4(mailList)
-            ProgressBar1.Text = $"已重新讀取 {total} 封郵件。"
-            ProgressBar2.Text = ""
+            ShowResultToLv4(mailList)  ' 重新填寫列表 (保留目前的排序狀態，因為資料是原地更新)
+            ProgressBar1.Text = $"已重新讀取 {total} 封郵件。" : ProgressBar2.Text = ""
 
         Catch ex As System.Exception
             _dbg("重新讀取發生錯誤", ex.Message)
@@ -2729,7 +2854,38 @@ Partial Class Form1
             _isUserBusy = False : Cursor = Cursors.Default
             _dbg("結束")
         End Try
+
     End Function
+    Private Sub HandleLv4Delete(lv As ListView)
+        ' by Gemini 3 Flash, 2026/04/20: 處理 ListView4 的刪除邏輯
+        _dbg("開始")
+        Dim selCount As Integer = lv.SelectedItems.Count
+        If selCount = 0 Then Return
+
+        If MessageBox.Show($"確定要將選中的 {selCount} 封郵件移到「刪除郵件」資料夾嗎？", "確認刪除",
+                           MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
+
+            Dim entryIDs As New List(Of String)(64) ' 預分配容量，優化批量刪除的 ID 收集 (by Gemini 3 Flash, 2026/05/04)
+            ' 2026/04/28 by Gemini 3.1 Pro: 改由 ListView 本身的 Tag 取回清單，並以 EntryID 作為刪除比對基準，避免 Structure 預設比對失敗
+            Dim mailList As List(Of MailItemInfo) = TryCast(lv.Tag, List(Of MailItemInfo))
+
+            If mailList IsNot Nothing Then
+                ' 先收集 ID 並從原始清單中移除
+                For Each item As ListViewItem In lv.SelectedItems
+                    If TypeOf item.Tag Is MailItemInfo Then
+                        Dim info = DirectCast(item.Tag, MailItemInfo)
+                        entryIDs.Add(info.EntryID)
+                        mailList.RemoveAll(Function(m) m.EntryID = info.EntryID)
+                    End If
+                Next
+                MoveMailsToRecycle(entryIDs)    ' 實體刪除 (移動到預設刪除資料夾)
+                ShowResultToLv4(mailList)       ' 重新整理 UI
+                ProgressBar2.Text = $"已移動 {selCount} 封郵件至刪除郵件資料夾"
+            End If
+        End If
+        _dbg("結束")
+
+    End Sub
 #End Region
 #Region "  └ 輔助函數"
     Private Function GetCleanSubject(subject As String) As String
@@ -2751,134 +2907,364 @@ Partial Class Form1
         End While
         Return clean
     End Function
+    Private Sub MoveMailsToRecycle(entryIDs As List(Of String))
+        ' by Gemini 3 Flash, 2026/04/20: 核心移動邏輯 (Layer3)
+        ' 建立背景執行緒執行移動，避免 UI 卡死
+
+        ' 2026/04/30 by Simon/Claude: 修正跨 Store 移動失敗的問題
+        '   原本使用 ns.GetDefaultFolder(olFolderDeletedItems) 取得預設帳號的刪除資料夾，
+        '   但在多 PST 環境下，非主 Store 的郵件跨 Store Move() 會靜默失敗。
+        '   修正：改用 mail.Delete() 自動移入同一 Store 的刪除郵件資料夾，
+        '   行為與 Outlook UI 按 Delete 鍵一致，跨 Store 問題徹底消除。
+        _dbg("開始")
+        Dim th As New Thread(Sub()
+                                 Dim ns As Outlook.NameSpace = Nothing
+                                 Try
+                                     ns = _olApp.GetNamespace("MAPI")
+                                     For Each id In entryIDs
+                                         Dim mail As Outlook.MailItem = Nothing
+                                         Try
+                                             mail = CType(ns.GetItemFromID(id), Outlook.MailItem)
+                                             mail.Delete()   ' ← 自動移至同 Store 的刪除郵件，不需指定 destFolder
+                                         Catch ex As System.Exception
+                                             _dbg("刪除失敗", $"ID: {id}, Error: {ex.Message}")
+                                         Finally
+                                             TryMarshalRelease(mail)
+                                         End Try
+                                     Next
+                                 Catch ex As System.Exception
+                                     _dbg("移動郵件失敗", ex.Message)
+                                 Finally
+                                     TryMarshalRelease(ns)   ' destFolder 不再需要，一起移除
+                                 End Try
+                             End Sub)
+        th.SetApartmentState(ApartmentState.STA)
+        th.IsBackground = True
+        th.Start()
+
+    End Sub
+
+    Private Async Function GetCachedMailBody(entryID As String) As Task(Of String)
+        ' ── L2.5 快取代理層 ──────────────────────────────────────────────────────────
+        ' ---------------------------------------------------------------
+        ' GetCachedMailBody — Layer2.5 快取代理：Body 快取存取點
+        ' 2026/04/28 by Simon/Claude: 依照 L2.5 架構抽出快取邏輯，L3 只剩純 COM
+        '   ① 快取命中（_lv4BodyCache）→ 直接回傳，0 COM call
+        '   ② 快取未命中 → 呼叫 L3 GetMailBodyL3 讀取並正規化
+        '   ③ 無論成功或失敗都存快取（失敗存 ""），避免同一封信重複嘗試 COM
+        ' ---------------------------------------------------------------
+        Dim cached As String = Nothing
+        If _lv4BodyCache.TryGetValue(entryID, cached) Then Return cached
+
+        Dim body As String = Await GetMailBodyL3(entryID)
+        _lv4BodyCache(entryID) = body   ' 無論成功失敗都存入，避免重複打 COM
+        Return body
+
+    End Function
+    Private Async Function GetMailBodyL3(entryID As String) As Task(Of String)
+        ' ── L3 COM 資料層 ────────────────────────────────────────────────────────────
+        ' ---------------------------------------------------------------
+        ' GetMailBodyL3 — Layer3 COM 資料層：讀取郵件 Body 並正規化
+        ' 2026/04/28 by Simon/Claude: 以 Simon 的 GetMailBodyByEntryID 為基礎
+        '   + 加入 NormalizeMailBody 正規化（去除 HTML 標籤、空白換行）
+        '   + Await Task.Yield() 確保每封讀完後讓 UI 執行緒喘氣
+        '   支援 MailItem 與 PostItem 兩種型別
+        '   使用獨立的 ns（Simon 的設計），確保 COM namespace 不跨執行緒共用
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(entryID) Then Return ""
+
+        Dim ns As Outlook.NameSpace = Nothing
+        Dim item As Object = Nothing
+        Dim body As String = ""
+        Try
+            ns = _olApp.GetNamespace("MAPI")    ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
+            item = ns.GetItemFromID(entryID)
+            'item = _olNS.GetItemFromID(entryID) ' 2026/04/28 by simon, 使用共用的 NameSpace 以減少多建一次namespace的 COM 開銷
+
+            If item IsNot Nothing Then
+                If TypeOf item Is Outlook.MailItem Then
+                    body = NormalizeMailBody(DirectCast(item, Outlook.MailItem).Body)
+                ElseIf TypeOf item Is Outlook.PostItem Then
+                    body = NormalizeMailBody(DirectCast(item, Outlook.PostItem).Body)
+                End If
+            End If
+        Catch ex As System.Exception
+            _dbg("GetMailBodyL3 失敗", $"{entryID}: {ex.Message}")
+        Finally
+            TryMarshalRelease(item)
+            TryMarshalRelease(ns)   ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
+        End Try
+
+        Await Task.Yield()  ' 每封讀完讓 UI 喘氣，維持游標移動的靈敏度
+        Return body
+
+    End Function
+    Private Function NormalizeMailBody(body As String) As String
+        ' ---------------------------------------------------------------
+        ' NormalizeMailBody — 正規化郵件 Body，去除雜訊讓相似度比對更精確
+        ' 2026/04/28 by Claude
+        ' 處理步驟（依序）:
+        '   1. Null/空值防護
+        '   2. 去除 HTML 標籤（<...> 包圍的內容）
+        '   3. 去除常見 HTML entities（&nbsp; &lt; 等）
+        '   4. 去除所有空白字元（空格、Tab、換行、全形空白）
+        '   5. 轉小寫（大小寫不影響內容相似度）
+        ' 效果：兩封內容相同但格式不同的郵件（HTML vs 純文字）相似度會大幅提升
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(body) Then Return ""
+
+        ' 去除 HTML 標籤
+        Dim result As String = System.Text.RegularExpressions.Regex.Replace(body, "<[^>]+>", "")
+
+        ' 去除常見 HTML entities
+        result = result.Replace("&nbsp;", "").Replace("&lt;", "").Replace("&gt;", "").
+                        Replace("&amp;", "").Replace("&quot;", "").Replace("&#39;", "")
+
+        ' 去除所有空白字元（含全形空白 \u3000、Tab、換行）
+        result = System.Text.RegularExpressions.Regex.Replace(result, "[\s\u3000]+", "")
+        Return result.ToLower()
+
+    End Function
+    Private Function CharlesHash(strA As String, strB As String) As Double
+        ''' <summary>
+        ''' 2006/06/22 Algorithm by Charles Wu / Translated & Optimized by Gemini 3 Flash, 2026/04/26
+        ''' 基於字元雜湊統計的快速相似度比對 (O(N) 複雜度，適合長內文)
+        ''' </summary>
+        ' by Gemini 3 Flash, 2026/04/26: 傳承自 Charles Wu 2006 年的經典演算法，專攻常用字元相似度對比
+        If String.IsNullOrEmpty(strA) OrElse String.IsNullOrEmpty(strB) Then Return 0
+
+        ' 使用 Byte 陣列記錄 Unicode 字元出現狀態 (0:無, 1:A有, 2:B有, 3:兩者皆有)
+        Dim charTable(65535) As Byte
+        Dim lSum(3) As Integer
+
+        ' 1. 處理字串 A
+        For Each c In strA
+            Dim code As Integer = AscW(c)
+            If charTable(code) = 0 Then charTable(code) = 1
+        Next
+
+        ' 2. 處理字串 B
+        For Each c In strB
+            Dim code As Integer = AscW(c)
+            If charTable(code) = 0 Then
+                charTable(code) = 2
+            ElseIf charTable(code) = 1 Then
+                charTable(code) = 3
+            End If
+        Next
+
+        ' 3. 統計範圍擴大：
+        ' - ASCII 區段 (0 ~ 255): 包含英文、數字、常用符號
+        ' - CJK 中日韓區段 (&H2E80 ~ &H9FBF): 包含繁簡中、日文、韓文
+        ' 註：若要極致精準可掃描全表 (0 To 65535)，但掃描特定區段效能更好
+
+        ' 統計 ASCII
+        For i As Integer = 0 To 255
+            lSum(charTable(i)) += 1
+        Next
+        ' 統計 CJK
+        For i As Integer = &H2E80 To &H9FBF
+            lSum(charTable(i)) += 1
+        Next
+
+        ' 4. 計算相似度
+        Dim denominator As Integer = lSum(1) + lSum(2) + lSum(3)
+        If denominator = 0 Then Return 0
+        Return lSum(3) / denominator
+    End Function
+    Private Function JaccardSimilarity(strA As String, strB As String) As Double
+
+        ' ---------------------------------------------------------------
+        ' JaccardSimilarity — 字元集 Jaccard 相似度（Charles Wu 算法現代化版）
+        ' 2026/04/28 by Simon/Claude: 基於 GetSimRate_New (2006/06/22 Algorithm by Charles Wu)
+        '   原版只統計 U+4E00~U+9FBF 中文字範圍；新版擴展至全 Unicode 字元集
+        '   原版用 Integer 陣列 65536 格；新版用 HashSet(Of Char)，語意更清晰且省記憶體
+        '   Simon 優化：先找較小的集合走迴圈，減少一半的迭代次數
+        '
+        ' 算法原理 (Jaccard similarity):
+        '   相似度 = |A ∩ B| / |A ∪ B|
+        '   其中 A、B 為各字串的唯一字元集合（重複字元只算一次）
+        '   包含/被包含關係的郵件（轉寄引用）也能得到高相似度
+        '
+        ' 複雜度: O(n+m)，遠優於 Levenshtein 的 O(n×m)
+        '         兩封幾千字的信也能在幾毫秒內完成
+        ' ---------------------------------------------------------------
+
+        If String.IsNullOrEmpty(strA) AndAlso String.IsNullOrEmpty(strB) Then Return 1.0
+        If String.IsNullOrEmpty(strA) OrElse String.IsNullOrEmpty(strB) Then Return 0.0
+
+        ' 將字串轉換為唯一字元的 Hash 集合
+        Dim setA As New HashSet(Of Char)(strA)
+        Dim setB As New HashSet(Of Char)(strB)
+
+        '' 計算交集數量-1 (必須在 IntersectWith 之前記錄原始大小)
+        'Dim countA As Integer = setA.Count
+        'Dim countB As Integer = setB.Count
+        'setA.IntersectWith(setB)                    ' 直接與setB 交集, setA 就會被修改成交集後的集合了
+        'Dim intersectCount As Integer = setA.Count  ' 交集後直接讀取，O(1)
+
+        ' 計算交集數量-2 (使用迴圈比呼叫 IntersectWith 更省記憶體與效能)
+        '   因為這裡根本不需要修改 setA，只需要計數，原始迴圈反而是更精準的選擇
+        '   IntersectWith() 的優勢是語意清楚、後續可直接使用縮減後的集合，但在純計數場景下並無好處。
+
+        ' 找出較小的集合來走迴圈，性能更好
+        If setA.Count > setB.Count Then
+            Dim temp = setA : setA = setB : setB = temp
+        End If
+
+        Dim intersectCount As Integer = 0
+        For Each c In setA
+            If setB.Contains(c) Then intersectCount += 1
+        Next
+
+        ' 聯集數量 = A大小 + B大小 - 交集數量 (數學集合論公式，避免呼叫 UnionWith)
+        Dim unionCount As Integer = setA.Count + setB.Count - intersectCount
+        If unionCount = 0 Then Return 0
+        Return intersectCount / unionCount
+
+    End Function
 #End Region
 #End Region
 
 #Region "■ 08 Tab5: 重複郵件"
+#Region "  ├ Layer1 UI事件層"
     Private Async Sub Bt5_Click(sender As Object, e As EventArgs) Handles Button5.Click
+        ' ---------------------------------------------------------------
+        ' Bt5_Click — 掃描重複郵件
+        ' 2026/05/02 by Claude:
+        '   1. 搜尋範圍改由 SimTree5 選取的資料夾決定（取代舊版掃全部 Store）
+        '   2. Fuzzy 相似度比對改用 JaccardSimilarity（取代 LevenshteinDistance）
+        '   3. ListView5 加入「相似度」欄
+        ' ---------------------------------------------------------------
+
         _dbg("開始")
-        Dim cToken As CancellationToken = OkayNowYouHaveToken()  ' 2026/04/16 by Gemini 3.0 flash: 加入支援 ESC 取消的 Token
-        If _pstStoreList Is Nothing OrElse _pstStoreList.Count = 0 Then
-            _dbg("結束", "PST 尚未載入")
-            MessageBox.Show("PST 檔案庫尚未載入完成，請稍後再試", "提示")
+        Dim cToken As CancellationToken = OkayNowYouHaveToken()
+
+        ' ── 取得 SimTree5 選取的資料夾清單 ──
+        Dim selectedNodes As List(Of TreeNode) = SimTree5.SelectedNodes
+        If selectedNodes Is Nothing OrElse selectedNodes.Count = 0 Then
+            MessageBox.Show("請先在左側選取要掃描的資料夾或 PST。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
             Return
         End If
-        Button5.Enabled = False
-        Cursor = Cursors.WaitCursor
-        ListView5.BeginUpdate()
-        ListView5.Items.Clear()
-        ListView5.EndUpdate()
-        ProgressBar1.Text = "正在準備"
-        ProgressBar2.Text = "準備全信箱掃描重複郵件..."
+
+        Button5.Enabled = False : Cursor = Cursors.WaitCursor
+        ListView5.BeginUpdate() : ListView5.Items.Clear() : ListView5.EndUpdate()
+        ProgressBar1.Text = "正在準備" : ProgressBar2.Text = "展開資料夾結構..."
         Dim sw As New Stopwatch() : sw.Start()
+        Dim swThrottle As New Stopwatch() : swThrottle.Start()
+
         Dim progress5 As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
-        Dim swThrottle As New Stopwatch() : swThrottle.Start() ' by Gemini, 2026/04/02
         Dim exactDict As New Dictionary(Of String, List(Of MailItemInfo))(StringComparer.OrdinalIgnoreCase)
         Dim isExact As Boolean = rbExactMatch.Checked
+
         Try
-            ' 遍歷所有 Store
+            ' ── Step 1: 展開選取的資料夾（含子資料夾），去重 ──
+            Dim folderList = Await GetUniqueFolderList(selectedNodes, includeSub:=True, cToken:=cToken, progress:=progress5)
+            If folderList.Count = 0 Then Return
 
-            ' 遍歷所有 Store
+            ' ── Step 2: 逐資料夾掃 GetTable ──
             Dim totalProcessed As Integer = 0
-            For Each store In _pstStoreList
-                'If _cancelRequested Then Exit For
+            Dim totalFolders As Integer = folderList.Count
+            For i As Integer = 0 To folderList.Count - 1
+                Dim folder As Outlook.Folder = folderList(i).Folder
+                Dim fPath As String = folderList(i).fPath
+                Dim table As Outlook.Table = Nothing
                 Try
-                    Dim rootFolder As Outlook.Folder = store.GetRootFolder()
-                    ' 2026/04/16 by Gemini: GetSubtreeToList 現在回傳 Tuple，解開它以維持 Tab5 後續邏輯
-                    ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，原 GetSubtreeToList 已改名為 L3
-                    Dim targetTupleList = Await GetSubtreeToList(rootFolder, includeSubF:=True, progress:=progress5)
-                    Dim targetFolderList = targetTupleList.Select(Function(x) x.Folder).ToList()
-                    For Each folder In targetFolderList
-                        'If _cancelRequested Then Exit For
-                        Dim table As Outlook.Table = Nothing
-                        Try
-                            table = folder.GetTable()
-                            Const PR_MESSAGE_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
-                            table.Columns.RemoveAll()
-                            table.Columns.Add("EntryID")
-                            table.Columns.Add("Subject")
-                            table.Columns.Add(PR_MESSAGE_SIZE)
-                            table.Columns.Add("ReceivedTime")
-                            table.Columns.Add("SenderName")
-                            Do While Not table.EndOfTable
-                                Dim arr As Object = table.GetArray(BATCH_SIZE)
-                                If arr Is Nothing Then Exit Do
-                                Dim data(,) As Object = DirectCast(arr, Object(,))
-                                For r As Integer = 0 To data.GetUpperBound(0)
-                                    Dim entryID As String = SafeGet(Of String)(data, r, 0, "")
-                                    If entryID = "" Then Continue For
-                                    Dim subject As String = SafeGet(Of String)(data, r, 1, "")
-                                    Dim size As Long = SafeGet(Of Long)(data, r, 2, 0L)
-                                    Dim recvTime As DateTime = SafeGet(Of DateTime)(data, r, 3, DateTime.MinValue)
-                                    Dim senderName As String = SafeGet(Of String)(data, r, 4, "")
-                                    Dim info As New MailItemInfo With {.EntryID = entryID,
-                                                                       .Subject = subject,
-                                                                       .Size = size,
-                                                                       .ReceivedTime = recvTime,
-                                                                       .SenderName = senderName}
-                                    Dim hashKey As String
-                                    If isExact Then
-                                        hashKey = $"{subject}|{size}|{recvTime:yyyyMMddHHmmss}|{senderName}"
-                                    Else
-                                        Dim cleanSubj As String = subject.ToUpper().Replace("RE:", "").Replace("FW:", "").Replace("回覆:", "").Replace("轉寄:", "").Replace(" ", "").Trim()
-                                        If cleanSubj.Length > 20 Then cleanSubj = cleanSubj.Substring(0, 20)
-                                        hashKey = $"{cleanSubj}|{size}"
-                                    End If
+                    Const PR_MESSAGE_SIZE As String = "http://schemas.microsoft.com/mapi/proptag/0x0E080003"
+                    table = folder.GetTable()
+                    table.Columns.RemoveAll()
+                    table.Columns.Add("EntryID")
+                    table.Columns.Add("Subject")
+                    table.Columns.Add(PR_MESSAGE_SIZE)
+                    table.Columns.Add("ReceivedTime")
+                    table.Columns.Add("SenderName")
 
-                                    If Not exactDict.ContainsKey(hashKey) Then exactDict(hashKey) = New List(Of MailItemInfo)()
-                                    exactDict(hashKey).Add(info)
-                                Next
-                                Await Task.Yield()
-                            Loop
-                        Catch ex As System.Exception
-                            _dbg("錯誤", $"{folder.Name}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
-                        Finally
-                            TryMarshalRelease(table)
-                        End Try
-                        totalProcessed += 1
+                    Do While Not table.EndOfTable
+                        Dim arr As Object = table.GetArray(BATCH_SIZE)
+                        If arr Is Nothing Then Exit Do
 
-                        ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
-                        Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                                  Sub() progress5.Report(New ProgressReport With {.Message = $"掃描中 ({store.DisplayName}): 已處理 {totalProcessed} 個資料夾..."}))
-                    Next
+                        Dim data(,) As Object = DirectCast(arr, Object(,))
+                        For r As Integer = 0 To data.GetUpperBound(0)
+                            Dim entryID As String = SafeGet(Of String)(data, r, 0, "")
+                            If entryID = "" Then Continue For
+
+                            Dim subject As String = SafeGet(Of String)(data, r, 1, "")
+                            Dim size As Long = SafeGet(Of Long)(data, r, 2, 0L)
+                            Dim recvTime As DateTime = SafeGet(Of DateTime)(data, r, 3, DateTime.MinValue)
+                            Dim senderName As String = SafeGet(Of String)(data, r, 4, "")
+                            Dim info As New MailItemInfo With {.EntryID = entryID,
+                                                               .Subject = subject,
+                                                               .Size = size,
+                                                               .ReceivedTime = recvTime,
+                                                               .SenderName = senderName,
+                                                               .FolderPath = fPath}
+                            Dim hashKey As String
+                            If isExact Then
+                                hashKey = $"{subject}|{size}|{recvTime:yyyyMMddHHmmss}|{senderName}"
+                            Else
+                                ' Fuzzy 模式：主旨前 20 字 + 大小分組，後面再用 Jaccard 二次過濾
+                                ' 💡 2026/05/03 by Gemini 3.1 Pro: 改用既有的 GetCleanSubject() 處理巢狀前綴，並保留去除空白與大寫化邏輯
+                                Dim cleanSubj As String = GetCleanSubject(subject).Replace(" ", "").ToUpper()
+                                If cleanSubj.Length > 20 Then cleanSubj = cleanSubj.Substring(0, 20)
+                                hashKey = $"{cleanSubj}|{size}"
+                            End If
+                            If Not exactDict.ContainsKey(hashKey) Then exactDict(hashKey) = New List(Of MailItemInfo)()
+                            exactDict(hashKey).Add(info)
+                        Next
+                        Await Task.Yield()
+                    Loop
                 Catch ex As System.Exception
-                    _dbg("錯誤", $"{store.DisplayName}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
+                    _dbg("錯誤", $"{folder.Name}: {ex.Message}")
+                Finally
+                    TryMarshalRelease(table)
                 End Try
+                totalProcessed += 1
+                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                                          Sub() progress5.Report(New ProgressReport With {.Message = $"掃描中: {totalProcessed}/{totalFolders} 個資料夾..."}))
             Next
-            ' 尋找符合條件的群組
+
+            ' ── Step 3: 建立結果列表（Fuzzy 模式用 JaccardSimilarity 二次過濾）──
+            ' 2026/05/02 by Claude: 原本 CalculateSimilarity (Levenshtein) 改為 JaccardSimilarity
+            '   Jaccard 字元集相似度 O(n+m) >> Levenshtein O(n×m)，大量比對時快得多
             ListView5.BeginUpdate()
             Dim groupID As Integer = 1
             Dim totalDuplicateMails As Integer = 0
-            Dim swThrottleBuild As New Stopwatch() : swThrottleBuild.Start() ' by Gemini, 2026/04/02
+            Dim swThrottleBuild As New Stopwatch() : swThrottleBuild.Start()
             For Each kvp In exactDict
                 If kvp.Value.Count > 1 Then
                     Dim isValidGroup As Boolean = True
-                    ' 若是 Fuzzy 模式，還需確認 Levenshtein 距離不超過門檻 (至少大於 0.8 相似度)
+                    Dim simScores As New List(Of Double)(32)  ' 每封信與群組第一封的 Jaccard 相似度
+
                     If Not isExact Then
-                        Dim firstSubject As String = kvp.Value(0).Subject.ToUpper()
+                        ' Fuzzy 模式：Jaccard 二次過濾，門檻 0.6（字元集比對比 Levenshtein 更寬鬆，故調低門檻）
+                        Dim firstSubject As String = kvp.Value(0).Subject
+                        simScores.Add(1.0)  ' 第一封與自己 = 100%
                         For i As Integer = 1 To kvp.Value.Count - 1
-                            Dim sim As Double = CalculateSimilarity(firstSubject, kvp.Value(i).Subject.ToUpper())
-                            If sim < 0.8 Then
-                                isValidGroup = False
-                                Exit For
-                            End If
+                            Dim sim As Double = JaccardSimilarity(firstSubject, kvp.Value(i).Subject)
+                            simScores.Add(sim)
+                            If sim < 0.6 Then isValidGroup = False : Exit For
                         Next
+                    Else
+                        ' Exact 模式：全部 100%
+                        For i As Integer = 0 To kvp.Value.Count - 1 : simScores.Add(1.0) : Next
                     End If
+
                     If isValidGroup Then
                         Dim groupColor As Color = If(groupID Mod 2 = 0, Color.FromArgb(240, 248, 255), Color.White)
-                        For Each mailItem In kvp.Value
+                        For idx As Integer = 0 To kvp.Value.Count - 1
+                            Dim mailItem As MailItemInfo = kvp.Value(idx)
+                            Dim simText As String = If(idx < simScores.Count, $"{CInt(simScores(idx) * 100)}%", "-")
                             Dim lvi As New ListViewItem({mailItem.Subject,
-                                                        (mailItem.Size \ 1024L).ToString("###,###,###,##0") & "KB",
-                                                         mailItem.ReceivedTime.ToString("yyyy/MM/dd HH:mm:ss"),
+                                                        (mailItem.Size \ 1024L).ToString("N0") & "KB",
+                                                         mailItem.ReceivedTime.ToString("yyyy/MM/dd"),
                                                          mailItem.SenderName,
                                                          "群組 " & groupID.ToString(),
-                                                         mailItem.EntryID}) With {.BackColor = groupColor}
+                                                         simText,
+                                                         mailItem.EntryID}) With {.BackColor = groupColor, .Tag = mailItem} ' 2026/05/03 by Gemini 3.1 Pro: 補上 Tag 以供共通事件取用
                             ListView5.Items.Add(lvi)
                             totalDuplicateMails += 1
                         Next
                         groupID += 1
-
-                        ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
                         Await SmartThrottle(swThrottleBuild, cToken:=cToken, ThrottleFreq.Hii,
                                                   Sub() progress5.Report(New ProgressReport With {.Message = $"正在建立重複郵件清單: {groupID} 組..."}))
                     End If
@@ -2888,110 +3274,27 @@ Partial Class Form1
             sw.Stop()
             ProgressBar1.Text = $"找到 {groupID - 1} 組 ({totalDuplicateMails} 封) / 耗時 {sw.Elapsed.TotalSeconds:0.00} 秒"
             ProgressBar2.Text = ""
+        Catch ex As OperationCanceledException
+            _dbg("結束", "ESC 中斷") : ProgressBar1.Text = "已中斷。" : ProgressBar2.Text = ""
         Catch ex As System.Exception
             MessageBox.Show("掃描重複郵件時發生錯誤: " & ex.Message, "錯誤")
             _dbg("錯誤", ex.Message)
         Finally
-            Button5.Enabled = True
-            Cursor = Cursors.Default
+            Button5.Enabled = True : Cursor = Cursors.Default
             _dbg("結束")
         End Try
 
     End Sub
-    Private Function CalculateSimilarity(strA As String, strB As String) As Double
-        ' by Gemini, 2026/04/04: Issue 1 移除 _dbg (Tab5 高頻呼叫，N封×2個函數=2N行輸出) 
-        ' 計算編輯距離
-        Dim editDistance As Integer = LevenshteinDistance(strA, strB)
+#End Region
+#Region "  ├ Layer2 流程協調層"
 
-        ' 將編輯距離歸一化為範圍在 0 到 1 之間的值
-        Dim maxLength As Integer = Math.Max(strA.Length, strB.Length)
-        Dim similarity As Double = 1 - CDbl(editDistance) / maxLength
-        Return similarity
+#End Region
+#Region "  └ 輔助函數"
 
-    End Function
-    Private Function LevenshteinDistance(strA As String, strB As String) As Integer
-        ' by Gemini, 2026/04/04: Issue 1 移除 _dbg (Tab5 高頻呼叫，同上) 
-        ' 計算 Levenshtein 編輯距離的輔助函數
-        Dim lenA As Integer = strA.Length
-        Dim lenB As Integer = strB.Length
-        Dim distance(lenA, lenB) As Integer
-        For i As Integer = 0 To lenA : distance(i, 0) = i : Next
-        For j As Integer = 0 To lenB : distance(0, j) = j : Next
-        For j As Integer = 1 To lenB
-            For i As Integer = 1 To lenA
-                '' 改前 (5行)
-                'If strA(fd - 1) = strB(j - 1) Then
-                '    distance(fd, j) = distance(fd - 1, j - 1)
-                'Else
-                '    distance(fd, j) = Math.Min(Math.Min(distance(fd - 1, j) + 1,
-                '                                       distance(fd, j - 1) + 1), distance(fd - 1, j - 1) + 1)
-                'End If
-
-                ' 改後 (1行)
-                distance(i, j) = If(strA(i - 1) = strB(j - 1),
-                    distance(i - 1, j - 1), Math.Min(Math.Min(distance(i - 1, j) + 1,
-                                                              distance(i, j - 1) + 1), distance(i - 1, j - 1) + 1))
-            Next
-        Next
-        Return distance(lenA, lenB)
-
-    End Function
+#End Region
 #End Region
 
 #Region "■ 09 Tab6: Debug & 設定"
-    Private Sub CheckDebug_CheckedChanged(sender As Object, e As EventArgs) Handles CheckDebug.CheckedChanged
-        _isDebugMode = CheckDebug.Checked
-        _dbg("開始", _isDebugMode.ToString)
-        Dim offset As Integer = If(CheckDebug.Checked, -240, 240)
-        Me.Left += offset
-        System.Windows.Forms.Cursor.Position = New Point(
-            System.Windows.Forms.Cursor.Position.X + offset,
-            System.Windows.Forms.Cursor.Position.Y) ' 2026/3/28 by Gemini: 滑鼠游標跟著表單偏移
-        ' 2026/3/26 by Gemini: 先同步位置與大小再顯示，確保第一次 Load 時就能抓到正確的視窗寬度
-        If CheckDebug.Checked Then
-            SyncDebugFormPosition()
-            If Not DebugForm.Visible Then DebugForm.Show(Me) ' 2026/3/27 by Gemini: 設定 Owner 確保點選 Form1 時 DebugForm 一起回到前面
-        Else
-            DebugForm.Hide()
-        End If
-        _dbg("結束")
-
-    End Sub
-    Private Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
-
-        ' 測試 DASL 是否能在 GetTable 直接濾出含有特定附檔名的信件
-        Dim folder As Outlook.Folder = TryCast(SimTree3.SelectedNode.Tag, Outlook.Folder)
-        If folder Is Nothing Then MessageBox.Show("請先選擇資料夾") : Return
-        Dim keyword As String = "2025" ' 測試關鍵字
-
-        ' 寫法 A: 使用 LIKE (不支援索引的情況)
-        Dim filterLike As String = $"@SQL=""urn:schemas:httpmail:attachmentfilename"" LIKE '%{keyword}%'"
-
-        ' 寫法 B: 使用 CI_PHRASEMATCH (依賴 Windows Search 索引，速度極快)
-        Dim filterCI As String = $"@SQL=""urn:schemas:httpmail:attachmentfilename"" CI_PHRASEMATCH '{keyword}'"
-
-        ' 這裡您可切換 filterLike 或 filterCI 測試
-        Dim table As Outlook.Table = Nothing
-        Try
-            table = folder.GetTable(filterLike)
-            MessageBox.Show($"測試成功！GetTable 直接過濾出 {table.GetRowCount()} 筆包含 {keyword} 的郵件。")
-
-            ' 印出前幾筆的主旨驗證
-            table.Columns.RemoveAll()
-            table.Columns.Add("Subject")
-            Dim count As Integer = 0
-            While Not table.EndOfTable AndAlso count < 5
-                Dim row As Outlook.Row = table.GetNextRow()
-                _dbg($"郵件: {row("Subject")}")
-                count += 1
-            End While
-        Catch ex As System.Exception
-            MessageBox.Show($"DASL 過濾失敗: {ex.Message}")
-        Finally
-            If table IsNot Nothing Then Marshal.ReleaseComObject(table)
-        End Try
-
-    End Sub
     Private Async Sub RefreshDatabaseStats()
         ' ---------------------------------------------------------------
         ' RefreshDatabaseStats — 切換到 Setting 頁時呼叫，更新 txtDatabaseStats / _lvStats
@@ -3091,6 +3394,59 @@ Partial Class Form1
             _lvStats.Items.Clear()
             _lvStats.Items.Add(New ListViewItem("❌ 讀取統計失敗: " & ex.Message))
         End Try
+    End Sub
+
+    Private Sub CheckDebug_CheckedChanged(sender As Object, e As EventArgs) Handles CheckDebug.CheckedChanged
+        _isDebugMode = CheckDebug.Checked
+        _dbg("開始", _isDebugMode.ToString)
+        Dim offset As Integer = If(CheckDebug.Checked, -240, 240)
+        Me.Left += offset
+        System.Windows.Forms.Cursor.Position = New Point(System.Windows.Forms.Cursor.Position.X + offset,
+                                                         System.Windows.Forms.Cursor.Position.Y) ' 2026/3/28 by Gemini: 滑鼠游標跟著表單偏移
+        ' 2026/3/26 by Gemini: 先同步位置與大小再顯示，確保第一次 Load 時就能抓到正確的視窗寬度
+        If CheckDebug.Checked Then
+            SyncDebugFormPosition()
+            If Not DebugForm.Visible Then DebugForm.Show(Me) ' 2026/3/27 by Gemini: 設定 Owner 確保點選 Form1 時 DebugForm 一起回到前面
+        Else
+            DebugForm.Hide()
+        End If
+        _dbg("結束")
+
+    End Sub
+    Private Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
+
+        ' 測試 DASL 是否能在 GetTable 直接濾出含有特定附檔名的信件
+        Dim folder As Outlook.Folder = TryCast(SimTree3.SelectedNode.Tag, Outlook.Folder)
+        If folder Is Nothing Then MessageBox.Show("請先選擇資料夾") : Return
+        Dim keyword As String = "2025" ' 測試關鍵字
+
+        ' 寫法 A: 使用 LIKE (不支援索引的情況)
+        Dim filterLike As String = $"@SQL=""urn:schemas:httpmail:attachmentfilename"" LIKE '%{keyword}%'"
+
+        ' 寫法 B: 使用 CI_PHRASEMATCH (依賴 Windows Search 索引，速度極快)
+        Dim filterCI As String = $"@SQL=""urn:schemas:httpmail:attachmentfilename"" CI_PHRASEMATCH '{keyword}'"
+
+        ' 這裡您可切換 filterLike 或 filterCI 測試
+        Dim table As Outlook.Table = Nothing
+        Try
+            table = folder.GetTable(filterLike)
+            MessageBox.Show($"測試成功！GetTable 直接過濾出 {table.GetRowCount()} 筆包含 {keyword} 的郵件。")
+
+            ' 印出前幾筆的主旨驗證
+            table.Columns.RemoveAll()
+            table.Columns.Add("Subject")
+            Dim count As Integer = 0
+            While Not table.EndOfTable AndAlso count < 5
+                Dim row As Outlook.Row = table.GetNextRow()
+                _dbg($"郵件: {row("Subject")}")
+                count += 1
+            End While
+        Catch ex As System.Exception
+            MessageBox.Show($"DASL 過濾失敗: {ex.Message}")
+        Finally
+            If table IsNot Nothing Then Marshal.ReleaseComObject(table)
+        End Try
+
     End Sub
 #End Region
 

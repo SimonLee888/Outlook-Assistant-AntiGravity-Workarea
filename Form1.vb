@@ -64,7 +64,8 @@ Partial Class Form1
     Private _isClosing As Boolean = False           ' added by Gemini, 2026/04/08: 關閉流程旗標，確保 FormClosing 中的非同步儲存完成後再釋放資源並允許關閉
     'Private _cancelRequested As Boolean = False    ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
     Private _cts As CancellationTokenSource         ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
-    Private _lastMouseHoverPoint As Point = Point.Empty
+    Private _lastTvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
+    Private _lastLvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
     '2026/3/10重構時停止使用全域變數來記錄遞迴過程中的資料, 改用傳遞參數以避免多線程或重入呼叫時資料被改寫的問題
     'Private _intTotalMailCount As Integer          ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
     'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
@@ -75,7 +76,7 @@ Partial Class Form1
     Private pnlOptions_tab3 As Panel
     Private rbExactMatch As New RadioButton()       ' tab5 用到的radio button
     Private rbFuzzyMatch As New RadioButton()       ' tab5 用到的radio button
-    Private WithEvents ListView5 As New ListView()
+    'Private WithEvents ListView5 As New ListView()
     Private _lvStats As ListView = Nothing          ' by Gemini 3 Flash, 2026/04/20: 動態建立的統計列表
     ' 可複選Treeview 自訂控制項 及 ContextMenu 成員變數，只初始化一次，不在每次右鍵時重新建立
     ' delete: 2026/04/01 by simon, 直接從設計工具建立 SimTree 控制項到 Form1
@@ -90,7 +91,7 @@ Partial Class Form1
     Private WithEvents HistoryListBox As ListBox
     Private _historyHoverIndex As Integer = -1
     Private _historyPopup As ToolStripDropDown
-    Private _statusHistory As New List(Of StatusHistoryItem)()
+    Private _statusHistory As New List(Of StatusHistoryItem)(1024)
 
     Private Structure StatusHistoryItem
         Dim Time As DateTime
@@ -220,7 +221,8 @@ Partial Class Form1
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(5) Then
             InitTab5UI() : _isTabInitialized(5) = True
-            LoadStoreToTreeView(_pstStoreList, TreeView5) : ExpandTvToDefaultInbox(TreeView5)
+            ' 2026/05/02 by Claude: Tab5 改用 SimTree5，對齊 Tab1~4
+            LoadStoreToTreeView(_pstStoreList, SimTree5) : ExpandTvToDefaultInbox(SimTree5)
         End If
         _dbg("結束", "全部 Tab 背景載入完畢") ' by Gemini, 2026/04/11: UI 頂層 Level 0
 
@@ -350,18 +352,21 @@ Partial Class Form1
 
         ' ✅ 2026/04/21 by Gemini 3.0 flash: 統一掛載共通互動邏輯 (鍵盤開啟、雙擊開啟、路徑同步)
         ' 📢 僅針對 Tab3 (ListView3) 與 Tab4 (ListView4) 開啟，其餘 Tab 保持原有獨立邏輯
-        If lv.Name = "ListView3" OrElse lv.Name = "ListView4" Then
-            AddHandler lv.SelectedIndexChanged, AddressOf ShowPathToProgressBar
-            AddHandler lv.MouseClick, AddressOf HandleLv3Lv4_MouseClick ' 整合：單擊左鍵複製與點擊顯示路徑
-            AddHandler lv.MouseDoubleClick, AddressOf HandleLv3Lv4_DoubleClick
-            ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4_KeyPress   ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
-            AddHandler lv.KeyDown, AddressOf HandleLv3Lv4_KeyDown ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
+        ' 📢 2026/05/03 by Gemini 3.1 Pro: 加入 ListView5 共享共通邏輯
+        If lv.Name = "ListView3" OrElse lv.Name = "ListView4" OrElse lv.Name = "ListView5" Then
+            AddHandler lv.DrawColumnHeader, Sub(s, ev) ev.DrawDefault = True    ' 統一表頭繪製, 2026/4/26 by Gemini
+            ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4Lv5_KeyPress        ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
+            AddHandler lv.KeyDown, AddressOf HandleLv3Lv4Lv5_KeyDown            ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
+            AddHandler lv.DrawSubItem, AddressOf HandleLv3Lv4Lv5_DrawSubItem    ' 統一 SubItem 繪製 (處理 Hover 變色與對齊), 2026/4/26 by Gemini
+            AddHandler lv.MouseClick, AddressOf HandleLv3Lv4Lv5_MouseClick      ' 整合：單擊左鍵複製與點擊顯示路徑
+            AddHandler lv.MouseDoubleClick, AddressOf HandleLv3Lv4Lv5_DoubleClick
+            AddHandler lv.SelectedIndexChanged, AddressOf ShowLv3Lv4Lv5PathToProgressBar
         End If
 
-        AddHandler lv.MouseMove, AddressOf HandleLvMouseHover
-        AddHandler lv.MouseLeave, AddressOf HandleLvMouseHover
         AddHandler lv.GotFocus, AddressOf HandleLvGotFocus
         AddHandler lv.Resize, AddressOf HandleLvResize              ' 2026/04/01 by Gemini: 加入共用自動縮放事件
+        AddHandler lv.MouseMove, AddressOf HandleLvMouseHover
+        AddHandler lv.MouseLeave, AddressOf HandleLvMouseHover
         ' AddHandler lv.KeyPress, AddressOf HandleListViewKeyPress  ' 2026/04/16 by Gemini 3.1 Pro: 已拆分至各 ListView 獨立處理
 
     End Sub
@@ -570,6 +575,16 @@ Partial Class Form1
         UpdateNumericIncrement(NumberMin, UnitMin)
         UpdateNumericIncrement(NumberMax, UnitMax)
 
+        ' ── ListView3: 搜尋結果欄位定義 ──
+        With ListView3
+            .Columns.Clear()
+            .Columns.Add("主旨", "主旨", CInt(ListView3.Width * 0.45))
+            .Columns.Add("郵件大小", "郵件大小", CInt(ListView3.Width * 0.13)) : .Columns(1).TextAlign = HorizontalAlignment.Right
+            .Columns.Add("收到日期", "收到日期", CInt(ListView3.Width * 0.18)) : .Columns(2).TextAlign = HorizontalAlignment.Center
+            .Columns.Add("寄件者", "寄件者", CInt(ListView3.Width * 0.22))
+            .OwnerDraw = True ' by Gemini 3 Flash, 2026/04/26: 開啟 OwnerDraw 以在 VirtualMode 下實作流暢的 MouseHover 效果
+        End With
+
         _dbg("結束")
 
     End Sub
@@ -638,6 +653,7 @@ Partial Class Form1
 
         ' 再次強制清空與狀態初始化
         ListView4.Items.Clear()
+        ListView4.OwnerDraw = True ' by Gemini 3.1 Pro, 2026/04/26: 開啟 OwnerDraw，徹底解決 ListView 有分組時 Hover 修改 BackColor 導致的 O(N) 嚴重卡頓
 
         ' ── ListView4: 系列郵件欄位定義 ──
         With ListView4
@@ -645,53 +661,100 @@ Partial Class Form1
             Dim lv4Names As String() = {"主旨", "郵件大小", "收到日期", "寄件者", "相似", "EntryID"}
             For Each n In lv4Names : .Columns.Add(n, n) : Next
             .Columns("主旨").Width = .Width * 0.4
-            .Columns("郵件大小").Width = .Width * 0.13
-            .Columns("郵件大小").TextAlign = HorizontalAlignment.Right
-            .Columns("收到日期").Width = .Width * 0.18
-            .Columns("收到日期").TextAlign = HorizontalAlignment.Center ' by Gemini 3.0 Flash, 2026/04/20: 置中對齊
+            .Columns("郵件大小").Width = CInt(.Width * 0.13) : .Columns("郵件大小").TextAlign = HorizontalAlignment.Right
+            .Columns("收到日期").Width = CInt(.Width * 0.18) : .Columns("收到日期").TextAlign = HorizontalAlignment.Center
             .Columns("寄件者").Width = .Width * 0.18
-            .Columns("相似").Width = .Width * 0.08
-            .Columns("EntryID").Width = 0 ' 隱藏欄位
+            .Columns("相似").Width = .Width * 0.08 : .Columns("相似").TextAlign = HorizontalAlignment.Center
+            .Columns("EntryID").Width = 0   ' 隱藏，僅供 OpenMailByEntryID 使用
         End With
         _dbg("結束")
 
     End Sub
     Private Sub InitTab5UI()
-        ' 清除原有的測試控制項 (如果有)，並移出 ListView5 到 TabPage5 下
-        ' ── Tab5 選項面板 (為了支持穩定佈局，將頂部按鈕放入獨立 Panel) ──
+        ' ---------------------------------------------------------------------------------------------------------
+        ' ── Tab5 (尋找重複郵件) 佈局重構 (by Gemini 3 Flash, 2026/05/03) ──
+        ' 加入 SimTree5 於左側，對齊 Tab1~4 操作行為，讓 Button5 搜尋範圍限定在選取的資料夾
+        ' 原本直接掛在 TabPage5 的 TreeView5 + ListView5 改為用 SplitContainer5 左右分欄
+        ' ---------------------------------------------------------------------------------------------------------
         _dbg("開始")
 
-        TreeView5.Visible = True
-        InitTreeView(TreeView5)
+        ' 1. 初始化基礎控制項
+        InitTreeView(SimTree5)
         InitListView(ListView5)
         InitSplitter(SplitContainer5)
+        'TreeView5.Visible = False ' 使用 SimTree5 取代，TreeView5 設為不可見
 
-        Dim pnlOptions5 As Panel
-        pnlOptions5 = New Panel With {.Dock = DockStyle.Top,
-                                      .Height = 55,
-                                      .BackColor = TabPage5.BackColor}
-
+        ' 2. 準備右側選項面板 (pnlOptions5)
+        Dim pnlOptions5 As New Panel With {.Name = "pnlOptions5",
+                                           .Dock = DockStyle.Top,
+                                           .Height = 80, ' 參考 Tab4 高度
+                                           .BackColor = ThemeColors.Gray95}
+        ' 設定 RadioButtons 樣式與位置
         rbExactMatch.Text = "完全相同 (主旨+大小+時間+寄件者)"
-        rbExactMatch.Location = New Point(20, 18)
+        rbExactMatch.Location = New Point(20, 15)
         rbExactMatch.Checked = True
         rbExactMatch.AutoSize = True
-        rbFuzzyMatch.Text = "相似重複 (相似主旨+大小)"
-        rbFuzzyMatch.Location = New Point(340, 18)
+
+        rbFuzzyMatch.Text = "相似重複 (Jaccard 字元集相似度)"
+        rbFuzzyMatch.Location = New Point(20, 45)
         rbFuzzyMatch.AutoSize = True
-        Button5.Location = New Point(600, 13)
+
+        ' 設定 Label2 (搜尋模式顯示)
+        Label2.Text = "搜尋模式:"
+        Label2.Location = New Point(20, 0) ' 根據需求排好位置
+        Label2.AutoSize = True
+        Label2.Visible = True
+
+        ' 設定 Button5 (開始掃描)
         Button5.Text = "開始掃描"
-        Button5.AutoSize = True
+        Button5.Size = New Size(100, 60)
+        Button5.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        Button5.Location = New Point(pnlOptions5.Width - Button5.Width - 10, 10)
+        Button5.BringToFront()
 
-        ' ── 組裝 UI ──
-        pnlOptions5.Controls.Add(rbExactMatch)
-        pnlOptions5.Controls.Add(rbFuzzyMatch)
-        pnlOptions5.Controls.Add(Button5)
-        TabPage5.Controls.Add(ListView5)    ' 先加 ListView，讓 Dock = Fill 佔滿底部
-        TabPage5.Controls.Add(pnlOptions5)  ' 後加 Panel，Dock = Top 會佔據上方
+        ' 3. 組裝右側面板
+        pnlOptions5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, Button5, Label2})
 
-        ' 2026/3/27 by Gemini: 正確設定 Dock 計算順序
-        pnlOptions5.SendToBack()
-        ListView5.BringToFront()
+        ' 4. 將控制項掛載到 SplitContainer5 的正確 Panel 中
+        ' 左側：SimTree5 填滿 Panel1
+        SplitContainer5.Panel1.Controls.Clear()
+        SimTree5.Parent = SplitContainer5.Panel1
+        SimTree5.Dock = DockStyle.Fill
+
+        ' 右側 Panel2（上方按鈕列）+ ListView5（填滿剩餘空間）
+        SplitContainer5.Panel2.Controls.Clear()
+        pnlOptions5.Parent = SplitContainer5.Panel2
+        ListView5.Parent = SplitContainer5.Panel2
+
+        ' 設定 Dock 順序 (Z-Order)
+        pnlOptions5.SendToBack()  ' 第一個 Dock=Top
+        ListView5.Dock = DockStyle.Fill
+        ListView5.BringToFront() ' 填滿剩餘空間
+
+        ' 5. 顯式設定 SplitContainer 屬性與分割線
+        SplitContainer5.Dock = DockStyle.Fill
+        SplitContainer5.Panel2Collapsed = False
+        SplitContainer5.SplitterDistance = 317 ' 對齊 Tab4
+
+        ' 確保 SplitContainer5 在 TabPage5 中佔滿
+        If Not TabPage5.Controls.Contains(SplitContainer5) Then
+            TabPage5.Controls.Clear()
+            TabPage5.Controls.Add(SplitContainer5)
+        End If
+
+        ' ListView5 欄位：加入「相似度」欄（Fuzzy 模式才有意義，Exact 模式顯示 100%）
+        With ListView5
+            .Columns.Clear()
+            Dim lv5Names As String() = {"主旨", "郵件大小", "收到日期", "寄件者", "群組", "相似", "EntryID"}
+            For Each n In lv5Names : .Columns.Add(n, n) : Next
+            .Columns("主旨").Width = CInt(.Width * 0.36)
+            .Columns("郵件大小").Width = CInt(.Width * 0.12) : .Columns("郵件大小").TextAlign = HorizontalAlignment.Right
+            .Columns("收到日期").Width = CInt(.Width * 0.17) : .Columns("收到日期").TextAlign = HorizontalAlignment.Center
+            .Columns("寄件者").Width = .Width * 0.17
+            .Columns("群組").Width = CInt(.Width * 0.05) : .Columns("群組").TextAlign = HorizontalAlignment.Right
+            .Columns("相似").Width = CInt(.Width * 0.08) : .Columns("相似").TextAlign = HorizontalAlignment.Center
+            .Columns("EntryID").Width = 0   ' 隱藏，僅供 OpenMailByEntryID 使用
+        End With
         _dbg("結束")
 
     End Sub
@@ -1281,8 +1344,8 @@ Partial Class Form1
         ' 0. 如果滑鼠座標跟上一次完全一樣就直接離開，避免滑鼠沒有移動也一直觸發, 2026/4/19 by simon
         Dim mouseE = TryCast(e, MouseEventArgs)
         If mouseE IsNot Nothing Then
-            If mouseE.Location = _lastMouseHoverPoint Then Return
-            _lastMouseHoverPoint = mouseE.Location
+            If mouseE.Location = _lastTvMousePoint Then Return
+            _lastTvMousePoint = mouseE.Location
         End If
 
         Dim tv As TreeView = CType(sender, TreeView)
@@ -1350,15 +1413,11 @@ Partial Class Form1
         Dim listView As ListView = TryCast(sender, ListView)
         If listView Is Nothing Then Return
 
-        ' by Gemini, 2026/04/10: 虛擬模式下頻繁修改 BackColor 會觸發大量繪製導致閃爍
-        ' 虛擬模式應由系統處理自己的 Hover 狀態，或僅針對非虛擬模式執行此邏輯
-        If listView.VirtualMode Then Return
-
         ' 0. 如果滑鼠座標跟上一次完全一樣就直接離開，避免滑鼠沒有移動也一直觸發, 2026/4/19 by simon
         Dim mouseE = TryCast(e, MouseEventArgs)
         If mouseE IsNot Nothing Then
-            If mouseE.Location = _lastMouseHoverPoint Then Return
-            _lastMouseHoverPoint = mouseE.Location
+            If mouseE.Location = _lastLvMousePoint Then Return
+            _lastLvMousePoint = mouseE.Location
         End If
 
         ' 1. 判斷目前的目標項目 (如果是 MouseLeave 則為 Nothing)
@@ -1379,6 +1438,10 @@ Partial Class Form1
             Return ' 結束，因為 UI 已經標記要重繪了
         End If
 
+        ' by Gemini, 2026/04/10: 虛擬模式下頻繁修改 BackColor 會觸發大量繪製導致閃爍
+        ' 2026/04/26 by Gemini 3 Flash: 非 OwnerDraw 的虛擬模式仍需 Return 避免直接修改 BackColor 屬性報錯
+        If listView.VirtualMode Then Return
+
         ' ----- 以下為非 OwnerDraw 模式 (例如 ListView2~5) -----
         ' 2026/04/14 by Simon/Claude: Tag=Nothing 的行 (群組標題 / 合計列) 有固定 BackColor，
         '   離開時要還原原色而非 Color.Empty；進入時也不套 hover 灰，保持原色不被蓋掉。
@@ -1393,6 +1456,34 @@ Partial Class Form1
         If currentItem IsNot Nothing Then currentItem.BackColor = ThemeColors.MercuryGray       ' 只對一般列套 hover 色
         _lastHoveredListItem = currentItem
 
+    End Sub
+    Private Sub HandleLv3Lv4Lv5_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs)
+        ' by Gemini 3 Flash, 2026/04/26: ListView3 與 ListView4 共用的 OwnerDraw 繪製邏輯
+        ' 統一處理滑鼠懸停 (Hover) 的背景變色與精確的文字對齊
+        If _lastHoveredListItem IsNot Nothing AndAlso e.ItemIndex = _lastHoveredListItem.Index AndAlso Not e.Item.Selected Then
+            Using bgBrush As New SolidBrush(ThemeColors.MercuryGray)
+                e.Graphics.FillRectangle(bgBrush, e.Bounds)
+            End Using
+
+            Dim textRect As Rectangle = e.Bounds
+            Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine Or TextFormatFlags.PreserveGraphicsClipping
+
+            ' 依照欄位對齊方式設定旗標與微調位移 (位移量根據 USER 實測反饋調整)
+            If e.ColumnIndex = 0 Then
+                textRect.X += 2 : textRect.Width -= 2 ' 避免第一欄文字貼著邊線
+                flags = flags Or TextFormatFlags.Left
+            ElseIf e.Header.TextAlign = HorizontalAlignment.Right Then
+                flags = flags Or TextFormatFlags.Right
+            ElseIf e.Header.TextAlign = HorizontalAlignment.Center Then
+                flags = flags Or TextFormatFlags.HorizontalCenter
+                textRect.X += 1 ' 修正往左偏移的問題
+            Else
+                flags = flags Or TextFormatFlags.Left
+                textRect.X += 2 ' by USER, 2026/04/26: 寄件者之後的欄位再多補 1px (共 2px)
+            End If
+
+            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, SystemColors.InactiveCaptionText, flags)
+        End If
     End Sub
     Private Sub HistoryListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles HistoryListBox.MouseMove
         Dim newHoverIndex = HistoryListBox.IndexFromPoint(e.Location)
@@ -1552,7 +1643,7 @@ Partial Class Form1
             Case 1 : Return SimTree2
             Case 2 : Return SimTree3
             Case 3 : Return SimTree4
-            Case 4 : Return TreeView5
+            Case 4 : Return SimTree5   ' 2026/05/02 by Claude: Tab5 改用 SimTree5
             Case Else : Return Nothing
         End Select
 
@@ -1561,7 +1652,7 @@ Partial Class Form1
         ''' <summary>
         ''' 遞迴搜尋容器內所有的 TreeView (含其衍生子類如 SimTree)
         ''' </summary>
-        Dim list As New List(Of TreeView)
+        Dim list As New List(Of TreeView)(16) ' 預設容量 16，避免頻繁擴容
         For Each ctrl As Control In container.Controls
             If TypeOf ctrl Is TreeView Then list.Add(CType(ctrl, TreeView)) ' 如果是 TreeView 或其衍生類 (SimTree)
             If ctrl.HasChildren Then list.AddRange(GetAllTreeViews(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
@@ -1673,7 +1764,7 @@ Partial Class Form1
                 lv.Columns(1).Width = CInt(w * 0.15)    ' 郵件大小
                 lv.Columns(2).Width = CInt(w * 0.2)     ' 收到日期
                 lv.Columns(3).Width = CInt(w * 0.2)     ' 寄件者 (by Gemini 3.0 Flash, 2026/04/20: 從 0.15 調升至 0.2 以與 LV4 一致)
-                lv.Columns(5).Width = CInt(w * 0.03)    ' EntryID (隱藏?)
+                lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03
                 lv.Columns(4).Width = If(CheckAttCount.Checked, CInt(w * 0.1), 0.03)   ' 2026/04/01 by Gemini: 根據勾選狀態 動態顯示/隱藏 附件個數欄位
                 lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5
             End If
@@ -1684,8 +1775,18 @@ Partial Class Form1
                 lv.Columns(2).Width = CInt(w * 0.18)    ' 收到時間
                 lv.Columns(3).Width = CInt(w * 0.18)    ' 寄件者
                 lv.Columns(4).Width = CInt(w * 0.08)    ' 相似度
-                lv.Columns(5).Width = CInt(w * 0.03)    ' EntryID (隱藏?)
-                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width) - 5
+                lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03
+                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5 ' by Claude Sonnet 4.6, 2026/05/03: 補上 EntryID 欄扣除
+            End If
+        ElseIf lv Is ListView5 Then ' Tab5: 主旨/大小/收到日期/寄件者/群組/相似/EntryID (7欄，比 LV4 多「群組」欄) by Claude Sonnet 4.6, 2026/05/03
+            If lv.Columns.Count >= 7 Then
+                lv.Columns(1).Width = CInt(w * 0.12)    ' 郵件大小
+                lv.Columns(2).Width = CInt(w * 0.17)    ' 收到日期
+                lv.Columns(3).Width = CInt(w * 0.17)    ' 寄件者
+                lv.Columns(4).Width = CInt(w * 0.05)    ' 群組
+                lv.Columns(5).Width = CInt(w * 0.08)    ' 相似
+                lv.Columns(6).Width = CInt(w * 0.01)    ' EntryID 極小保留
+                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width + lv.Columns(6).Width) - 5
             End If
         Else
             ' 預設比例: 首欄固定40%，其餘均分

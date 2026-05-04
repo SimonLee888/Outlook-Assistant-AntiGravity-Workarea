@@ -52,13 +52,14 @@ Imports Microsoft.Office.Interop
 '   7. (2026-04-22) 拆分 attach_maillist 與 basic_maillist：保持 Tab3 與 Tab4/5 邏輯與資料邊界獨立。
 ' ==============================================================
 ' ---------------------------------------------------------------
+
 Partial Class Form1
 
 #Region "■ 私有成員"
     Private _db As SqliteConnection = Nothing
     ' by Gemini, 2026/04/10: 將資料庫路徑移至 LocalAppData，避免與 Dropbox 同步衝突導致檔案鎖定與 Explorer 卡頓
-    Private ReadOnly _dbPath As String = IO.Path.Combine(Environment.GetFolderPath(
-                                                         Environment.SpecialFolder.LocalApplicationData), "OutlookAssistant\Cache", "OLAcache.db")
+    'Private ReadOnly _dbPath As String = IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OutlookAssistant\Cache", "OLAcache.db")
+    Private _dbPath As String   ' 移除 ReadOnly 與靜態初始化
 
     ' DB Row 結構 (供 Form1_Outlook.vb 的 Layer2.5 函數使用)
     Friend Class FolderStatsDbRow
@@ -81,7 +82,8 @@ Partial Class Form1
     Friend Class AttachMailListDbResult
         ' attach_maillist WHERE folder_path=? 的讀出結果
         Public Snap As Integer = -1
-        Public Mails As New List(Of MailItemInfo)()
+        ' 預分配容量為 1024，降低自 SQLite 載入大量郵件快取時的 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
+        Public Mails As New List(Of MailItemInfo)(1024)
     End Class
 #End Region
 
@@ -92,6 +94,16 @@ Partial Class Form1
         ' 在 UI 執行緒呼叫 (Form1_Load)，SQLite DDL 量小，不需要 Async
         ' ---------------------------------------------------------------
         _dbg("開始")
+
+        ' by Claude Sonnet 4.6, 2026/05/03: 修正兩個錯誤：
+        '   1. CurrentProfileName? 結尾的 ? 在 VB.NET 是非法語法（?.是 Null-Conditional，結尾? 不存在）
+        '   2. SanitizeProfileName 只接受一個參數，不能傳入第二個 "Default" 引數
+        '   → 改為先用 If() 提供 Null fallback，再傳入 SanitizeProfileName
+        Dim profileName As String = SanitizeProfileName(If(_olNS?.CurrentProfileName, "Default"))
+        Dim cacheDir = IO.Path.Combine(Environment.GetFolderPath(
+        Environment.SpecialFolder.LocalApplicationData), "OutlookAssistant\Cache", profileName)
+        _dbPath = IO.Path.Combine(cacheDir, "OLAcache.db")
+
         Try
             ' by Gemini, 2026/04/10: 確保資料庫目錄存在
             Dim dbDir = IO.Path.GetDirectoryName(_dbPath)
@@ -306,6 +318,12 @@ Partial Class Form1
             Throw
         End Try
     End Function
+    Private Function SanitizeProfileName(name As String) As String
+        ' Profile 名稱安全過濾
+        ' CurrentProfileName 可能包含空格、單引號（Simon's Mail）、甚至斜線等非法路徑字元
+        Dim invalid As Char() = IO.Path.GetInvalidFileNameChars()
+        Return New String(name.Select(Function(c) If(Array.IndexOf(invalid, c) >= 0, "_"c, c)).ToArray())
+    End Function
 #End Region
 
 #Region "■ 快取主控流程 (High-Level Cache Controllers)"
@@ -329,7 +347,7 @@ Partial Class Form1
             For Each k In _cacheMailCount.Keys : livePaths.Add(k) : Next
             For Each k In _cacheFolderCount.Keys : livePaths.Add(k) : Next
             For Each k In _cacheAttachMailList.Keys : livePaths.Add(k) : Next
-            If livePaths.Count > 0 Then CleanupOrphanFolderPath(livePaths)
+            If livePaths.Count > 0 Then Await CleanupOrphanPath(livePaths)
 
             ' ② SQLite I/O 在背景執行緒，不阻塞 UI
             Dim r = Await Task.Run(Function()
@@ -658,7 +676,7 @@ Partial Class Form1
 
             ' ── Phase 6: 孤兒清除 + 批次寫入 ──
             ProgressBar1.Text = "RenewCache Phase6: 清孤兒 + 寫入 DB..." : Await Task.Delay(1, cToken)
-            CleanupOrphanFolderPath(livePaths)
+            Await CleanupOrphanPath(livePaths)
             Await SaveCachesToDB()    ' 內部會顯示 SaveCache 的進度訊息
 
             sw.Stop()
@@ -714,62 +732,65 @@ Partial Class Form1
         If _iLikeNoisy Then _dbg("結束", $"{fName}: live={newMailList.Count}, db_was={If(dbResult?.Mails.Count, 0)}")
 
     End Function
-    Private Sub CleanupOrphanFolderPath(liveFolderPaths As HashSet(Of String))
+    Private Async Function CleanupOrphanPath(liveFolderPaths As HashSet(Of String)) As Task
         ' ---------------------------------------------------------------
-        ' CleanupOrphanFolderPath — 刪除已不存在於 Outlook 的資料夾孤兒行
+        ' CleanupOrphanPath — 刪除已不存在於 Outlook 的資料夾孤兒行 (改為非同步 by Gemini 3.1 Pro, 2026/05/05)
         ' liveFolderPaths = 目前仍有效的資料夾路徑集合
         '   呼叫來源 A: SaveCachesToDB 開頭 (用記憶體快取 key 聯集) 
         '   呼叫來源 B: RenewCache_Click (用 GetSubtreeToList BFS 掃 COM 取得完整清單) 
         ' ---------------------------------------------------------------
         _dbg("    ├ 開始", $"live 資料夾數: {liveFolderPaths.Count}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
         If _db Is Nothing Then Return
-        Try
-            ' 讀出 DB 中所有 folder_path
-            Dim dbPaths As New List(Of String)()
-            Using cmd As New SqliteCommand("SELECT folder_path FROM folder_stats", _db)
-                Using reader = cmd.ExecuteReader()
-                    While reader.Read() : dbPaths.Add(reader.GetString(0)) : End While
-                End Using
-            End Using
-            _dbg("", $"DB 中有 {dbPaths.Count} 個資料夾路徑")
+        
+        Await Task.Run(Sub()
+                           Try
+                               ' 讀出 DB 中所有 folder_path
+                               Dim dbPaths As New List(Of String)(2048)
+                               Using cmd As New SqliteCommand("SELECT folder_path FROM folder_stats", _db)
+                                   Using reader = cmd.ExecuteReader()
+                                       While reader.Read() : dbPaths.Add(reader.GetString(0)) : End While
+                                   End Using
+                               End Using
+                               _dbg("", $"DB 中有 {dbPaths.Count} 個資料夾路徑")
 
-            Dim stalePaths = dbPaths.Where(Function(p) Not liveFolderPaths.Contains(p)).ToList()
-            If stalePaths.Count = 0 Then _dbg("", "未發現孤兒快取，略過") : Return
+                               Dim stalePaths = dbPaths.Where(Function(p) Not liveFolderPaths.Contains(p)).ToList()
+                               If stalePaths.Count = 0 Then _dbg("", "未發現孤兒快取，略過") : Return
 
-            ' 每個孤兒路徑輸出到 _dbg 供目視確認
-            For Each stale In stalePaths
-                If _iLikeNoisy Then _dbg(" 孤兒", stale)
-            Next
+                               ' 每個孤兒路徑輸出到 _dbg 供目視確認
+                               For Each stale In stalePaths
+                                   If _iLikeNoisy Then _dbg(" 孤兒", stale)
+                               Next
 
-            Dim dF, dB, dA, dM, dBasic As Integer
-            Using txn As SqliteTransaction = _db.BeginTransaction()
-                For Each stale In stalePaths
-                    Using c1 As New SqliteCommand("DELETE FROM folder_stats WHERE folder_path=@p", _db, txn)
-                        c1.Parameters.AddWithValue("@p", stale) : dF += c1.ExecuteNonQuery()
-                    End Using
-                    Using c2 As New SqliteCommand("DELETE FROM attach_maillist WHERE folder_path=@p", _db, txn)
-                        c2.Parameters.AddWithValue("@p", stale) : dB += c2.ExecuteNonQuery()
-                    End Using
-                    Using c3 As New SqliteCommand("DELETE FROM attach_filenames WHERE folder_path=@p", _db, txn)
-                        c3.Parameters.AddWithValue("@p", stale) : dA += c3.ExecuteNonQuery()
-                    End Using
-                    ' 2026/04/09: month_counts 以 folder_path 欄位清除 (cache_key 含 year 後綴，不可直接比對) 
-                    Using c4 As New SqliteCommand("DELETE FROM month_counts WHERE folder_path=@p", _db, txn)
-                        c4.Parameters.AddWithValue("@p", stale) : dM += c4.ExecuteNonQuery()
-                    End Using
-                    Using c5 As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_path=@p", _db, txn)
-                        c5.Parameters.AddWithValue("@p", stale) : dBasic += c5.ExecuteNonQuery()
-                    End Using
-                Next
-                txn.Commit()
-            End Using
-            _dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / folder_stats:{dF} 行 / basic_maillist:{dBasic} 行 / attach_maillist:{dB} 行 / attach_filenames:{dA} 行 / month_counts:{dM} 行")
+                               Dim dF, dB, dA, dM, dBasic As Integer
+                               Using txn As SqliteTransaction = _db.BeginTransaction()
+                                   For Each stale In stalePaths
+                                       Using c1 As New SqliteCommand("DELETE FROM folder_stats WHERE folder_path=@p", _db, txn)
+                                           c1.Parameters.AddWithValue("@p", stale) : dF += c1.ExecuteNonQuery()
+                                       End Using
+                                       Using c2 As New SqliteCommand("DELETE FROM attach_maillist WHERE folder_path=@p", _db, txn)
+                                           c2.Parameters.AddWithValue("@p", stale) : dB += c2.ExecuteNonQuery()
+                                       End Using
+                                       Using c3 As New SqliteCommand("DELETE FROM attach_filenames WHERE folder_path=@p", _db, txn)
+                                           c3.Parameters.AddWithValue("@p", stale) : dA += c3.ExecuteNonQuery()
+                                       End Using
+                                       ' 2026/04/09: month_counts 以 folder_path 欄位清除 (cache_key 含 year 後綴，不可直接比對) 
+                                       Using c4 As New SqliteCommand("DELETE FROM month_counts WHERE folder_path=@p", _db, txn)
+                                           c4.Parameters.AddWithValue("@p", stale) : dM += c4.ExecuteNonQuery()
+                                       End Using
+                                       Using c5 As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_path=@p", _db, txn)
+                                           c5.Parameters.AddWithValue("@p", stale) : dBasic += c5.ExecuteNonQuery()
+                                       End Using
+                                   Next
+                                   txn.Commit()
+                               End Using
+                               _dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / folder_stats:{dF} 行 / basic_maillist:{dBasic} 行 / attach_maillist:{dB} 行 / attach_filenames:{dA} 行 / month_counts:{dM} 行")
 
-        Catch ex As System.Exception
-            _dbg("    ├ 錯誤", ex.Message) ' by Gemini, 2026/04/10
-        End Try
+                           Catch ex As System.Exception
+                               _dbg("    ├ 錯誤", ex.Message) ' by Gemini, 2026/04/10
+                           End Try
+                       End Sub)
 
-    End Sub
+    End Function
 #End Region
 
 #Region "■ 批次寫入核心 (Batch Writer Core)"
@@ -1384,7 +1405,7 @@ Partial Class Form1
         If _db Is Nothing Then Return Nothing
 
         Try
-            Dim result As New List(Of (Mail As MailItemInfo, Topic As String))()
+            Dim result As New List(Of (Mail As MailItemInfo, Topic As String))(1024)
             Dim snap As Integer = -1
             Using cmd As New SqliteCommand(
                 "SELECT entry_id,subject,msg_size,received_time,sender_name,topic,item_count_snap" &
@@ -1506,7 +1527,7 @@ Partial Class Form1
         If _iLikeNoisy Then _dbg(" ├ 開始")
         If _db Is Nothing Then Return Nothing
         Try
-            Dim result As New List(Of FolderStatsDbRow)()
+            Dim result As New List(Of FolderStatsDbRow)(512)
             ' 過濾條件: 路徑以 rootPath 開頭，且 entry_id 不為空。若沒勾全選，則只抓 is_mail=1 的。
             Dim filter = If(isIncludeAll, "", " AND is_mail=1")
             Dim sql = $"SELECT folder_path,entry_id,store_id,is_mail,has_chinese FROM folder_stats " &
@@ -1538,7 +1559,7 @@ Partial Class Form1
         If _iLikeNoisy Then _dbg(" ├ 開始")
         If _db Is Nothing Then Return Nothing
         Try
-            Dim result As New List(Of FolderStatsDbRow)()
+            Dim result As New List(Of FolderStatsDbRow)(512)
             ' SQL 邏輯: 
             ' 1. 找出 folder_path 以 parentPath + "\" 開頭。
             ' 2. 且不包含更深層的 "\" (代表是直屬子項) 。注意: 此邏輯在路徑分隔符不一致時需調整。

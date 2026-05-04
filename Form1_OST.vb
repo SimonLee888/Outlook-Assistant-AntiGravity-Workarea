@@ -124,10 +124,10 @@ Partial Class Form1
         parent.SuspendLayout()
         Try
             ' ── 佈局參數 ──
-            Dim margin As Integer = 4        ' 離 TabPage 邊緣的距離
-            Dim spacingH As Integer = 4     ' 左右控制項之間的間距
-            Dim spacingV As Integer = 4    ' 上下控制項之間的間距
-            Dim btnAreaWidth As Integer = 92 ' 右側按鈕預留寬度
+            Dim margin As Integer = 4           ' 離 TabPage 邊緣的距離
+            Dim spacingH As Integer = 4         ' 左右控制項之間的間距
+            Dim spacingV As Integer = 4         ' 上下控制項之間的間距
+            Dim btnAreaWidth As Integer = 92    ' 右側按鈕預留寬度
 
             ' 計算基礎數值
             Dim clientW = parent.ClientSize.Width
@@ -375,13 +375,19 @@ Partial Class Form1
 
         ' by Gemini 3.1 Pro, 2026/04/24: 防呆檢查目標 PST 是否已有同名資料夾，避免 MAPI COM Exception
         Try
-            For Each f As Outlook.Folder In targetFolderPST.Folders
-                If String.Compare(f.Name, sourceFolderOST.name, StringComparison.OrdinalIgnoreCase) = 0 Then
-                    MessageBox.Show($"目標 PST 資料夾 [{targetFolderPST.Name}] 已經存在名為 [{sourceFolderOST.name}] 的子資料夾！" & vbCrLf &
-                                    "為避免 Outlook 複製衝突，請先在目標端刪除或重新命名該資料夾。", "同名資料夾衝突", MessageBoxButtons.OK, MessageBoxIcon.Warning)
-                    Return
-                End If
-            Next
+            ' 優化第六點：提取 Folders 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+            Dim subFolders As Outlook.Folders = targetFolderPST.Folders
+            Try
+                For Each f As Outlook.Folder In subFolders
+                    If String.Compare(f.Name, sourceFolderOST.name, StringComparison.OrdinalIgnoreCase) = 0 Then
+                        MessageBox.Show($"目標 PST 資料夾 [{targetFolderPST.Name}] 已經存在名為 [{sourceFolderOST.name}] 的子資料夾！" & vbCrLf &
+                                        "為避免 Outlook 複製衝突，請先在目標端刪除或重新命名該資料夾。", "同名資料夾衝突", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+                        Return
+                    End If
+                Next
+            Finally
+                TryMarshalRelease(subFolders)
+            End Try
         Catch ex As System.Exception
             _dbg("檢查同名資料夾", ex.Message)
         End Try
@@ -520,11 +526,18 @@ Partial Class Form1
 
             ' 找到剛掛載的 Temp PST Store
             Dim tempStore As Outlook.Store = Nothing
-            For Each st As Outlook.Store In ns.Stores
-                If st.FilePath IsNot Nothing AndAlso String.Compare(st.FilePath, tempPstPath, StringComparison.OrdinalIgnoreCase) = 0 Then
-                    tempStore = st : Exit For
-                End If
-            Next
+            ' 優化第六點：提取 Stores 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+            Dim allStores As Outlook.Stores = ns.Stores
+            Try
+                For Each st As Outlook.Store In allStores
+                    If st.FilePath IsNot Nothing AndAlso String.Compare(st.FilePath, tempPstPath, StringComparison.OrdinalIgnoreCase) = 0 Then
+                        tempStore = st : Exit For
+                    End If
+                Next
+            Finally
+                TryMarshalRelease(allStores)
+            End Try
+
             If tempStore Is Nothing Then
                 MessageBox.Show("無法掛載暫存 PST 到 Outlook。", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error) : Return
             End If
@@ -532,10 +545,19 @@ Partial Class Form1
             ' 步驟 3: 取得匯出的資料夾並複製 (從OST to TempPST)
             Dim tempRootPST As Outlook.Folder = tempStore.GetRootFolder()
             Dim sourceFolderPST As Outlook.Folder = Nothing
+            ' 優化第六點：提取 Folders 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+            Dim rootFolders As Outlook.Folders = tempRootPST.Folders
             Try
                 ' Niv2023 通常會把資料夾建立在 "Top of Personal Folders" 下面
-                Dim topFolderPST = tempRootPST.Folders("Top of Personal Folders")
-                sourceFolderPST = topFolderPST.Folders(sourceFolderOST.name)
+                Dim topFolderPST As Outlook.Folder = Nothing
+                Try : topFolderPST = rootFolders.Item("Top of Personal Folders") : Catch : End Try
+
+                If topFolderPST IsNot Nothing Then
+                    Dim topFolders As Outlook.Folders = topFolderPST.Folders
+                    Try : sourceFolderPST = topFolders.Item(sourceFolderOST.name)
+                    Finally : TryMarshalRelease(topFolders) : TryMarshalRelease(topFolderPST)
+                    End Try
+                End If
             Catch ex As System.Exception
                 _dbg("尋找資料夾", "Top of Personal Folders 尋找失敗: " & ex.Message)
             End Try
@@ -547,12 +569,24 @@ Partial Class Form1
 
             If sourceFolderPST Is Nothing Then
                 ' 暴力搜尋第一層所有的子資料夾
-                For Each f As Outlook.Folder In tempRootPST.Folders
-                    Try : sourceFolderPST = f.Folders(sourceFolderOST.name)
-                        If sourceFolderPST IsNot Nothing Then Exit For
-                    Catch : End Try
-                Next
+                ' 優化第六點：提取 Folders 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+                Try
+                    For Each f As Outlook.Folder In rootFolders
+                        Dim fFolders As Outlook.Folders = f.Folders
+                        Try
+                            sourceFolderPST = fFolders.Item(sourceFolderOST.name)
+                            If sourceFolderPST IsNot Nothing Then Exit For
+                        Catch
+                        Finally
+                            TryMarshalRelease(fFolders)
+                        End Try
+                    Next
+                Finally
+                    ' 注意：rootFolders 在此迴圈結束後釋放
+                End Try
             End If
+            ' 釋放 rootFolders (因前面步驟 3 也用到，故在此統一釋放)
+            TryMarshalRelease(rootFolders)
 
             ' 步驟 4: 開始複製到目標資料夾 (從 TempPST to 目標 PST)
             If sourceFolderPST IsNot Nothing Then
@@ -832,11 +866,9 @@ Partial Class Form1
                         nodeMap(f.parent).Nodes.Add(childNode)
                         nodeMap(f) = childNode
                     ElseIf filteredNodes.Contains(f.parent) Then
-                        ' 父節點已被過濾，子樹阻斷：將自己也標記為過濾，並且不加入 stillPending (直接丟棄)
-                        filteredNodes.Add(f)
+                        filteredNodes.Add(f)    ' 父節點已被過濾，子樹阻斷：將自己也標記為過濾，並且不加入 stillPending (直接丟棄)
                     Else
-                        ' 父節點尚未處理到，或是真正的孤兒，留待下一輪
-                        stillPending.Add(f)
+                        stillPending.Add(f)     ' 父節點尚未處理到，或是真正的孤兒，留待下一輪
                     End If
                 Else
                     stillPending.Add(f)
@@ -983,13 +1015,25 @@ Partial Class Form1
         ' 遞迴載入 PST 所有子資料夾（OOM，UI 執行緒）
         ' Tag = Outlook.Folder，Phase 2 AfterSelect / Phase 3 CopyFolder 可直接用
         Try
-            For Each subF As Outlook.Folder In folder.Folders
-                ' by Gemini 3.0 Flash, 2026/04/23: 
-                ' 根據使用者要求，PST 不進行過濾，完整顯示。
-                Dim node As New TreeNode(subF.Name) With {.Tag = subF}
-                parentNode.Nodes.Add(node)
-                If subF.Folders.Count > 0 Then LoadPstSubFoldersRecursive(subF, node)
-            Next
+            ' 優化第六點：提取 Folders 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+            Dim subFolders As Outlook.Folders = folder.Folders
+            Try
+                For Each subF As Outlook.Folder In subFolders
+                    ' by Gemini 3.0 Flash, 2026/04/23: 
+                    ' 根據使用者要求，PST 不進行過濾，完整顯示。
+                    Dim node As New TreeNode(subF.Name) With {.Tag = subF}
+                    parentNode.Nodes.Add(node)
+                    ' 遞迴檢查子資料夾數量也提取變數
+                    Dim subSubs As Outlook.Folders = subF.Folders
+                    Try
+                        If subSubs.Count > 0 Then LoadPstSubFoldersRecursive(subF, node)
+                    Finally
+                        TryMarshalRelease(subSubs)
+                    End Try
+                Next
+            Finally
+                TryMarshalRelease(subFolders)
+            End Try
         Catch ex As System.Exception
             _dbg("LoadPstSubFoldersRecursive 錯誤", ex.Message)
         End Try
@@ -1132,12 +1176,18 @@ Partial Class Form1
             ns.AddStore(tempPstPath)
 
             Dim tempStore As Outlook.Store = Nothing
-            For Each store As Outlook.Store In ns.Stores
-                If store.FilePath IsNot Nothing AndAlso String.Compare(store.FilePath, tempPstPath, StringComparison.OrdinalIgnoreCase) = 0 Then
-                    tempStore = store
-                    Exit For
-                End If
-            Next
+            ' 優化第六點：提取 Stores 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+            Dim allStores As Outlook.Stores = ns.Stores
+            Try
+                For Each store As Outlook.Store In allStores
+                    If store.FilePath IsNot Nothing AndAlso String.Compare(store.FilePath, tempPstPath, StringComparison.OrdinalIgnoreCase) = 0 Then
+                        tempStore = store
+                        Exit For
+                    End If
+                Next
+            Finally
+                TryMarshalRelease(allStores)
+            End Try
 
             If tempStore Is Nothing Then
                 MessageBox.Show("無法掛載暫存 PST。", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error)
@@ -1160,29 +1210,44 @@ Partial Class Form1
                 End Try
             End If
             If exportedFolder Is Nothing Then
-                For Each f As Outlook.Folder In tempRoot.Folders
-                    Try
-                        exportedFolder = f.Folders(folderName)
-                        If exportedFolder IsNot Nothing Then Exit For
-                    Catch
-                    End Try
-                Next
+                ' 優化第六點：提取 Folders 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+                Dim rootFolders As Outlook.Folders = tempRoot.Folders
+                Try
+                    For Each f As Outlook.Folder In rootFolders
+                        Dim fFolders As Outlook.Folders = f.Folders
+                        Try
+                            exportedFolder = fFolders.Item(folderName)
+                            If exportedFolder IsNot Nothing Then Exit For
+                        Catch
+                        Finally
+                            TryMarshalRelease(fFolders)
+                        End Try
+                    Next
+                Finally
+                    TryMarshalRelease(rootFolders)
+                End Try
             End If
 
             If exportedFolder IsNot Nothing Then
                 ' 顯示所有匯出的郵件
                 Dim itemCount = 0
-                For Each item As Object In exportedFolder.Items
-                    If TypeOf item Is Outlook.MailItem Then
-                        Dim mail As Outlook.MailItem = DirectCast(item, Outlook.MailItem)
-                        mail.Display()
-                        itemCount += 1
-                    ElseIf TypeOf item Is Outlook.ContactItem Then
-                        Dim contact As Outlook.ContactItem = DirectCast(item, Outlook.ContactItem)
-                        contact.Display()
-                        itemCount += 1
-                    End If
-                Next
+                ' 優化第六點：提取 Items 集合以利釋放 (by Gemini 3 Flash, 2026/05/05)
+                Dim mailItems As Outlook.Items = exportedFolder.Items
+                Try
+                    For Each item As Object In mailItems
+                        If TypeOf item Is Outlook.MailItem Then
+                            Dim mail As Outlook.MailItem = DirectCast(item, Outlook.MailItem)
+                            mail.Display()
+                            itemCount += 1
+                        ElseIf TypeOf item Is Outlook.ContactItem Then
+                            Dim contact As Outlook.ContactItem = DirectCast(item, Outlook.ContactItem)
+                            contact.Display()
+                            itemCount += 1
+                        End If
+                    Next
+                Finally
+                    TryMarshalRelease(mailItems)
+                End Try
                 ProgressBar1.Text = $"成功開啟 {itemCount} 封郵件。"
             Else
                 MessageBox.Show("在暫存 PST 中找不到剛匯出的郵件。", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error)

@@ -1,0 +1,4 @@
+- [ ] 執行 `git add -A` 暫存所有變更
+- [ ] 執行 `git commit -m "Update codebase by Gemini 3 Flash, 2026/05/05"`
+- [ ] 執行 `git status` 驗證工作目錄狀態
+- [ ] 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼

@@ -116,6 +116,9 @@ Partial Class Form1
     Private Const TVGN_CARET As Integer = &H9                   ' SendMessage 選取 Treeview 游標節點
     Private Const LVM_SETITEMCOUNT As Integer = &H1000 + 47     ' = &H102F '
     Private Const WM_SETREDRAW As Integer = &HB                 ' 2026/3/26 by Gemini
+    Private Const WM_SIZE As Integer = &H5                      ' 視窗尺寸變更訊息, 2026/5/7 by Claude
+    Private Const SIZE_MAXIMIZED As Integer = 2                 ' WM_SIZE wParam: 最大化
+    Private Const SIZE_RESTORED As Integer = 0                  ' WM_SIZE wParam: 還原
 #End Region
 #End Region
 

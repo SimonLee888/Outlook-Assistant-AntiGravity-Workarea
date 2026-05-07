@@ -24,6 +24,20 @@ Partial Class Form1
             Return cp
         End Get
     End Property
+    Protected Overrides Sub WndProc(ByRef m As Message)
+        ' 2026/05/07 by Claude: 攔截 WM_SIZE，修復最大化/還原瞬間 OwnerDraw ListView 殘影
+        ' 原因：雙擊標題列觸發的 WindowState 切換是瞬間完成的，不像拖動是漸進式，
+        '       OwnerDraw ListView 在視窗尺寸突變時，內部繪製管線會誤判 dirty region，
+        '       導致部分項目或欄位未被正確重繪而產生殘影。
+        ' 解法：在 SIZE_MAXIMIZED / SIZE_RESTORED 完成後，對所有 ListView 強制 Invalidate。
+        MyBase.WndProc(m)
+        If m.Msg = WM_SIZE Then
+            Dim sizeType As Integer = m.WParam.ToInt32()
+            If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
+                For Each lv In GetAllListViews(Me) : lv.Invalidate() : Next
+            End If
+        End If
+    End Sub
 #End Region
 
 #Region "■ 01 全域宣告"
@@ -50,6 +64,9 @@ Partial Class Form1
     'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
     Private _lastTvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
     Private _lastLvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
+
+    Private _lvResizePending As ListView = Nothing
+    Private _lvResizeTimer As New System.Windows.Forms.Timer() With {.Interval = 50}
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
@@ -148,6 +165,12 @@ Partial Class Form1
         AddHandler Me.Resize, Sub() SyncDebugFormPosition()
         AddHandler Me.Move, Sub() SyncDebugFormPosition()
         Await Task.Yield()
+
+        ' 2026/5/7 by Claude, 在HandleLvResize 加節流, 拖動過程中完全不重算欄寬，停手後才算一次
+        AddHandler _lvResizeTimer.Tick, Sub()
+                                            _lvResizeTimer.Stop()
+                                            If _lvResizePending IsNot Nothing Then AutoResizeLvColumns(_lvResizePending)
+                                        End Sub
 
         ' ── 初始化全域狀態變更事件 (by Gemini, 2026/04/10) ──
         AddHandler CheckSubFolder2.CheckedChanged, Sub() _includeSubTab2 = CheckSubFolder2.Checked
@@ -1289,18 +1312,32 @@ Partial Class Form1
         If e.Button = MouseButtons.Left AndAlso e.Clicks = 2 Then
             Dim sc = TryCast(sender, SplitContainer)
             If sc Is Nothing Then Return
-            ' 臨界值 20px，如果大於此寬度則進行縮合
-            If sc.SplitterDistance > 20 Then
-                sc.Tag = sc.SplitterDistance        ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
-                sc.SplitterDistance = 10            ' 縮合至 10px 觸控區
-                _dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)") ' by Gemini, 2026/04/04: Issue 4 格式標準化
-            Else
-                ' 💡 恢復寬度，若無紀錄則預設為 250px
-                Dim prevDist As Integer = If(TypeOf sc.Tag Is Integer, DirectCast(sc.Tag, Integer), 250)
-                If prevDist < 50 Then prevDist = 250    ' 防止恢復值過小
-                sc.SplitterDistance = prevDist
-                _dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px") ' by Gemini, 2026/04/04: Issue 4 格式標準化
-            End If
+
+            ' 2026/05/07 by Claude: 凍結 Panel2 的重繪，防止 OwnerDraw ListView 在 SplitterDistance
+            ' 改變過程中觸發多次 DrawItem/DrawSubItem，造成殘影與卡頓。
+            ' 原因: SplitterDistance 變動 → Panel2 Resize → AutoResizeLvColumns (欄寬改變)
+            '        → ListView Invalidate × N 次中間狀態 → DrawSubItem × 項目數 × 欄位數
+            ' 解法: WM_SETREDRAW=False 凍結所有子控制項重繪，改完後一次性 Invalidate + Update。
+            SendMessage(sc.Panel2.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero)
+            Try
+                ' 臨界值 20px，如果大於此寬度則進行縮合
+                If sc.SplitterDistance > 20 Then
+                    sc.Tag = sc.SplitterDistance        ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
+                    sc.SplitterDistance = 10            ' 縮合至 10px 觸控區
+                    _dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)")
+                Else
+                    ' 💡 恢復寬度，若無紀錄則預設為 250px
+                    Dim prevDist As Integer = If(TypeOf sc.Tag Is Integer, DirectCast(sc.Tag, Integer), 250)
+                    If prevDist < 50 Then prevDist = 250    ' 防止恢復值過小
+                    sc.SplitterDistance = prevDist
+                    _dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px")
+                End If
+            Finally
+                ' 恢復重繪並強制一次乾淨的全量重繪
+                SendMessage(sc.Panel2.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero)
+                sc.Panel2.Invalidate(True)  ' True = 含所有子控制項
+                sc.Panel2.Update()          ' 同步執行 WM_PAINT，確保畫面立即更新
+            End Try
         End If
         _dbg("結束")
 
@@ -1659,7 +1696,17 @@ Partial Class Form1
             If ctrl.HasChildren Then list.AddRange(GetAllTreeViews(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
         Next
         Return list
-
+    End Function
+    Private Function GetAllListViews(container As Control) As List(Of ListView)
+        ''' <summary>
+        ''' 遞迴搜尋容器內所有的 ListView
+        ''' </summary>
+        Dim list As New List(Of ListView)(16) ' 預設容量 16，避免頻繁擴容
+        For Each ctrl As Control In container.Controls
+            If TypeOf ctrl Is ListView Then list.Add(CType(ctrl, ListView)) ' 如果是 ListView
+            If ctrl.HasChildren Then list.AddRange(GetAllListViews(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
+        Next
+        Return list
     End Function
 
     Private Function FindNodeByFolderPath(nodes As TreeNodeCollection, folderPath As String) As TreeNode
@@ -1733,6 +1780,35 @@ Partial Class Form1
     End Function
 #End Region
 #Region "  ├ ListView 格式工具"
+    Private Sub HandleLvGotFocus(sender As Object, e As EventArgs)
+        ' 2026/03/28 by Gemini: 集中處理 ListView 獲得焦點時自動選取第一項的邏輯
+        Dim lv = DirectCast(sender, ListView)
+
+        ' by Gemini, 2026/04/10: 虛擬模式下存取 SelectedItems 會拋出 InvalidOperationException
+        ' 必須改用 SelectedIndices.Count 判斷
+        If lv.VirtualMode Then
+            If lv.SelectedIndices.Count = 0 AndAlso lv.VirtualListSize > 0 Then
+                lv.SelectedIndices.Add(0)
+            End If
+        Else
+            If lv.SelectedItems.Count = 0 AndAlso lv.Items.Count > 0 Then
+                lv.Items(0).Selected = True
+            End If
+        End If
+    End Sub
+    Private Sub HandleLvResize(sender As Object, e As EventArgs)
+        ''' <summary>
+        ''' 處理所有 ListView 的 Resize 共用事件 (2026/04/01 by Gemini)
+        ''' </summary>
+        'Dim lv As ListView = TryCast(sender, ListView)
+        'If lv IsNot Nothing Then AutoResizeLvColumns(lv)
+
+        ' 2026/5/7 by Claude, 在HandleLvResize 加節流, 拖動過程中完全不重算欄寬，停手後才算一次
+        _lvResizePending = TryCast(sender, ListView)
+        _lvResizeTimer.Stop()
+        _lvResizeTimer.Start()  ' 每次 Resize 重設計時，停止移動後 50ms 才真正重算
+
+    End Sub
     Private Sub AutoResizeLvColumns(lv As ListView)
         ''' <summary>
         ''' 定義各個 ListView 縮放時的欄位寬度比例
@@ -1771,7 +1847,7 @@ Partial Class Form1
                 ' 當使用者勾選「附件個數」或左側側邊欄收攏時，自動展開此欄位（寬度 60px 即可，顯示數字用）
                 Dim isLeftCollapsed As Boolean = (SplitContainer3.SplitterDistance < 50)
                 lv.Columns(4).Width = If(CheckAttCount.Checked OrElse isLeftCollapsed, 60, 0)
-                
+
                 lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5
             End If
 
@@ -1808,30 +1884,6 @@ Partial Class Form1
                 End If
             End If
         End If
-
-    End Sub
-    Private Sub HandleLvGotFocus(sender As Object, e As EventArgs)
-        ' 2026/03/28 by Gemini: 集中處理 ListView 獲得焦點時自動選取第一項的邏輯
-        Dim lv = DirectCast(sender, ListView)
-
-        ' by Gemini, 2026/04/10: 虛擬模式下存取 SelectedItems 會拋出 InvalidOperationException
-        ' 必須改用 SelectedIndices.Count 判斷
-        If lv.VirtualMode Then
-            If lv.SelectedIndices.Count = 0 AndAlso lv.VirtualListSize > 0 Then
-                lv.SelectedIndices.Add(0)
-            End If
-        Else
-            If lv.SelectedItems.Count = 0 AndAlso lv.Items.Count > 0 Then
-                lv.Items(0).Selected = True
-            End If
-        End If
-    End Sub
-    Private Sub HandleLvResize(sender As Object, e As EventArgs)
-        ''' <summary>
-        ''' 處理所有 ListView 的 Resize 共用事件 (2026/04/01 by Gemini)
-        ''' </summary>
-        Dim lv As ListView = TryCast(sender, ListView)
-        If lv IsNot Nothing Then AutoResizeLvColumns(lv)
 
     End Sub
     Private Function GetHeaderRowBackColor(item As ListViewItem) As Color

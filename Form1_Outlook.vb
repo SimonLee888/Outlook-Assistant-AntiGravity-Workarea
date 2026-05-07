@@ -57,7 +57,7 @@ Partial Class Form1
     Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))  ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
     Private Shared _cacheBasicMailInfo As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer)) ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
 
-    Const BATCH_SIZE As Integer = 512  ' 2026/3/24 by Gemini: GetTable.GetArray() 的時候每次批量讀取的筆數
+    Const BATCH_SIZE As Integer = 1000  ' 2026/3/24 by Gemini: GetTable.GetArray() 的時候每次批量讀取的筆數
     Private Structure FolderSortInfo
         ' by Gemini, 2026/03/29: 用於 GetSortedSubFolders 排序優化，減少 COM 屬性讀取次數 (O(N) vs O(N log N))
         Dim FolderObj As Folder

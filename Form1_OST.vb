@@ -63,14 +63,14 @@ Partial Class Form1
 
     ' ── 常用 MAPI 屬性 Tag ID（低 16 bits = Property ID）──────────────────
     ' 用於 OstPropStr / OstPropDT / OstPropI32 搜尋 Property.id 的比對值
-    Private Const PROP_SUBJECT As Integer = &H37        ' PidTagSubjectW (Unicode)
-    Private Const PROP_DELIVERY_TIME As Integer = &HE06 ' PidTagMessageDeliveryTime (FILETIME)
-    Private Const PROP_SENDER_NAME As Integer = &HC1A   ' PidTagSenderName (ANSI)
-    Private Const PROP_SENDER_NAME_W As Integer = &HC1B ' PidTagSenderNameW (Unicode)
-    Private Const PROP_MSG_SIZE As Integer = &HE08      ' PidTagMessageSize (PT_LONG)
-    Private Const PROP_HAS_ATTACH As Integer = &HE1B    ' PidTagHasAttachments (PT_BOOLEAN)
-    Private Const PROP_MSG_FLAGS As Integer = &HE07     ' PidTagMessageFlags (PT_LONG)
-    Private Const PROP_ENTRYID As Integer = &HFFF       ' PidTagEntryId (PT_BINARY)
+    Private Const PROP_SUBJECT As Integer = &H37            ' PidTagSubjectW (Unicode)
+    Private Const PROP_DELIVERY_TIME As Integer = &HE06     ' PidTagMessageDeliveryTime (FILETIME)
+    Private Const PROP_SENDER_NAME As Integer = &HC1A       ' PidTagSenderName (ANSI)
+    Private Const PROP_SENDER_NAME_W As Integer = &HC1B     ' PidTagSenderNameW (Unicode)
+    Private Const PROP_MSG_SIZE As Integer = &HE08          ' PidTagMessageSize (PT_LONG)
+    Private Const PROP_HAS_ATTACH As Integer = &HE1B        ' PidTagHasAttachments (PT_BOOLEAN)
+    Private Const PROP_MSG_FLAGS As Integer = &HE07         ' PidTagMessageFlags (PT_LONG)
+    Private Const PROP_ENTRYID As Integer = &HFFF           ' PidTagEntryId (PT_BINARY)
 
 #Region "  ├ Layer1 UI 事件"
     Private Sub InitTab7UI()
@@ -101,11 +101,11 @@ Partial Class Form1
 
         ' 2. 綁定事件
         AddHandler LvOST.DoubleClick, AddressOf LvOST_DoubleClick
-        AddHandler LvOST.KeyDown, AddressOf LvOST_KeyDown
-        AddHandler LvOST.ColumnClick, AddressOf LvOST_ColumnClick
         AddHandler LvPST.DoubleClick, AddressOf LvPST_DoubleClick
-        AddHandler LvPST.KeyDown, AddressOf LvPST_KeyDown
+        AddHandler LvOST.ColumnClick, AddressOf LvOST_ColumnClick
         AddHandler LvPST.ColumnClick, AddressOf LvOST_ColumnClick
+        AddHandler LvOST.KeyDown, AddressOf LvOST_KeyDown
+        AddHandler LvPST.KeyDown, AddressOf LvPST_KeyDown
 
         ' 3. 綁定縮放事件 (實現上下各半)
         Dim parentTab = SimTreeOST.Parent
@@ -230,15 +230,13 @@ Partial Class Form1
 
         Dim ostFolder = TryCast(e.Node.Tag, ost2pst.Folder)
         If ostFolder Is Nothing Then
-            _dbg("    ⚠️ Tag 轉換為 ost2pst.Folder 失敗！")
-            Return
+            _dbg("    ⚠️ Tag 轉換為 ost2pst.Folder 失敗！") : Return
         End If
         _dbg("AfterSelect 觸發", $"資料夾: {ostFolder.name}, _ostLoaded: {_ostLoaded}, srcFile: {If(ost2pst.FM.srcFile Is Nothing, "Nothing", "Open")}")
 
         ' OST 尚未載入（或載入失敗）時只更新狀態列，不讀內容
         If Not _ostLoaded OrElse ost2pst.FM.srcFile Is Nothing Then
-            ProgressBar2.Text = $"OST 資料夾: {ostFolder.path}"
-            Return
+            ProgressBar2.Text = $"OST 資料夾: {ostFolder.path}" : Return
         End If
 
         _dbg("開始", ostFolder.name)
@@ -288,7 +286,7 @@ Partial Class Form1
             ProgressBar1.Text = $"共 {rows.Count:N0} 封 — {folder.Name}"
 
         Catch ex As OperationCanceledException
-            _dbg("中斷", "ESC") : ProgressBar1.Text = "已中斷。"
+            _dbg("中斷", "ESC") : ProgressBar1.Text = "由使用者中斷"
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message) : ProgressBar1.Text = "讀取失敗: " & ex.Message
         Finally
@@ -300,11 +298,11 @@ Partial Class Form1
     Private Sub ShowLvOstItems(items As List(Of OstMailRow))
         ' 把 OstMailRow 清單渲染到 _newLvOST；未讀郵件以粗體顯示
 
-        ' by Gemini 3 Flash, 2026/04/23: 改用 AddRange 並對齊 Tab4 欄位順序與格式
         LvOST.BeginUpdate()
         LvOST.Items.Clear()
 
         If items IsNot Nothing AndAlso items.Count > 0 Then
+            ' by Gemini 3 Flash, 2026/04/23: 改用 AddRange 並對齊 Tab4 欄位順序與格式
             Dim lvItems As New List(Of ListViewItem)
             For Each item In items
                 ' 欄位順序: 主旨, 郵件大小(Bytes), 收到日期(yyyy/MM/dd), 寄件者, EntryID(NID)

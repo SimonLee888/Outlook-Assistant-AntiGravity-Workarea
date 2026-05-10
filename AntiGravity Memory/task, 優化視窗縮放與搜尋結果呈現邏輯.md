@@ -1,0 +1,11 @@
+- [x] 優化 `Form1_Resize`：將 WindowState 改變的事件整合進節流機制 `[x]`
+- [x] 強化 `HandleLvResize`：增加寬度比對檢查，避免高度改變或重複事件觸發 `[x]`
+- [x] 優化 `AutoResizeLvColumns`：內部增加寬度檢查防護 `[x]`
+- [x] 精簡 `ShowLv3Result`：移除搜尋結果顯示時不必要的 `Invalidate()` `[x]`
+- [x] 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼 `[x]`
+- [x] 在 `Form1.vb` 增加 `_isResizingLv` 全域旗標 `[x]`
+- [x] 在 `CalculateLvColumnSize` 執行前後切換旗標並暫停繪製 `[x]`
+- [x] 在 `HandleLv3Lv4Lv5_DrawSubItem` 加入旗標攔截 `[x]`
+- [x] 在 `Lv1_DrawSubItem` 加入旗標攔截 `[x]`
+- [x] 在 `lvwDebug_DrawSubItem` 加入旗標攔截 `[x]`
+- [x] 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼 `[x]`

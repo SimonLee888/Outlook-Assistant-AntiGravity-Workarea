@@ -125,8 +125,8 @@ Partial Class Form1
 #Region "■ 99 舊版備用 (勿刪)"
 
     ' 定義排序方式的列舉
-    'Private lv3SortOrder As SortOrder = SortOrder.Ascending     ' 設置初始排序方式為升序
-    'Private lv3LastSortColumn As Integer = -1                     ' 儲存上一次點選的列索引
+    'Private lv3SortOrder As SortOrder = SortOrder.Ascending    ' 設置初始排序方式為升序
+    'Private lv3LastSortColumn As Integer = -1                  ' 儲存上一次點選的列索引
     Friend Class ListViewItemComparer ' 用於比較 ListView 項目並依Column 進行排序
         Implements IComparer
         Private ReadOnly columnIndex As Integer
@@ -186,16 +186,16 @@ Partial Class Form1
         _dbg("開始", folder.Name)
         Dim value As Integer
         Dim fPath As String = folder.FolderPath
-        If _cacheFolderCountAll.TryGetValue(fPath, value) Then Return value ' 檢查快取中是否已存在值, 若有則直接返回
-        Dim totalSubCount As Integer = GetFolderCountL3(folder, fPath:=fPath)           ' 初始值為點選資料夾的子資料夾數量
+        If _cacheFolderCountAll.TryGetValue(fPath, value) Then Return value     ' 檢查快取中是否已存在值, 若有則直接返回
+        Dim totalSubCount As Integer = GetFolderCountL3(folder, fPath:=fPath)   ' 初始值為點選資料夾的子資料夾數量
         ' 5/21測試記錄: 這裡使用ConcurrentBag跟使用results.sum應該要比較快, 但不知為何實測結果都比GetTotalFolderCount_Old()還慢了5%, 這個函數先保留不清除
         ' 5/21最後決定: 二個函數快慢互有變化, 但GetTotalFolderCountAsync()的穩定性較好, 比New()的標準差來得小, 所以決定使用這個
         ' 使用 Parallel.ForEach 進行多線程遞迴計算subfolder數量
-        Dim countingBag As New ConcurrentBag(Of Task(Of Integer))()     ' 使用 ConcurrentBag 來安全地收集每個子資料夾的數量
+        Dim countingBag As New ConcurrentBag(Of Task(Of Integer))()             ' 使用 ConcurrentBag 來安全地收集每個子資料夾的數量
         Parallel.ForEach(folder.Folders.Cast(Of Outlook.Folder)(),
                          Sub(subFolder As Outlook.Folder)
                              'countingBag.Add(GetTotalFolderCountAsync(subFolder))
-                             countingBag.Add(GetFolderCountAllL3(subFolder))
+                             'countingBag.Add(GetFolderCountAllL3(subFolder))
                          End Sub)
         Dim results = Await Task.WhenAll(countingBag)   ' 等待所有平行出去收集的數量都確定回來了
         totalSubCount += results.Sum()                  ' 再將回傳的各個子資料夾的數量加總
@@ -348,8 +348,8 @@ Partial Class Form1
 
                 ' 改後 (1行)
                 distance(i, j) = If(strA(i - 1) = strB(j - 1),
-                    distance(i - 1, j - 1), Math.Min(Math.Min(distance(i - 1, j) + 1,
-                                                              distance(i, j - 1) + 1), distance(i - 1, j - 1) + 1))
+                distance(i - 1, j - 1), Math.Min(Math.Min(distance(i - 1, j) + 1,
+                                                          distance(i, j - 1) + 1), distance(i - 1, j - 1) + 1))
             Next
         Next
         Return distance(lenA, lenB)

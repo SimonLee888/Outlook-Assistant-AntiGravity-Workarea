@@ -83,9 +83,12 @@ Partial Class Form1
         ColumnHeader10 = New ColumnHeader()
         ButtonDeleteMail = New Button()
         Button4 = New Button()
+        TabPage5 = New TabPage()
+        SplitContainer5 = New SplitContainer()
         TabPage6 = New TabPage()
         txtDatabaseStats = New TextBox()
         SettingGroup = New GroupBox()
+        SaveCache = New Button()
         RenewAttachFilename = New CheckBox()
         RenewIncludeSize = New CheckBox()
         RDO_Parallel2 = New RadioButton()
@@ -94,7 +97,6 @@ Partial Class Form1
         ClearCache = New Button()
         checkShowAllFolders = New CheckBox()
         LoadCache = New Button()
-        SaveCache = New Button()
         CheckRDO = New CheckBox()
         DebugGroup = New GroupBox()
         OKiLikeNoisy = New CheckBox()
@@ -108,8 +110,6 @@ Partial Class Form1
         LvOST = New ListView()
         SimTreePST = New SimTree()
         SimTreeOST = New SimTree()
-        TabPage5 = New TabPage()
-        SplitContainer5 = New SplitContainer()
         SimTree5 = New SimTree()
         ListView5 = New ListView()
         ColumnHeader1 = New ColumnHeader()
@@ -151,13 +151,13 @@ Partial Class Form1
         SplitContainer4.Panel1.SuspendLayout()
         SplitContainer4.Panel2.SuspendLayout()
         SplitContainer4.SuspendLayout()
+        TabPage5.SuspendLayout()
+        CType(SplitContainer5, ComponentModel.ISupportInitialize).BeginInit()
+        SplitContainer5.SuspendLayout()
         TabPage6.SuspendLayout()
         SettingGroup.SuspendLayout()
         DebugGroup.SuspendLayout()
         TabPage7.SuspendLayout()
-        TabPage5.SuspendLayout()
-        CType(SplitContainer5, ComponentModel.ISupportInitialize).BeginInit()
-        SplitContainer5.SuspendLayout()
         StatusStrip1.SuspendLayout()
         SuspendLayout()
         ' 
@@ -228,7 +228,7 @@ Partial Class Form1
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(541, 1244)
+        ListView1.Size = New Size(539, 1244)
         ListView1.TabIndex = 3
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -325,7 +325,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(541, 395)
+        ListView2.Size = New Size(539, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -360,7 +360,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(510, 857)
+        Chart2.Size = New Size(508, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -413,7 +413,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(506, 77)
+        CheckSubFolder3.Location = New Point(504, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -427,7 +427,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(512, 10)
+        Button3.Location = New Point(510, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -510,7 +510,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(541, 1133)
+        ListView3.Size = New Size(539, 1133)
         ListView3.TabIndex = 8
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -726,7 +726,7 @@ Partial Class Form1
         ListView4.Location = New Point(0, 111)
         ListView4.Margin = New Padding(4)
         ListView4.Name = "ListView4"
-        ListView4.Size = New Size(541, 1133)
+        ListView4.Size = New Size(539, 1133)
         ListView4.TabIndex = 4
         ListView4.UseCompatibleStateImageBehavior = False
         ListView4.View = View.Details
@@ -747,7 +747,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(341, 15)
+        ButtonDeleteMail.Location = New Point(339, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -759,13 +759,36 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(445, 15)
+        Button4.Location = New Point(443, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
         Button4.TabIndex = 3
         Button4.Text = "尋找相同主旨"
         Button4.UseVisualStyleBackColor = True
+        ' 
+        ' TabPage5
+        ' 
+        TabPage5.Controls.Add(SplitContainer5)
+        TabPage5.Location = New Point(4, 37)
+        TabPage5.Margin = New Padding(4)
+        TabPage5.Name = "TabPage5"
+        TabPage5.Padding = New Padding(4)
+        TabPage5.Size = New Size(1054, 1278)
+        TabPage5.TabIndex = 4
+        TabPage5.Text = "尋找重複郵件"
+        TabPage5.UseVisualStyleBackColor = True
+        ' 
+        ' SplitContainer5
+        ' 
+        SplitContainer5.Dock = DockStyle.Fill
+        SplitContainer5.Location = New Point(4, 4)
+        SplitContainer5.Margin = New Padding(4)
+        SplitContainer5.Name = "SplitContainer5"
+        SplitContainer5.Size = New Size(1046, 1270)
+        SplitContainer5.SplitterDistance = 317
+        SplitContainer5.SplitterWidth = 5
+        SplitContainer5.TabIndex = 4
         ' 
         ' TabPage6
         ' 
@@ -793,6 +816,7 @@ Partial Class Form1
         ' 
         ' SettingGroup
         ' 
+        SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(RenewAttachFilename)
         SettingGroup.Controls.Add(RenewIncludeSize)
         SettingGroup.Controls.Add(RDO_Parallel2)
@@ -801,7 +825,6 @@ Partial Class Form1
         SettingGroup.Controls.Add(ClearCache)
         SettingGroup.Controls.Add(checkShowAllFolders)
         SettingGroup.Controls.Add(LoadCache)
-        SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(CheckRDO)
         SettingGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
         SettingGroup.Location = New Point(8, 16)
@@ -811,12 +834,23 @@ Partial Class Form1
         SettingGroup.TabStop = False
         SettingGroup.Text = "設定選項"
         ' 
+        ' SaveCache
+        ' 
+        SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SaveCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        SaveCache.Location = New Point(167, 29)
+        SaveCache.Name = "SaveCache"
+        SaveCache.Size = New Size(129, 63)
+        SaveCache.TabIndex = 11
+        SaveCache.Text = "快取存入到 SSD"
+        SaveCache.UseVisualStyleBackColor = True
+        ' 
         ' RenewAttachFilename
         ' 
         RenewAttachFilename.AutoSize = True
         RenewAttachFilename.FlatStyle = FlatStyle.System
         RenewAttachFilename.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        RenewAttachFilename.Location = New Point(167, 215)
+        RenewAttachFilename.Location = New Point(167, 302)
         RenewAttachFilename.Name = "RenewAttachFilename"
         RenewAttachFilename.Size = New Size(202, 24)
         RenewAttachFilename.TabIndex = 0
@@ -831,7 +865,7 @@ Partial Class Form1
         RenewIncludeSize.CheckState = CheckState.Indeterminate
         RenewIncludeSize.FlatStyle = FlatStyle.System
         RenewIncludeSize.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        RenewIncludeSize.Location = New Point(167, 186)
+        RenewIncludeSize.Location = New Point(167, 273)
         RenewIncludeSize.Name = "RenewIncludeSize"
         RenewIncludeSize.Size = New Size(168, 24)
         RenewIncludeSize.TabIndex = 0
@@ -867,10 +901,10 @@ Partial Class Form1
         ' RenewCache
         ' 
         RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        RenewCache.BackColor = Color.Transparent
+        RenewCache.BackColor = Color.LightCyan
         RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         RenewCache.ForeColor = SystemColors.ActiveCaptionText
-        RenewCache.Location = New Point(167, 116)
+        RenewCache.Location = New Point(167, 203)
         RenewCache.Name = "RenewCache"
         RenewCache.Size = New Size(129, 63)
         RenewCache.TabIndex = 13
@@ -883,7 +917,7 @@ Partial Class Form1
         ClearCache.BackColor = Color.MistyRose
         ClearCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         ClearCache.ForeColor = SystemColors.ActiveCaptionText
-        ClearCache.Location = New Point(167, 29)
+        ClearCache.Location = New Point(167, 116)
         ClearCache.Name = "ClearCache"
         ClearCache.Size = New Size(129, 63)
         ClearCache.TabIndex = 6
@@ -910,23 +944,13 @@ Partial Class Form1
         ' 
         LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         LoadCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        LoadCache.Location = New Point(318, 116)
+        LoadCache.Location = New Point(175, 37)
         LoadCache.Name = "LoadCache"
         LoadCache.Size = New Size(129, 63)
         LoadCache.TabIndex = 12
         LoadCache.Text = "快取讀回從 SSD"
         LoadCache.UseVisualStyleBackColor = True
-        ' 
-        ' SaveCache
-        ' 
-        SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        SaveCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        SaveCache.Location = New Point(318, 29)
-        SaveCache.Name = "SaveCache"
-        SaveCache.Size = New Size(129, 63)
-        SaveCache.TabIndex = 11
-        SaveCache.Text = "快取存入到 SSD"
-        SaveCache.UseVisualStyleBackColor = True
+        LoadCache.Visible = False
         ' 
         ' CheckRDO
         ' 
@@ -1082,29 +1106,6 @@ Partial Class Form1
         SimTreeOST.Size = New Size(320, 619)
         SimTreeOST.TabIndex = 0
         ' 
-        ' TabPage5
-        ' 
-        TabPage5.Controls.Add(SplitContainer5)
-        TabPage5.Location = New Point(4, 37)
-        TabPage5.Margin = New Padding(4)
-        TabPage5.Name = "TabPage5"
-        TabPage5.Padding = New Padding(4)
-        TabPage5.Size = New Size(1054, 1278)
-        TabPage5.TabIndex = 4
-        TabPage5.Text = "尋找重複郵件"
-        TabPage5.UseVisualStyleBackColor = True
-        ' 
-        ' SplitContainer5
-        ' 
-        SplitContainer5.Dock = DockStyle.Fill
-        SplitContainer5.Location = New Point(4, 4)
-        SplitContainer5.Margin = New Padding(4)
-        SplitContainer5.Name = "SplitContainer5"
-        SplitContainer5.Size = New Size(1046, 1270)
-        SplitContainer5.SplitterDistance = 317
-        SplitContainer5.SplitterWidth = 5
-        SplitContainer5.TabIndex = 4
-        ' 
         ' SimTree5
         ' 
         SimTree5.Dock = DockStyle.Fill
@@ -1254,15 +1255,15 @@ Partial Class Form1
         SplitContainer4.Panel2.ResumeLayout(False)
         CType(SplitContainer4, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer4.ResumeLayout(False)
+        TabPage5.ResumeLayout(False)
+        CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
+        SplitContainer5.ResumeLayout(False)
         TabPage6.ResumeLayout(False)
         TabPage6.PerformLayout()
         SettingGroup.ResumeLayout(False)
         SettingGroup.PerformLayout()
         DebugGroup.ResumeLayout(False)
         TabPage7.ResumeLayout(False)
-        TabPage5.ResumeLayout(False)
-        CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
-        SplitContainer5.ResumeLayout(False)
         StatusStrip1.ResumeLayout(False)
         StatusStrip1.PerformLayout()
         ResumeLayout(False)

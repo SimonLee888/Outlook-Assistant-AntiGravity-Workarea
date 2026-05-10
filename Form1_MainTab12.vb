@@ -50,9 +50,9 @@ Partial Class Form1
     Private Class FolderBfsEntry                ' 候選待掃瞄剪枝的資料夾結構
         Public Folder As Outlook.Folder
         Public ParentIndex As Integer           ' -1 = rootFolder；>= 0 = 父節點在 allEntries 的索引
-        Public DirectMailCount As Integer       ' 本層郵件數 (不含子孫)，由 Layer3 填入
-        Public TotalMailCount As Integer        ' 含子孫郵件總數，Layer2 底部向上彙總後填入
-        Public TotalSubCount As Integer         ' 含子孫資料夾總數，Layer2 底部向上彙總後填入
+        Public DirectMailCount As Long          ' 本層郵件數 (不含子孫)，由 Layer3 填入
+        Public TotalMailCount As Long           ' 含子孫郵件總數，Layer2 底部向上彙總後填入
+        Public TotalSubCount As Long            ' 含子孫資料夾總數，Layer2 底部向上彙總後填入
         Public IsFromCache As Boolean           ' True = TotalMailCount/TotalSubCount 從快取取得，子樹已剪枝
         Public FolderPath As String             ' ✅ 新增：快取 FolderPath 避免後續重複呼叫 COM
     End Class
@@ -250,7 +250,7 @@ Partial Class Form1
             If multiMode Then ProgressBar2.Text = $"統計完成: 共選取 {dedupedNodes.Count:N0} 個資料夾，合計 {subTotalMail:N0} 封郵件。"
 
         Catch ex As OperationCanceledException
-            _dbg("結束", "ESC 中斷") : ProgressBar1.Text = "已中斷。" : Return
+            _dbg("結束", "ESC 中斷") : ProgressBar1.Text = "由使用者中斷。" : Return
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
         End Try
@@ -663,15 +663,13 @@ Partial Class Form1
                     ' by Claude Sonnet 4.6, 2026/04/25: 選項 A 修正 — DB 的 mca/fca/fsa 帶有模式語意，
                     '   無法確認是在哪個 _showAllFolders 模式下計算並儲存的。
                     '   若直接使用 DB 值做剪枝，切換模式後或重啟後第一次統計會顯示舊模式的錯誤加總。
-                    '   skipAggregates:=True → FillFolderCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
+                    '   skipAggregates:=True → FillCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
                     '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，
                     '   重算結果透過 UpdateFolderStatsCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
                     '   效能代價：每次切換或重啟後第一次統計需完整展開（不能 DB 剪枝），可接受。
                     Dim row = DbGetFolderStats(fPath)
-                    If row IsNot Nothing Then
-                        FillFolderCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
-                        ' isHit 保持 False，BFS 不剪枝，繼續展開子資料夾重算聚合值
-                    End If
+                    If row IsNot Nothing Then FillCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
+                    ' isHit 保持 False，BFS 不剪枝，繼續展開子資料夾重算聚合值
                 End If
 
                 If isHit Then
@@ -838,6 +836,8 @@ Partial Class Form1
     End Sub
     Private Sub Lv1_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs) Handles ListView1.DrawSubItem
         ' Tag=Nothing (群組標題行 / 合計列)：自訂繪製，防止 OS hover/select 顏色覆蓋我們設定的 BackColor
+        ' 2026/05/09 by Gemini 3 Flash: Resize 期間暫停繪製
+        'If _isResizingLv Then Return
         ' 其餘一般列： DrawDefault=True 不影響任何現有功能
         '
         ' 2026/04/14 對齊修正: 原本 textRect.Inflate(-3, 0) 兩側各縮 3px，
@@ -1029,7 +1029,7 @@ Partial Class Form1
             _dbg("結束")
         Catch ex As OperationCanceledException
             _dbg("結束", "ESC 中斷")
-            ProgressBar1.Text = "已中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
+            ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message) : Cursor = Cursors.Default
         End Try
@@ -1080,7 +1080,7 @@ Partial Class Form1
                         Await GoToLv2MonthView(selectedYear, cToken:=cToken)
                     Catch ex As OperationCanceledException
                         _dbg("結束", "ESC 中斷")
-                        ProgressBar1.Text = "已中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
+                        ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
                     End Try
                 End If
             End If
@@ -1160,7 +1160,7 @@ Partial Class Form1
             _dbg("結束", $"{selectedYear} 年")
         Catch ex As OperationCanceledException
             _dbg("結束", "ESC 中斷")
-            ProgressBar1.Text = "已中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
+            ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
         End Try

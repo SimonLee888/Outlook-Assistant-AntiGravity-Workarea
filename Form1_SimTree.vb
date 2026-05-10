@@ -153,7 +153,7 @@ Public Class SimTree
 #End Region
 
 #Region "■ 06 鍵盤事件"
-    Protected Overrides Sub OnKeyDown(e As KeyEventArgs)
+    Protected Overrides Async Sub OnKeyDown(e As KeyEventArgs)
         ' 處理方向鍵導覽、Space 展開收攏、PageUp/Down、Home/End
         MyBase.OnKeyDown(e)
         If e.KeyCode = Keys.ShiftKey Then Return    ' 單獨按 Shift 不做任何事
@@ -171,6 +171,7 @@ Public Class SimTree
                         Me.BeginUpdate()
                         SelectRange(Nodes(0), lastNode)
                         Me.EndUpdate()
+                        Await Task.Yield
                         FireAfterSelect(_lastClickedNode)
                     End If
                     e.Handled = True

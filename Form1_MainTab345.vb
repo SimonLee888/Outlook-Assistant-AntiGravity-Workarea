@@ -11,7 +11,7 @@ Partial Class Form1
     Private lv3SortOrder As SortOrder = SortOrder.Ascending     ' 設置初始排序方式為升序
     Private lv3LastSortColumn As Integer = -1                   ' 儲存上一次點選的列索引
     Private _lv3MailList As New List(Of MailItemInfo)(4096)     ' by Gemini, 2026/04/10: Tab3 顯示資料庫 (虛擬模式核心)    ' 預分配容量為 4096，因應 Tab3 可能載入的大量郵件資訊，顯著降低記憶體配置開銷 (by Gemini 3 Flash, 2026/05/04)
-    ' Private _isTab3_Stop As Boolean                 ' 2026/04/05 by Gemini: 已併入全域 _cancelRequested，不再單獨使用專屬旗標以簡化邏輯內容流程處理機制
+    ' Private _isTab3_Stop As Boolean                           ' 2026/04/05 by Gemini: 已併入全域 _cancelRequested，不再單獨使用專屬旗標以簡化邏輯內容流程處理機制
 
     Private _currentTabIdx As Integer = 0
     Private _isTab4ShowingResults As Boolean = False                    ' ✅ 2026/04/20 by Gemini 2.0 Flash: 標記 Tab4 左側樹目前顯示的是搜尋結果模式
@@ -135,7 +135,7 @@ Partial Class Form1
             Catch ex As OperationCanceledException
                 ' by Gemini, 2026/04/12: 捕捉 ESC 中斷，結算目前已載入的部分郵件清單
                 _dbg(" ├ 中斷", $"Step 3 已中斷，結算目前已載入的 {targetMails.Count:N0} 封")
-                ProgressBar1.Text = "已結算 (中斷)"
+                ProgressBar1.Text = "由使用者中斷"
             End Try
             Dim tStep3_AttachMailLoop = swStep.Elapsed.TotalMilliseconds : swStep.Restart() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (GetAttachMailList Loop)
 
@@ -162,7 +162,7 @@ Partial Class Form1
             ShowLv3Result(targetMails, sw.Elapsed.TotalSeconds)
         Catch ex As OperationCanceledException
             _dbg("結束", "ESC 中斷")
-            ProgressBar1.Text = "已中斷。" : ProgressBar2.Text = ""
+            ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = ""
         Catch ex As System.Exception
             MessageBox.Show("搜尋發生錯誤: " & ex.Message, "錯誤")
             _dbg("       ├ 錯誤", ex.Message) ' by Gemini, 2026/04/11: Level 3
@@ -303,12 +303,14 @@ Partial Class Form1
 
         ElseIf e.Control AndAlso e.KeyCode = Keys.A Then
             lv.BeginUpdate()
-            For Each item As ListViewItem In lv.Items
-                item.Selected = True
-            Next
+            ' by Gemini 3 Flash, 2026/05/09: 修復虛擬模式全選當機問題
+            If lv.VirtualMode Then
+                For i As Integer = 0 To lv.Items.Count - 1 : lv.SelectedIndices.Add(i) : Next   ' 虛擬模式下不可枚舉 Items，改用索引循環或直接操作 SelectedIndices
+            Else
+                For Each item As ListViewItem In lv.Items : item.Selected = True : Next         ' 實體模式維持原樣
+            End If
             lv.EndUpdate()
-            e.Handled = True
-            e.SuppressKeyPress = True
+            e.Handled = True : e.SuppressKeyPress = True
         End If
     End Sub
     Private Sub HandleLv3Lv4Lv5_MouseClick(sender As Object, e As MouseEventArgs)
@@ -420,7 +422,7 @@ Partial Class Form1
         ' by Gemini, 2026/04/10: 虛擬模式下僅需同步資料與設定 Size，完全不需建立物件
         _lv3MailList = sourceList
         ListView3.VirtualListSize = _lv3MailList.Count
-        ListView3.Invalidate() ' 強制重繪
+        ' ListView3.Invalidate() ' 2026/05/09 by Gemini 3 Flash: 移除冗餘 Invalidate，設定 VirtualListSize 本身已會觸發重繪，且 Invalidate 可能引發 redundant Resize 事件。
 
         '' by Gemini 2026/4/10, Listview3改virtual mode, 下面的實體項目建立邏輯已完全移除，改由 RetrieveVirtualItem 事件按需生成
         '' ListView3.Items.Clear()
@@ -645,8 +647,18 @@ Partial Class Form1
 
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                          Sub() progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
-                                                                                           .Message = $"正在掃描系列郵件: {processed} / {targetFolderList.Count} 個資料夾..."}))
+                                    Sub()
+                                        ' 新版 (2026/05/10 by Simon/Claude: 加入 ETA 顯示，對齊 Tab3 做法)
+                                        Dim elapsedSec As Double = Math.Max(sw.Elapsed.TotalSeconds, 0.001)
+                                        Dim speed As Double = If(processed > 0, processed / elapsedSec, 0)
+                                        Dim etaString As String = ""
+                                        If targetFolderList.Count > 10 AndAlso speed > 0 Then
+                                            Dim remainingSec As Integer = CInt(Math.Max(0, (targetFolderList.Count - processed) / speed))
+                                            If remainingSec > 3 Then etaString = $"，預估剩餘 {remainingSec \ 60:D2}:{remainingSec Mod 60:D2}"
+                                        End If
+                                        progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
+                                                                                   .Message = $"正在掃描系列郵件: {processed} / {targetFolderList.Count} 個資料夾 ({speed:F0} 個/秒{etaString})"})
+                                    End Sub)
             Next
 
             ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記憶結果並呼叫共用渲染函數
@@ -656,8 +668,8 @@ Partial Class Form1
             sw.Stop()
             ProgressBar1.Text = $"找到 {SimTree4.Nodes.Count} 個系列 / 耗時 {sw.Elapsed.TotalSeconds:0.00} 秒" : ProgressBar2.Text = ""
         Catch ex As System.Exception
-            MessageBox.Show("掃描系列郵件時發生錯誤: " & ex.Message, "錯誤")
-            _dbg("錯誤", ex.Message)
+            _dbg("結束", "ESC 中斷")
+            ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = ""
         Finally
             Button4.Enabled = True
             Cursor = Cursors.Default
@@ -809,7 +821,6 @@ Partial Class Form1
 
     End Sub
     Private Async Sub Lv4_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ListView4.SelectedIndexChanged
-
         ' ---------------------------------------------------------------
         ' Lv4_UpdateSimilarity — 選定郵件後，非同步計算並更新全列表內文相似度欄 (Index 4)
         ' 2026/04/28 by Simon/Claude: 合併 Simon 架構 + Claude 的 L2.5/L3 分層與 NormalizeMailBody
@@ -820,7 +831,7 @@ Partial Class Form1
         '   ③ 先同步標記全列表（基準=「Base」，其他=「...」），再逐封非同步計算
         '   ④ Jaccard 計算放入 Task.Run 背景執行緒，真正不阻塞 UI
         '   ⑤ EntryID 從 SubItems(5) 讀取（直接、輕量，不做 DirectCast）
-        '   ⑥ Body 讀取透過 L2.5 GetCachedMailBody（快取 → L3 COM），不跨群組殘留
+        '   ⑥ Body 讀取透過 L2.5 GetMailBody（快取 → L3 COM），不跨群組殘留
         '   ⑦ 比對範圍：全列表（不限同組），方便跨群組發現高相似度郵件
         ' ---------------------------------------------------------------
         Dim lv = DirectCast(sender, ListView)
@@ -845,22 +856,26 @@ Partial Class Form1
         If String.IsNullOrEmpty(baseEntryID) Then Return
 
         ' 取得基準郵件正規化 Body（L2.5 快取優先）
-        Dim baseBody As String = Await GetCachedMailBody(baseEntryID)
+        Dim baseBody As String = GetMailBody(baseEntryID)
         If String.IsNullOrEmpty(baseBody) Then Return
 
         ' 💡 關鍵修正 2：先同步標記全列表初始狀態（UI 執行緒批次寫入，不閃爍）
+        lv.BeginUpdate()
         Dim lviCompareList = lv.Items.Cast(Of ListViewItem)().ToList()
         For Each item In lviCompareList
             If item.SubItems.Count <= 4 Then Continue For
             Dim thisID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
             item.SubItems(4).Text = If(thisID = baseEntryID, "Base", "計算中")
         Next
+        lv.EndUpdate()
 
         ' 逐封取 Body、背景計算 Jaccard、即時更新欄位
         Try
             ' 💡 2026/04/30 by Gemini 3.1 Pro: 兩階段處理。第一階段在 UI Context 循序拿 Body，確保若是 Cache Miss 去讀 COM 的安全性。
             ' 預分配容量為 512，處理大量郵件內文比對時減少頻繁 Resize (by Gemini 3 Flash, 2026/05/04)
+            ' 💡 2026/05/09 by Gemini 3.0 flash: 優化非同步頻率。每處理一批(例如 30 封)才 Yield 一次讓 UI 喘氣，減少頻繁切換的負擔
             Dim mBodyList As New List(Of (Item As ListViewItem, TargetBody As String))(512)
+            Dim processedCount As Integer = 0
             For Each item In lviCompareList
                 If token.IsCancellationRequested Then Exit For
                 If item.SubItems.Count <= 4 Then Continue For
@@ -868,13 +883,13 @@ Partial Class Form1
                 Dim targetID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
                 If targetID = baseEntryID OrElse String.IsNullOrEmpty(targetID) Then Continue For
 
-                Dim targetBody As String = Await GetCachedMailBody(targetID)
+                Dim targetBody As String = GetMailBody(targetID)
                 If String.IsNullOrEmpty(targetBody) Then
-                    item.SubItems(4).Text = "讀取失敗"
-                    Continue For
+                    item.SubItems(4).Text = "失敗" : Continue For
                 End If
-
                 mBodyList.Add((item, targetBody))
+                processedCount += 1
+                If processedCount Mod 30 = 0 Then Await Task.Delay(1) ' 每 30 封釋放一次 UI 執行緒，兼顧流暢度與效率 (by Gemini 3.0 flash, 2026/05/09)
             Next
 
             If token.IsCancellationRequested Then Return
@@ -893,13 +908,14 @@ Partial Class Form1
             If token.IsCancellationRequested Then Return
 
             ' 💡 2026/04/30 by Gemini 3.1 Pro: 第三階段批次更新 UI
+            lv.BeginUpdate()
             For i = 0 To mBodyList.Count - 1
                 Dim item = mBodyList(i).Item
                 If item.ListView IsNot Nothing Then
                     item.SubItems(4).Text = $"{CInt(results(i) * 100)}%"
                 End If
             Next
-
+            lv.EndUpdate()
         Catch ex As OperationCanceledException
             ' 正常取消，不需處理
         End Try
@@ -1156,106 +1172,6 @@ Partial Class Form1
     End Function
 #End Region
 #Region "  └ 輔助函數"
-    Private Async Function GetCachedMailBody(entryID As String) As Task(Of String)
-        ' ── L2.5 快取代理層 ──────────────────────────────────────────────────────────
-        ' ---------------------------------------------------------------
-        ' GetCachedMailBody — Layer2.5 快取代理：Body 快取存取點
-        ' 2026/04/28 by Simon/Claude: 依照 L2.5 架構抽出快取邏輯，L3 只剩純 COM
-        '   ① 快取命中（_lv4BodyCache）→ 直接回傳，0 COM call
-        '   ② 快取未命中 → 呼叫 L3 GetMailBodyL3 讀取並正規化
-        '   ③ 無論成功或失敗都存快取（失敗存 ""），避免同一封信重複嘗試 COM
-        ' ---------------------------------------------------------------
-        Dim cached As String = Nothing
-        If _lv4BodyCache.TryGetValue(entryID, cached) Then Return cached
-
-        Dim body As String = Await GetMailBodyL3(entryID)
-        _lv4BodyCache(entryID) = body   ' 無論成功失敗都存入，避免重複打 COM
-        Return body
-
-    End Function
-    Private Async Function GetMailBodyL3(entryID As String) As Task(Of String)
-        ' ── L3 COM 資料層 ────────────────────────────────────────────────────────────
-        ' ---------------------------------------------------------------
-        ' GetMailBodyL3 — Layer3 COM 資料層：讀取郵件 Body 並正規化
-        ' 2026/04/28 by Simon/Claude: 以 Simon 的 GetMailBodyByEntryID 為基礎
-        '   + 加入 NormalizeMailBody 正規化（去除 HTML 標籤、空白換行）
-        '   + Await Task.Yield() 確保每封讀完後讓 UI 執行緒喘氣
-        '   支援 MailItem 與 PostItem 兩種型別
-        '   使用獨立的 ns（Simon 的設計），確保 COM namespace 不跨執行緒共用
-        ' ---------------------------------------------------------------
-        If String.IsNullOrEmpty(entryID) Then Return ""
-
-        Dim ns As Outlook.NameSpace = Nothing
-        Dim item As Object = Nothing
-        Dim body As String = ""
-        Try
-            ns = _olApp.GetNamespace("MAPI")    ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
-            item = ns.GetItemFromID(entryID)
-            'item = _olNS.GetItemFromID(entryID) ' 2026/04/28 by simon, 使用共用的 NameSpace 以減少多建一次namespace的 COM 開銷
-
-            If item IsNot Nothing Then
-                If TypeOf item Is Outlook.MailItem Then
-                    body = NormalizeMailBody(DirectCast(item, Outlook.MailItem).Body)
-                ElseIf TypeOf item Is Outlook.PostItem Then
-                    body = NormalizeMailBody(DirectCast(item, Outlook.PostItem).Body)
-                End If
-            End If
-        Catch ex As System.Exception
-            _dbg("GetMailBodyL3 失敗", $"{entryID}: {ex.Message}")
-        Finally
-            TryMarshalRelease(item)
-            TryMarshalRelease(ns)   ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
-        End Try
-
-        Await Task.Yield()  ' 每封讀完讓 UI 喘氣，維持游標移動的靈敏度
-        Return body
-
-    End Function
-    Private Function GetCleanSubject(subject As String) As String
-        ' by Gemini 3 Flash, 2026/04/20: 移除常見的主旨前綴，讓分組更精準
-        ' 支援包含 Re:, FW:, 回覆:, 轉寄: 等多國語言前綴的重複巢狀清理
-        If String.IsNullOrEmpty(subject) Then Return ""
-        Dim clean = subject
-        Dim prefixes As String() = {"RE:", "FW:", "回覆:", "轉寄:", "答复:", "转发:", "AW:", "VS:"} ' 加入德文/法文常見前綴
-        Dim found As Boolean = True
-        While found
-            found = False
-            For Each p In prefixes
-                If clean.StartsWith(p, StringComparison.OrdinalIgnoreCase) Then
-                    clean = clean.Substring(p.Length).Trim()
-                    found = True
-                    Exit For
-                End If
-            Next
-        End While
-        Return clean
-    End Function
-    Private Function NormalizeMailBody(body As String) As String
-        ' ---------------------------------------------------------------
-        ' NormalizeMailBody — 正規化郵件 Body，去除雜訊讓相似度比對更精確
-        ' 2026/04/28 by Claude
-        ' 處理步驟（依序）:
-        '   1. Null/空值防護
-        '   2. 去除 HTML 標籤（<...> 包圍的內容）
-        '   3. 去除常見 HTML entities（&nbsp; &lt; 等）
-        '   4. 去除所有空白字元（空格、Tab、換行、全形空白）
-        '   5. 轉小寫（大小寫不影響內容相似度）
-        ' 效果：兩封內容相同但格式不同的郵件（HTML vs 純文字）相似度會大幅提升
-        ' ---------------------------------------------------------------
-        If String.IsNullOrEmpty(body) Then Return ""
-
-        ' 去除 HTML 標籤
-        Dim result As String = System.Text.RegularExpressions.Regex.Replace(body, "<[^>]+>", "")
-
-        ' 去除常見 HTML entities
-        result = result.Replace("&nbsp;", "").Replace("&lt;", "").Replace("&gt;", "").
-                        Replace("&amp;", "").Replace("&quot;", "").Replace("&#39;", "")
-
-        ' 去除所有空白字元（含全形空白 \u3000、Tab、換行）
-        result = System.Text.RegularExpressions.Regex.Replace(result, "[\s\u3000]+", "")
-        Return result.ToLower()
-
-    End Function
     Private Function CharlesHash(strA As String, strB As String) As Double
         ''' <summary>
         ''' 2006/06/22 Algorithm by Charles Wu / Translated & Optimized by Gemini 3 Flash, 2026/04/26
@@ -1394,7 +1310,7 @@ Partial Class Form1
             ProgressBar1.Text = $"找到 {counts.GroupCount} 組 ({counts.MailCount} 封) / 耗時 {sw.Elapsed.TotalSeconds:0.00} 秒"
             ProgressBar2.Text = ""
         Catch ex As OperationCanceledException
-            _dbg("結束", "ESC 中斷") : ProgressBar1.Text = "已中斷。" : ProgressBar2.Text = ""
+            _dbg("結束", "ESC 中斷") : ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = ""
         Catch ex As System.Exception
             MessageBox.Show("掃描重複郵件時發生錯誤: " & ex.Message, "錯誤") : _dbg("錯誤", ex.Message)
         Finally
@@ -1429,6 +1345,7 @@ Partial Class Form1
         Dim totalFolders As Integer = folderList.Count
         Dim totalProcessed As Integer = 0
         Dim swThrottle As New Stopwatch() : swThrottle.Start()
+        Dim swTotal As New Stopwatch() : swTotal.Start()    ' 2026/05/10 by Simon/Claude: 供 ETA 計算使用
 
         For i As Integer = 0 To folderList.Count - 1
             Dim folder As Folder = folderList(i).Folder
@@ -1451,7 +1368,17 @@ Partial Class Form1
 
             totalProcessed += 1
             Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                      Sub() progress?.Report(New ProgressReport With {.Message = $"掃描中: {totalProcessed}/{totalFolders} 個資料夾..."}))
+                                Sub()
+                                    ' 新版 (2026/05/10 by Simon/Claude: 加入 ETA 顯示，對齊 Tab3 做法)
+                                    Dim elapsedSec As Double = Math.Max(swTotal.Elapsed.TotalSeconds, 0.001)
+                                    Dim speed As Double = If(totalProcessed > 0, totalProcessed / elapsedSec, 0)
+                                    Dim etaString As String = ""
+                                    If totalFolders > 10 AndAlso speed > 0 Then
+                                        Dim remainingSec As Integer = CInt(Math.Max(0, (totalFolders - totalProcessed) / speed))
+                                        If remainingSec > 3 Then etaString = $"，預估剩餘 {remainingSec \ 60:D2}:{remainingSec Mod 60:D2}"
+                                    End If
+                                    progress?.Report(New ProgressReport With {.Message = $"掃描中: {totalProcessed}/{totalFolders} 個資料夾 ({speed:F0} 個/秒{etaString})"})
+                                End Sub)
         Next
         Return groupDict
     End Function
@@ -1599,6 +1526,98 @@ Partial Class Form1
 #End Region
 
 #Region "■ 09 Tab6: Debug & 設定"
+    Private Async Sub SaveCache_Click(sender As Object, e As EventArgs) Handles SaveCache.Click
+        Await SaveCachesToDB()
+        RefreshDatabaseStats()
+    End Sub
+    Private Async Sub LoadCache_Click(sender As Object, e As EventArgs) Handles LoadCache.Click
+        Await LoadCachesFromDB()
+        Dim st = GetDBSummary()
+        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / attach_maillist:{st.mb} 筆 / attach_filenames:{st.at} 筆 / year_counts:{st.yc} 筆 / month_counts:{st.mc} 筆 / {st.kb} KB"
+
+    End Sub
+    Private Async Sub ClearCache_Click(sender As Object, e As EventArgs) Handles ClearCache.Click
+        ' ---------------------------------------------------------------
+        ' ClearCache_Click — [透明化控制] 分流清理記憶體或 SSD 快取
+        ' by Gemini, 2026/04/10: 實作三路自選對話框
+        ' ---------------------------------------------------------------
+        _dbg("開始")
+        Dim st = GetDBSummary()
+        Dim lastTimeStr As String = st.lastTs
+
+        ' 1. 準備訊息文字
+        Dim msg As String = $"【快取清理選項】" & vbCrLf & vbCrLf &
+                            $"--- 目前 SSD 快取現況 ---" & vbCrLf &
+                            $"最後儲存時間：{lastTimeStr}" & vbCrLf &
+                            $"資料夾統計：{st.fc} 筆" & vbCrLf &
+                            $"附件郵件：{st.mb} 筆" & vbCrLf &
+                            $"檔案大小：{st.kb} KB" & vbCrLf & vbCrLf &
+                            $"請選擇你要清理的範圍："
+
+        ' 2. 使用動態 Form 實作三按鈕對話框 (為了精確符合使用者需求)
+        Using f As New Form()
+            f.Text = "清理快取" : f.Size = New Size(450, 280)
+            f.StartPosition = FormStartPosition.CenterParent : f.FormBorderStyle = FormBorderStyle.FixedDialog
+            f.MaximizeBox = False : f.MinimizeBox = False : f.BackColor = Color.White
+            f.Font = New Font("Microsoft JhengHei UI", 10)
+
+            Dim lbl As New Label() With {.Text = msg, .Location = New Point(20, 20), .Size = New Size(400, 150)}
+            f.Controls.Add(lbl)
+
+            Dim btnMem As New Button() With {.Text = "僅記憶體", .DialogResult = DialogResult.Yes, .Location = New Point(20, 180), .Size = New Size(120, 40), .BackColor = Color.LightBlue}
+            Dim btnSSD As New Button() With {.Text = "僅 SSD (重建)", .DialogResult = DialogResult.No, .Location = New Point(155, 180), .Size = New Size(120, 40), .BackColor = Color.MistyRose}
+            Dim btnBoth As New Button() With {.Text = "兩者皆清", .DialogResult = DialogResult.Retry, .Location = New Point(290, 180), .Size = New Size(120, 40), .BackColor = Color.Orange}
+
+            f.Controls.AddRange({btnMem, btnSSD, btnBoth})
+            f.AcceptButton = btnMem
+
+            Dim result = f.ShowDialog()
+
+            ' 3. 根據選擇執行處置
+            Select Case result
+                Case DialogResult.Yes ' 僅記憶體
+                    ClearMemoryCachesCore()
+                    ProgressBar2.Text = "已完成：僅清除記憶體快取 (SSD 保留)"
+                    _dbg("清理", "僅記憶體")
+
+                Case DialogResult.No ' 僅 SSD
+                    If MessageBox.Show("【安全提示】這將把目前的 SSD 快取檔更名備份 ( .zip) 並重新建立空白資料表。" & vbCrLf & "這可以解決 Schema 不相容問題且具備救援機制，確定嗎？", "重置 SSD 快取", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) = DialogResult.OK Then
+                        Await ZipAndRebuildDB()
+                        ProgressBar2.Text = "已完成：SSD 資料庫已備份並重新初始化"
+                        _dbg("清理", "僅 SSD (已備份)")
+                    End If
+
+                Case DialogResult.Retry ' 兩者皆清
+                    If MessageBox.Show("確定要清除記憶體並備份重置 SSD 快取嗎？", "最後確認", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) = DialogResult.OK Then
+                        ClearMemoryCachesCore()
+                        Await ZipAndRebuildDB()
+                        ProgressBar2.Text = "已完成：記憶體與 SSD 快取已全數歸零 (舊 SSD 檔已備份)"
+                        _dbg("清理", "FULL CLEAN (已備份)")
+                    End If
+            End Select
+        End Using
+
+        RefreshDatabaseStats()
+        _dbg("結束")
+
+    End Sub
+    Private Async Sub RenewCache_Click(sender As Object, e As EventArgs) Handles RenewCache.Click
+        ' 2026/04/09 重構: 原本只做孤兒清除，現在改呼叫完整的 RenewCacheToDB
+        '   RenewCacheToDB 內含: Phase1 BFS → Phase2 snapshot 比對 → Phase3 dirty 重算
+        '                         Phase4 ancestor 聚合清除 → Phase5 month_counts DB 清除
+        '                         Phase6 CleanupOrphan + SaveCachesToDB
+        '   RenewIncludeSize 勾選時才重算 folder_size (GetTable 遍歷，大資料夾較慢) 
+        Try
+            Await RenewCacheToDB(RenewIncludeSize.Checked)
+
+            ' by Gemini 3.0 flash, 2026/04/24: 更新完成後，執行非同步 UI 刷新，確保新資料夾能立即顯示
+            Await RefreshAllTreeViews()
+
+            RefreshDatabaseStats()
+        Catch ex As OperationCanceledException
+            _dbg(" ├ 中斷", "使用者已取消快取更新")
+        End Try
+    End Sub
     Private Async Sub RefreshDatabaseStats()
         ' ---------------------------------------------------------------
         ' RefreshDatabaseStats — 切換到 Setting 頁時呼叫，更新 txtDatabaseStats / _lvStats

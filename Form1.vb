@@ -1,29 +1,26 @@
-﻿Imports System.DirectoryServices.ActiveDirectory
-Imports System.Numerics
+﻿Imports System.Numerics
 Imports System.Runtime.InteropServices
 Imports System.Threading
 Imports System.Windows.Forms.DataVisualization.Charting
 Imports Microsoft.Office.Interop.Outlook
-Imports Outlook = Microsoft.Office.Interop.Outlook
-'Imports MailKit        ' MailKit is a cross-platform mail client library built on top of MimeKit.
 
 Partial Class Form1
 
 #Region "■ 00 Form 雙緩衝"
-    ' 2026/04/18 by Claude: 開啟 WS_EX_COMPOSITED 視窗合成模式
-    ' 原理: Windows 把所有子控制項的繪製先合成到 offscreen buffer，再一次性 blit 到螢幕。
-    '       與 InitTreeView / InitListView 裡各別控制項的 LVS_EX_DOUBLEBUFFER 不同層次:
-    '         - 控制項層 (已有): 解決 ListView / TreeView 內部滾動的閃爍
-    '         - Form 層 (本設定): 解決切換 Tab1~Tab5、Resize 視窗時整個視窗的撕裂感
-    ' 注意: WS_EX_COMPOSITED 在某些透明子控制項或 OpenGL 繪圖上可能有副作用，
-    '       若日後加入此類控制項出現異常，移除此 Override 即可還原。
-    Protected Overrides ReadOnly Property CreateParams As CreateParams
-        Get
-            Dim cp As CreateParams = MyBase.CreateParams
-            cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED
-            Return cp
-        End Get
-    End Property
+    'Protected Overrides ReadOnly Property CreateParams As CreateParams
+    '    ' 2026/04/18 by Claude: 開啟 WS_EX_COMPOSITED 視窗合成模式
+    '    ' 原理: Windows 把所有子控制項的繪製先合成到 offscreen buffer，再一次性 blit 到螢幕。
+    '    '       與 InitTreeView / InitListView 裡各別控制項的 LVS_EX_DOUBLEBUFFER 不同層次:
+    '    '         - 控制項層 (已有): 解決 ListView / TreeView 內部滾動的閃爍
+    '    '         - Form 層 (本設定): 解決切換 Tab1~Tab5、Resize 視窗時整個視窗的撕裂感
+    '    ' 注意: WS_EX_COMPOSITED 在某些透明子控制項或 OpenGL 繪圖上可能有副作用，
+    '    '       若日後加入此類控制項出現異常，移除此 Override 即可還原。
+    '    Get
+    '        Dim cp As CreateParams = MyBase.CreateParams
+    '        cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED
+    '        Return cp
+    '    End Get
+    'End Property
     Protected Overrides Sub WndProc(ByRef m As Message)
         ' 2026/05/07 by Claude: 攔截 WM_SIZE，修復最大化/還原瞬間 OwnerDraw ListView 殘影
         ' 原因：雙擊標題列觸發的 WindowState 切換是瞬間完成的，不像拖動是漸進式，
@@ -66,7 +63,8 @@ Partial Class Form1
     Private _lastLvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
 
     Private _lvResizePending As ListView = Nothing
-    Private _lvResizeTimer As New System.Windows.Forms.Timer() With {.Interval = 50}
+    Private _lvResizeTimer As New System.Windows.Forms.Timer() With {.Interval = 100}
+    Private _isResizingLv As Boolean = False        ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
@@ -89,7 +87,7 @@ Partial Class Form1
         Public Const Hii As Integer = 100   ' 高頻更新：適用於單純資料計算或記憶體操作
         Public Const Mid As Integer = 200   ' 中等更新：一般進度更新
         Public Const Low As Integer = 300   ' 低頻慢速：極耗時的附件掃描，不需過度更新
-        Private Sub New() : End Sub  ' 防止被實例化
+        Private Sub New() : End Sub         ' 防止被實例化
     End Class
 #End Region
 
@@ -121,6 +119,17 @@ Partial Class Form1
         _dbg("結束")
 
     End Sub
+    Private Sub Form1_Resize(sender As Object, e As EventArgs) Handles Me.Resize
+        ' 2026/05/09 by Gemini 3 Flash: 整合最大化/還原偵測與節流機制
+        ' 若 WindowState 改變，不直接呼叫，而是轉發給當前 ListView 的 Resize 處理器併入 100ms 節流。
+        Static lastState As FormWindowState = Me.WindowState
+        If Me.WindowState <> lastState Then
+            Dim activeLv = GetCurrentLv()
+            If activeLv IsNot Nothing Then HandleLvResize(activeLv, EventArgs.Empty)
+            lastState = Me.WindowState
+        End If
+        SyncDebugFormPosition()
+    End Sub
     Private Sub Form1_ResizeEnd(sender As Object, e As EventArgs) Handles Me.ResizeEnd
         ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
         ' 原本的 ListView1 寬度調整邏輯已移至 HandleLvResize 中，由 ListView 自行處理 Resize 事件
@@ -136,13 +145,22 @@ Partial Class Form1
                 '_cancelRequested = True    ' 2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標
                 ' ✅ 發送標準取消信號
                 If _cts IsNot Nothing AndAlso Not _cts.IsCancellationRequested Then _cts.Cancel()
-                Cursor = Cursors.Default : ProgressBar1.Text = "已中斷。"
+                Cursor = Cursors.Default : ProgressBar1.Text = "由使用者中斷。"
                 e.Handled = True
                 e.SuppressKeyPress = True ' ✅ 防止事件繼續傳遞觸發 Lv2_KeyPress 等回上一頁邏輯
             End If
             ' 非運算中: 完全不設 _cancelRequested，不呼叫 _cts.Cancel()，直接放行。
             ' 讓 ListView/TreeView 等子控制項的原生 KeyDown/KeyPress 自己處理 ESC (例如 ListView2 返回年份視圖)。
             ' 2026/04/11 by Claude: 修正舊版非運算中按 ESC 仍呼叫 _cts.Cancel() 的 bug，會汙染 token，導致下一個操作取得的 cToken 已經是 cancelled 狀態。
+        ElseIf e.KeyCode = Keys.F1 Then
+            ' ── F1 側邊欄切換 ────────────────────────────────────────────────
+            ' by Gemini 3 Flash, 2026/05/09: 讓使用者在任何地方按 F1 都能切換側邊欄收合/恢復
+            Dim sc = GetCurrentSplitter()
+            If sc IsNot Nothing Then
+                SplitterToggle(sc)
+                e.Handled = True
+                e.SuppressKeyPress = True
+            End If
         End If
 
     End Sub
@@ -162,14 +180,14 @@ Partial Class Form1
         End If
 
         ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
-        AddHandler Me.Resize, Sub() SyncDebugFormPosition()
+        'AddHandler Me.Resize, Sub() SyncDebugFormPosition()    ' 改善最大化時的lv column resize 效能, 移回到自己的 Resize 事件裡處理, 2026/5/9 by simon
         AddHandler Me.Move, Sub() SyncDebugFormPosition()
         Await Task.Yield()
 
         ' 2026/5/7 by Claude, 在HandleLvResize 加節流, 拖動過程中完全不重算欄寬，停手後才算一次
         AddHandler _lvResizeTimer.Tick, Sub()
                                             _lvResizeTimer.Stop()
-                                            If _lvResizePending IsNot Nothing Then AutoResizeLvColumns(_lvResizePending)
+                                            If _lvResizePending IsNot Nothing Then CalculateLvColumnSize(_lvResizePending)
                                         End Sub
 
         ' ── 初始化全域狀態變更事件 (by Gemini, 2026/04/10) ──
@@ -221,6 +239,9 @@ Partial Class Form1
 
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
+
+        DebugForm.Visible = False
+        Me.Visible = False
 
         ' 第一次進到這裡時, _isClosing = False, 跳過FinalRelease(), 執行下面的SaveCache()
         ' 確保下方的SaveCacheAsync()在Form關閉前完成, 然後再重新觸發FormClosing,
@@ -541,7 +562,7 @@ Partial Class Form1
         AddHandler CheckAttCount.CheckedChanged, Sub()
                                                      CountMin.Enabled = CheckAttCount.Checked
                                                      CountMax.Enabled = CheckAttCount.Checked
-                                                     AutoResizeLvColumns(ListView3) ' 加入自動縮放，依勾選狀態動態隱藏/顯示欄位
+                                                     CalculateLvColumnSize(ListView3) ' 加入自動縮放，依勾選狀態動態隱藏/顯示欄位
                                                  End Sub
 
         ' 2026/04/05 by Gemini: 優化數值微調邏輯，根據單位 (KB/MB/GB) 與當前數值動態調整增幅
@@ -963,7 +984,7 @@ Partial Class Form1
             End If
 
             ' ── 步驟 2: 依照不同的頁面載入不同的treeview，並展開到預設的收件匣位置 ──
-            Dim currentTree As TreeView = GetActiveTreeView()
+            Dim currentTree As TreeView = GetCurrentTv()
             If currentTree IsNot Nothing Then
                 If currentTree.Nodes.Count = 0 Then
                     LoadStoreToTreeView(_pstStoreList, currentTree)
@@ -1062,100 +1083,6 @@ Partial Class Form1
         End If
     End Sub
 
-    Private Async Sub SaveCache_Click(sender As Object, e As EventArgs) Handles SaveCache.Click
-        Await SaveCachesToDB()
-        RefreshDatabaseStats()
-    End Sub
-    Private Async Sub LoadCache_Click(sender As Object, e As EventArgs) Handles LoadCache.Click
-        Await LoadCachesFromDB()
-        Dim st = GetDBSummary()
-        ProgressBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / attach_maillist:{st.mb} 筆 / attach_filenames:{st.at} 筆 / year_counts:{st.yc} 筆 / month_counts:{st.mc} 筆 / {st.kb} KB"
-
-    End Sub
-    Private Async Sub ClearCache_Click(sender As Object, e As EventArgs) Handles ClearCache.Click
-        ' ---------------------------------------------------------------
-        ' ClearCache_Click — [透明化控制] 分流清理記憶體或 SSD 快取
-        ' by Gemini, 2026/04/10: 實作三路自選對話框
-        ' ---------------------------------------------------------------
-        _dbg("開始")
-        Dim st = GetDBSummary()
-        Dim lastTimeStr As String = st.lastTs
-
-        ' 1. 準備訊息文字
-        Dim msg As String = $"【快取清理選項】" & vbCrLf & vbCrLf &
-                            $"--- 目前 SSD 快取現況 ---" & vbCrLf &
-                            $"最後儲存時間：{lastTimeStr}" & vbCrLf &
-                            $"資料夾統計：{st.fc} 筆" & vbCrLf &
-                            $"附件郵件：{st.mb} 筆" & vbCrLf &
-                            $"檔案大小：{st.kb} KB" & vbCrLf & vbCrLf &
-                            $"請選擇你要清理的範圍："
-
-        ' 2. 使用動態 Form 實作三按鈕對話框 (為了精確符合使用者需求)
-        Using f As New Form()
-            f.Text = "清理快取" : f.Size = New Size(450, 280)
-            f.StartPosition = FormStartPosition.CenterParent : f.FormBorderStyle = FormBorderStyle.FixedDialog
-            f.MaximizeBox = False : f.MinimizeBox = False : f.BackColor = Color.White
-            f.Font = New Font("Microsoft JhengHei UI", 10)
-
-            Dim lbl As New Label() With {.Text = msg, .Location = New Point(20, 20), .Size = New Size(400, 150)}
-            f.Controls.Add(lbl)
-
-            Dim btnMem As New Button() With {.Text = "僅記憶體", .DialogResult = DialogResult.Yes, .Location = New Point(20, 180), .Size = New Size(120, 40), .BackColor = Color.LightBlue}
-            Dim btnSSD As New Button() With {.Text = "僅 SSD (重建)", .DialogResult = DialogResult.No, .Location = New Point(155, 180), .Size = New Size(120, 40), .BackColor = Color.MistyRose}
-            Dim btnBoth As New Button() With {.Text = "兩者皆清", .DialogResult = DialogResult.Retry, .Location = New Point(290, 180), .Size = New Size(120, 40), .BackColor = Color.Orange}
-
-            f.Controls.AddRange({btnMem, btnSSD, btnBoth})
-            f.AcceptButton = btnMem
-
-            Dim result = f.ShowDialog()
-
-            ' 3. 根據選擇執行處置
-            Select Case result
-                Case DialogResult.Yes ' 僅記憶體
-                    ClearMemoryCachesCore()
-                    ProgressBar2.Text = "已完成：僅清除記憶體快取 (SSD 保留)"
-                    _dbg("清理", "僅記憶體")
-
-                Case DialogResult.No ' 僅 SSD
-                    If MessageBox.Show("【安全提示】這將把目前的 SSD 快取檔更名備份 ( .zip) 並重新建立空白資料表。" & vbCrLf & "這可以解決 Schema 不相容問題且具備救援機制，確定嗎？", "重置 SSD 快取", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) = DialogResult.OK Then
-                        Await ZipAndRebuildDB()
-                        ProgressBar2.Text = "已完成：SSD 資料庫已備份並重新初始化"
-                        _dbg("清理", "僅 SSD (已備份)")
-                    End If
-
-                Case DialogResult.Retry ' 兩者皆清
-                    If MessageBox.Show("確定要清除記憶體並備份重置 SSD 快取嗎？", "最後確認", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) = DialogResult.OK Then
-                        ClearMemoryCachesCore()
-                        Await ZipAndRebuildDB()
-                        ProgressBar2.Text = "已完成：記憶體與 SSD 快取已全數歸零 (舊 SSD 檔已備份)"
-                        _dbg("清理", "FULL CLEAN (已備份)")
-                    End If
-            End Select
-        End Using
-
-        RefreshDatabaseStats()
-        _dbg("結束")
-
-    End Sub
-    Private Async Sub RenewCache_Click(sender As Object, e As EventArgs) Handles RenewCache.Click
-        ' 2026/04/09 重構: 原本只做孤兒清除，現在改呼叫完整的 RenewCacheToDB
-        '   RenewCacheToDB 內含: Phase1 BFS → Phase2 snapshot 比對 → Phase3 dirty 重算
-        '                         Phase4 ancestor 聚合清除 → Phase5 month_counts DB 清除
-        '                         Phase6 CleanupOrphan + SaveCachesToDB
-        '   RenewIncludeSize 勾選時才重算 folder_size (GetTable 遍歷，大資料夾較慢) 
-        Try
-            Await RenewCacheToDB(RenewIncludeSize.Checked)
-
-            ' by Gemini 3.0 flash, 2026/04/24: 更新完成後，執行非同步 UI 刷新，確保新資料夾能立即顯示
-            Await RefreshAllTreeViews()
-
-            RefreshDatabaseStats()
-        Catch ex As OperationCanceledException
-            _dbg(" ├ 中斷", "使用者已取消快取更新")
-        End Try
-    End Sub
-#End Region
-#Region "  ├ 狀態列歷史記錄"
     Private Sub HistoryListBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles HistoryListBox.SelectedIndexChanged
         If HistoryListBox.SelectedIndex >= 0 Then
             Dim selectedText = HistoryListBox.SelectedItem.ToString()
@@ -1311,36 +1238,55 @@ Partial Class Form1
         ' 只針對滑鼠左鍵，且連按二下 (Double Click) 觸發
         If e.Button = MouseButtons.Left AndAlso e.Clicks = 2 Then
             Dim sc = TryCast(sender, SplitContainer)
-            If sc Is Nothing Then Return
-
-            ' 2026/05/07 by Claude: 凍結 Panel2 的重繪，防止 OwnerDraw ListView 在 SplitterDistance
-            ' 改變過程中觸發多次 DrawItem/DrawSubItem，造成殘影與卡頓。
-            ' 原因: SplitterDistance 變動 → Panel2 Resize → AutoResizeLvColumns (欄寬改變)
-            '        → ListView Invalidate × N 次中間狀態 → DrawSubItem × 項目數 × 欄位數
-            ' 解法: WM_SETREDRAW=False 凍結所有子控制項重繪，改完後一次性 Invalidate + Update。
-            SendMessage(sc.Panel2.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero)
-            Try
-                ' 臨界值 20px，如果大於此寬度則進行縮合
-                If sc.SplitterDistance > 20 Then
-                    sc.Tag = sc.SplitterDistance        ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
-                    sc.SplitterDistance = 10            ' 縮合至 10px 觸控區
-                    _dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)")
-                Else
-                    ' 💡 恢復寬度，若無紀錄則預設為 250px
-                    Dim prevDist As Integer = If(TypeOf sc.Tag Is Integer, DirectCast(sc.Tag, Integer), 250)
-                    If prevDist < 50 Then prevDist = 250    ' 防止恢復值過小
-                    sc.SplitterDistance = prevDist
-                    _dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px")
-                End If
-            Finally
-                ' 恢復重繪並強制一次乾淨的全量重繪
-                SendMessage(sc.Panel2.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero)
-                sc.Panel2.Invalidate(True)  ' True = 含所有子控制項
-                sc.Panel2.Update()          ' 同步執行 WM_PAINT，確保畫面立即更新
-            End Try
+            If sc IsNot Nothing Then SplitterToggle(sc)
         End If
         _dbg("結束")
 
+    End Sub
+    Private Sub SplitterToggle(sc As SplitContainer)
+        ''' <summary>
+        ' 執行側邊欄的收合與恢復 (2026/05/09 by Gemini 3 Flash 抽離共用)
+        ' 改變過程中觸發多次 DrawItem/DrawSubItem，造成殘影與卡頓。
+        ' 原因: SplitterDistance 變動 → Panel2 Resize → CalculateLvColumnSize (欄寬改變)
+        '        → ListView Invalidate × N 次中間狀態 → DrawSubItem × 項目數 × 欄位數
+        ' 解法: WM_SETREDRAW=False 凍結所有子控制項重繪，改完後一次性 Invalidate + Update。
+
+        '   2026/05/07 by Claude: 凍結 Panel2 的重繪，防止 OwnerDraw ListView 在 SplitterDistance
+        '   2026/05/09 by Gemini 3 Flash: 在凍結前先對 Panel2 標記無效，確保舊區域在解凍後能被正確擦除背景
+        ''' 2026/05/10 by Simon/Claude: 移除 WM_SETREDRAW，改用 BeginInvoke 延後重繪
+        '''   根本原因：在 SplitterDistance 變更的同一 call stack 中呼叫 Invalidate/Update，
+        '''   WinForms Layout 尚未完全結算新座標，Panel1 又未被凍結，導致舊像素殘留。
+        '''   BeginInvoke 把重繪推入訊息佇列，保證 Layout 完全結算後才執行，徹底消除殘影。
+        ''' </summary>
+        If sc Is Nothing Then Return
+
+        Try
+            If sc.SplitterDistance > 20 Then    ' 臨界值 20px，如果大於此寬度則進行縮合
+                sc.Tag = sc.SplitterDistance    ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
+                sc.SplitterDistance = 10        ' 縮合至 10px 觸控區
+                _dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)")
+            Else
+                ' 💡 恢復寬度，若無紀錄則預設為 250px
+                Dim prevDist As Integer = If(TypeOf sc.Tag Is Integer, DirectCast(sc.Tag, Integer), 250)
+                If prevDist < 50 Then prevDist = 250    ' 防止恢復值過小
+                sc.SplitterDistance = prevDist
+                _dbg("恢復側邊欄", $"{sc.Name} → {prevDist}px")
+            End If
+        Finally
+            '' 2026/05/09 by Gemini 3 Flash: 強化重繪指令，使用 Invalidate(True) 包含所有子控制項並強制背景重繪
+            '' 2026/05/10 by Simon/Claude: 修復 Splitter 收合/展開後 OwnerDraw ListView 殘影
+            ' BeginInvoke 確保 Layout 完全結算後才強制重繪全樹
+            ' sc.Invalidate(True) 同時涵蓋 Panel1 (Tree) + Panel2 (ListView) 及其所有子控制項
+            BeginInvoke(Sub()
+                            sc.Invalidate(True)
+                            sc.Update()         ' ← 改為 sc.Update() 確保整個 SplitContainer 同步重繪
+
+                            ' OwnerDraw ListView 需要額外 RDW_ERASE 強制清除舊的 off-screen buffer
+                            Dim lv = GetCurrentLv()
+                            If lv IsNot Nothing Then RedrawWindow(lv.Handle, IntPtr.Zero, IntPtr.Zero,
+                                                                  CUInt(RDW_INVALIDATE Or RDW_ERASE Or RDW_UPDATENOW Or RDW_ALLCHILDREN))
+                        End Sub)
+        End Try
     End Sub
     Private Sub HandleTvMouseHover(sender As Object, e As EventArgs)
         ' ---------------------------------------------------------------
@@ -1482,6 +1428,8 @@ Partial Class Form1
     End Sub
     Private Sub HandleLv3Lv4Lv5_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs)
         ' by Gemini 3 Flash, 2026/04/26: ListView3, ListView4, ListView5 共用的 OwnerDraw 繪製邏輯
+        ' 2026/05/09 by Gemini 3 Flash: Resize 期間暫停繪製，避免文字滑動殘影
+        'If _isResizingLv Then Return
         ' 2026/05/05 by Gemini 3 Flash: 修正非懸停狀態下的背景繪製，確保保留群組背景色 (BackColor)
 
         ' 1. 決定底色與文字色
@@ -1671,7 +1619,20 @@ Partial Class Form1
         _dbg("結束", $"已刷新 {processedCount} 個 TreeView")
         ProgressBar1.Text = "UI 刷新完成 ✔"
     End Function
-    Private Function GetActiveTreeView() As TreeView
+    Private Function GetCurrentSplitter() As SplitContainer
+        ''' <summary>
+        ''' 根據 TabControl1 的選擇索引，傳回當前分頁對應的 SplitContainer, by Gemini 3 Flash, 2026/05/09
+        ''' </summary>
+        Select Case TabControl1.SelectedIndex
+            Case 0 : Return SplitContainer1
+            Case 1 : Return SplitContainer2
+            Case 2 : Return SplitContainer3
+            Case 3 : Return SplitContainer4
+            Case 4 : Return SplitContainer5
+            Case Else : Return Nothing
+        End Select
+    End Function
+    Private Function GetCurrentTv() As TreeView
         ''' <summary>
         ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 TreeView/SimTree, by Gemini, 2026/03/30
         ''' </summary>
@@ -1685,6 +1646,20 @@ Partial Class Form1
             Case Else : Return Nothing
         End Select
 
+    End Function
+    Private Function GetCurrentLv() As ListView
+        ''' <summary>
+        ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 ListView, by simon, 2026/05/09
+        ''' </summary>
+        ' 在需要觸發 AfterSelect 或其他操作時，能夠根據目前選中的 Tab 頁面，準確地獲取對應的 ListView 控制項
+        Select Case TabControl1.SelectedIndex
+            Case 0 : Return ListView1   ' 2026/04/13 by Simon/Claude: Tab1 改用 ListView1
+            Case 1 : Return ListView2
+            Case 2 : Return ListView3
+            Case 3 : Return ListView4
+            Case 4 : Return ListView5
+            Case Else : Return Nothing
+        End Select
     End Function
     Private Function GetAllTreeViews(container As Control) As List(Of TreeView)
         ''' <summary>
@@ -1800,16 +1775,28 @@ Partial Class Form1
         ''' <summary>
         ''' 處理所有 ListView 的 Resize 共用事件 (2026/04/01 by Gemini)
         ''' </summary>
-        'Dim lv As ListView = TryCast(sender, ListView)
-        'If lv IsNot Nothing Then AutoResizeLvColumns(lv)
+        Dim lv As ListView = TryCast(sender, ListView)
+        If lv Is Nothing Then Return
+
+        ' 2026/05/09 by Gemini 3 Flash: 引入寬度比對防護
+        ' 只有寬度實質改變時才啟動節流計時器。排除「高度改變」或「WindowState 切換中的無效訊息」。
+        Static lastLvWidths As New Dictionary(Of String, Integer)
+        If lastLvWidths.ContainsKey(lv.Name) AndAlso lastLvWidths(lv.Name) = lv.Width Then Return
+        lastLvWidths(lv.Name) = lv.Width
+
+        ' 在 Resize 邏輯中使用
+        SendMessage(lv.Handle, WM_SETREDRAW, New IntPtr(0), IntPtr.Zero) ' 關閉重繪
 
         ' 2026/5/7 by Claude, 在HandleLvResize 加節流, 拖動過程中完全不重算欄寬，停手後才算一次
-        _lvResizePending = TryCast(sender, ListView)
+        _lvResizePending = lv
         _lvResizeTimer.Stop()
         _lvResizeTimer.Start()  ' 每次 Resize 重設計時，停止移動後 50ms 才真正重算
 
+        SendMessage(lv.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero) ' 開啟重繪
+        lv.Invalidate() ' 強制刷新
+
     End Sub
-    Private Sub AutoResizeLvColumns(lv As ListView)
+    Private Sub CalculateLvColumnSize(lv As ListView)
         ''' <summary>
         ''' 定義各個 ListView 縮放時的欄位寬度比例
         ''' 2026/04/01 by Gemini
@@ -1817,74 +1804,96 @@ Partial Class Form1
 
         If lv.Columns.Count = 0 OrElse lv.Width <= 0 Then Return
 
-        Dim w As Integer = lv.ClientSize.Width ' 使用 ClientSize 避免捲軸吃掉寬度
-        If lv Is ListView1 Then ' Tab1: 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
-            ' 2026/04/13 v2: 移除「所屬父資料夾」欄，回歸 5 欄
-            If lv.Columns.Count >= 5 Then
-                lv.Columns(1).Width = CInt(w * 0.15)
-                lv.Columns(2).Width = CInt(w * 0.15)
-                lv.Columns(3).Width = CInt(w * 0.15)
-                lv.Columns(4).Width = CInt(w * 0.188)
-                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width) - 5
-            End If
+        ' 2026/05/09 by Gemini 3 Flash: 終極防線 — 若寬度未變，絕不執行昂貴的 UI 重算與 _dbg 輸出
+        Static lastProcessedWidths As New Dictionary(Of String, Integer)
+        If lastProcessedWidths.ContainsKey(lv.Name) AndAlso lastProcessedWidths(lv.Name) = lv.Width Then Return
+        lastProcessedWidths(lv.Name) = lv.Width
 
-        ElseIf lv Is ListView2 Then ' Tab2: 年度 / 郵件個數 / 空白欄位
-            If lv.Columns.Count >= 3 Then
-                lv.Columns(0).Width = Math.Max(120, CInt(w * 0.3)) ' 第一欄(年度/月份)至少保底 120px
-                lv.Columns(1).Width = Math.Max(100, CInt(w * 0.2)) ' 第二欄(郵件數量)至少保底 100px
-                lv.Columns(2).Width = Math.Max(0, w - lv.Columns(0).Width - lv.Columns(1).Width - 5)  ' 第三欄吸收所有剩餘空間
-                ' 2026/04/03 by Gemini: 將無用的第三欄作為彈性緩衝區。當視窗縮小時，優先壓縮第三欄位，確保前兩欄至少有基本的顯示空間而不會擠在一起。
-            End If
+        _dbg("開始", lv.Name)
+        _isResizingLv = True    ' ✅ 2026/05/09 by Gemini 3 Flash: 開啟旗標，暫停 DrawSubItem 繪製
+        lv.BeginUpdate()        ' 開始更新，避免多次 Resize 造成的閃爍
+        SendMessage(lv.Handle, WM_SETREDRAW, New IntPtr(0), IntPtr.Zero)    ' 在 Resize 邏輯中使用 關閉重繪
+        Try
+            Dim w As Integer = lv.ClientSize.Width  ' 使用 ClientSize 避免捲軸吃掉寬度
+            If w <= 0 Then Exit Try
 
-        ElseIf lv Is ListView3 Then ' Tab3: 郵件主旨 / 郵件大小 / 收到日期 / 寄件者 / 附件個數 / EntryID
-            If lv.Columns.Count >= 6 Then
-                lv.Columns(1).Width = CInt(w * 0.15)    ' 郵件大小
-                lv.Columns(2).Width = CInt(w * 0.17)    ' 收到日期 (by Gemini 3 Flash, 2026/05/06: 統一 17%)
-                lv.Columns(3).Width = CInt(w * 0.18)    ' 寄件者
-                lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留
+            ' 2026/05/09 by Gemini 3 Flash: 採用「計算與賦值分離」策略
+            ' 先算出所有欄位的寬度清單，最後統一寫入，徹底消除 Header 逐個變寬的視覺差。
+            Dim newWidths(lv.Columns.Count - 1) As Integer
 
-                ' by Gemini 3 Flash, 2026/05/06: 實作連動邏輯 —— 
-                ' 當使用者勾選「附件個數」或左側側邊欄收攏時，自動展開此欄位（寬度 60px 即可，顯示數字用）
-                Dim isLeftCollapsed As Boolean = (SplitContainer3.SplitterDistance < 50)
-                lv.Columns(4).Width = If(CheckAttCount.Checked OrElse isLeftCollapsed, 60, 0)
+            If lv Is ListView1 Then ' Tab1: 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
+                ' 2026/04/13 v2: 移除「所屬父資料夾」欄，回歸 5 欄
+                If lv.Columns.Count >= 5 Then
+                    newWidths(1) = CInt(w * 0.15)
+                    newWidths(2) = CInt(w * 0.15)
+                    newWidths(3) = CInt(w * 0.15)
+                    newWidths(4) = CInt(w * 0.188)
+                    newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4)) - 5
+                End If
 
-                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5
-            End If
+            ElseIf lv Is ListView2 Then ' Tab2: 年度 / 郵件個數 / 空白欄位
+                If lv.Columns.Count >= 3 Then
+                    newWidths(0) = Math.Max(120, CInt(w * 0.3)) ' 第一欄(年度/月份)至少保底 120px
+                    newWidths(1) = Math.Max(100, CInt(w * 0.2)) ' 第二欄(郵件數量)至少保底 100px
+                    newWidths(2) = Math.Max(0, w - newWidths(0) - newWidths(1) - 5) ' 第三欄吸收所有剩餘空間
+                End If
 
-        ElseIf lv Is ListView4 Then ' Tab4: 主旨 / 大小 / 收到時間 / 寄件者 / 相似度 / EntryID
-            If lv.Columns.Count >= 5 Then
-                lv.Columns(1).Width = CInt(w * 0.13)    ' 大小
-                lv.Columns(2).Width = CInt(w * 0.17)    ' 收到時間 (by Gemini 3 Flash, 2026/05/06: 統一改為 17%)
-                lv.Columns(3).Width = CInt(w * 0.18)    ' 寄件者
-                lv.Columns(4).Width = CInt(w * 0.08)    ' 相似度
-                lv.Columns(5).Width = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03
-                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width) - 5 ' by Claude Sonnet 4.6, 2026/05/03: 補上 EntryID 欄扣除
-            End If
-        ElseIf lv Is ListView5 Then ' Tab5: 主旨/大小/收到日期/寄件者/群組/相似/EntryID (7欄，比 LV4 多「群組」欄) by Claude Sonnet 4.6, 2026/05/03
-            If lv.Columns.Count >= 7 Then
-                lv.Columns(1).Width = CInt(w * 0.12)    ' 郵件大小
-                lv.Columns(2).Width = CInt(w * 0.17)    ' 收到日期
-                lv.Columns(3).Width = CInt(w * 0.17)    ' 寄件者
-                lv.Columns(4).Width = CInt(w * 0.05)    ' 群組
-                lv.Columns(5).Width = CInt(w * 0.08)    ' 相似
-                lv.Columns(6).Width = CInt(w * 0.01)    ' EntryID 極小保留
-                lv.Columns(0).Width = w - (lv.Columns(1).Width + lv.Columns(2).Width + lv.Columns(3).Width + lv.Columns(4).Width + lv.Columns(5).Width + lv.Columns(6).Width) - 5
-            End If
-        Else
-            ' 預設比例: 首欄固定40%，其餘均分
-            If lv.Columns.Count > 0 Then
-                Dim firstWidth As Integer = CInt(w * 0.4)
-                lv.Columns(0).Width = firstWidth
-                If lv.Columns.Count > 1 Then
-                    Dim remainWidth As Integer = w - firstWidth - 5
-                    Dim avgWidth As Integer = remainWidth \ (lv.Columns.Count - 1)
-                    For i As Integer = 1 To lv.Columns.Count - 1
-                        lv.Columns(i).Width = avgWidth
-                    Next
+            ElseIf lv Is ListView3 Then ' Tab3: 郵件主旨 / 郵件大小 / 收到日期 / 寄件者 / 附件個數 / EntryID
+                If lv.Columns.Count >= 6 Then
+                    newWidths(1) = CInt(w * 0.15)    ' 郵件大小
+                    newWidths(2) = CInt(w * 0.17)    ' 收到日期 (by Gemini 3 Flash, 2026/05/06: 統一 17%)
+                    newWidths(3) = CInt(w * 0.18)    ' 寄件者
+                    newWidths(5) = CInt(w * 0.01)    ' EntryID 極小保留
+
+                    ' by Gemini 3 Flash, 2026/05/06: 實作連動邏輯 —— 
+                    ' 當使用者勾選「附件個數」或左側側邊欄收攏時，自動展開此欄位（寬度 60px 即可，顯示數字用）
+                    Dim isLeftCollapsed As Boolean = (SplitContainer3.SplitterDistance < 50)
+                    newWidths(4) = If(CheckAttCount.Checked OrElse isLeftCollapsed, 60, 0)
+                    newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5)) - 5
+                End If
+
+            ElseIf lv Is ListView4 Then ' Tab4: 主旨 / 大小 / 收到時間 / 寄件者 / 相似度 / EntryID
+                If lv.Columns.Count >= 5 Then
+                    newWidths(1) = CInt(w * 0.13)    ' 大小
+                    newWidths(2) = CInt(w * 0.17)    ' 收到時間 (by Gemini 3 Flash, 2026/05/06: 統一改為 17%)
+                    newWidths(3) = CInt(w * 0.18)    ' 寄件者
+                    newWidths(4) = CInt(w * 0.08)    ' 相似度
+                    newWidths(5) = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03
+                    newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5)) - 5 ' by Claude Sonnet 4.6, 2026/05/03: 補上 EntryID 欄扣除
+                End If
+            ElseIf lv Is ListView5 Then ' Tab5: 主旨/大小/收到日期/寄件者/群組/相似/EntryID (7欄，比 LV4 多「群組」欄) by Claude Sonnet 4.6, 2026/05/03
+                If lv.Columns.Count >= 7 Then
+                    newWidths(1) = CInt(w * 0.12)    ' 郵件大小
+                    newWidths(2) = CInt(w * 0.17)    ' 收到日期
+                    newWidths(3) = CInt(w * 0.17)    ' 寄件者
+                    newWidths(4) = CInt(w * 0.05)    ' 群組
+                    newWidths(5) = CInt(w * 0.08)    ' 相似
+                    newWidths(6) = CInt(w * 0.01)    ' EntryID 極小保留
+                    newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5) + newWidths(6)) - 5
+                End If
+            Else
+                ' 預設比例: 首欄固定40%，其餘均分
+                If lv.Columns.Count > 0 Then
+                    newWidths(0) = CInt(w * 0.4)
+                    If lv.Columns.Count > 1 Then
+                        Dim avgWidth As Integer = (w - newWidths(0) - 5) \ (lv.Columns.Count - 1)
+                        For i As Integer = 1 To lv.Columns.Count - 1 : newWidths(i) = avgWidth : Next
+                    End If
                 End If
             End If
-        End If
 
+            ' ── 執行批量賦值 ──
+            For i As Integer = 0 To lv.Columns.Count - 1
+                ' 僅在數值改變時賦值，減少對 Header 的內部連動
+                If lv.Columns(i).Width <> newWidths(i) Then lv.Columns(i).Width = newWidths(i)
+            Next
+            lv.Invalidate()         ' 強制刷新
+        Finally
+            SendMessage(lv.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero) ' 開啟重繪
+            lv.EndUpdate()
+            _isResizingLv = False   ' ✅ 2026/05/09 by Gemini 3 Flash: 恢復繪製
+        End Try
+        _dbg("結束", lv.Name)
     End Sub
     Private Function GetHeaderRowBackColor(item As ListViewItem) As Color
         ' 2026/04/14 by Simon/Claude: 根據 Tag=Nothing 列的文字前綴還原正確的 BackColor
@@ -1910,6 +1919,11 @@ Partial Class Form1
         ''' 使用 SetWindowPos 避免多個屬性分別設定導致的閃爍
         ''' 2026/3/26 by Gemini
         ''' </summary>
+
+        Static isSyncing As Boolean = False
+        If isSyncing AndAlso DebugForm.Visible = False Then
+            isSyncing = True : Return
+        End If
 
         If DebugForm IsNot Nothing AndAlso (DebugForm.Visible OrElse CheckDebug.Checked) Then
             Dim newLeft As Integer = Me.Left + Me.Width - 12
@@ -1949,7 +1963,6 @@ Partial Class Form1
         _cacheFolderIDs.Clear() ' 2026/04/10 新增 ID 快取清理
 
     End Sub
-
 #End Region
 
     Public Class ThemeColors

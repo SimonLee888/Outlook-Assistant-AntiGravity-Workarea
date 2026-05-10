@@ -130,4 +130,8 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="My Project\resource\" />
+  </ItemGroup>
+
 </Project>

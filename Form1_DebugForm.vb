@@ -591,8 +591,10 @@ Public Class DebugForm
     Private Sub lvwDebug_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs) Handles lvwDebug.DrawSubItem
         ' =======================================================
         ' 完全自訂繪製，確保文字在有/無搜尋條件時位置絕對不跳動
+        ' 2026/05/09 by Gemini 3 Flash: Resize 期間暫停繪製
         ' 2026/3/27 by Gemini (simon: 幹這些東西沒有用過好難)
         ' =======================================================
+
         e.DrawDefault = False
         ' ✅ 2026/03/31 by Gemini: 強制設定 Clip 區域。在極寬視窗 (>2000px) 且無捲軸時，
         ' GDI+ 可能因內部座標計算偏移而遺失繪圖，顯式 SetClip 可解決此問題。

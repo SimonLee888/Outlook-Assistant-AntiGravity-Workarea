@@ -13,11 +13,11 @@ Imports Microsoft.Office.Interop
 '   Form1_SQLite2.vb  (本檔)
 '   - InitDatabase()                            ' Form1_Load 呼叫，建 connection + CREATE TABLE IF NOT EXISTS
 '   - CloseDatabase()                           ' FormClosing 呼叫
-'   - LoadCachesFromDB()               ' LoadCache 按鈕手動讀出：Bulk Load，輸出詳細 _dbg 分項
-'   - SaveCachesToDB()                 ' SaveCache 按鈕手動存入：① CleanupOrphanFolderPath → ② 批次寫入四張表
+'   - LoadCachesFromDB()                        ' LoadCache 按鈕手動讀出：Bulk Load，輸出詳細 _dbg 分項
+'   - SaveCachesToDB()                          ' SaveCache 按鈕手動存入：① CleanupOrphanFolderPath → ② 批次寫入四張表
 '   - CleanupOrphanFolderPath(livePaths)        ' 清除 DB 中已不存在的 folder_path (原 PurgeStaleFolders)，SaveCache 時順帶呼叫
-'   - RenewCacheToDB(includeSize As Boolean)   ' RenewCache 按鈕：Phase1~6 完整更新 (2026-04-09 新增) 
-'   - RenewAttachMailList(folder, fPath:=fPath)   ' 三路比對更新 attach_maillist (2026-04-09 新增) 
+'   - RenewCacheToDB(includeSize As Boolean)    ' RenewCache 按鈕：Phase1~6 完整更新 (2026-04-09 新增) 
+'   - RenewAttachMailList(folder, fPath:=fPath) ' 三路比對更新 attach_maillist (2026-04-09 新增) 
 '
 '   - DbGetFolderStats(folderPath)              ' folder_stats 單行查詢
 '   - DbGetMailBasic(folderPath)                ' mail_basic WHERE folder_path=? 全部行
@@ -64,13 +64,13 @@ Partial Class Form1
     ' DB Row 結構 (供 Form1_Outlook.vb 的 Layer2.5 函數使用)
     Friend Class FolderStatsDbRow
         ' folder_stats 一行的讀出結果；-1 代表該欄位在 DB 中為 NULL 或尚未寫入
-        Public mc As Integer = -1       ' mail_count
-        Public mca As Integer = -1      ' mail_count_all
-        Public fc As Integer = -1       ' folder_count
-        Public fca As Integer = -1      ' folder_count_all
+        Public mc As Long = -1       ' mail_count
+        Public mca As Long = -1      ' mail_count_all
+        Public fc As Long = -1       ' folder_count
+        Public fca As Long = -1      ' folder_count_all
         Public fs As Long = -1          ' folder_size
         Public fsa As Long = -1         ' folder_size_all
-        Public snap As Integer = -1     ' content_count_snapshot (= PR_CONTENT_COUNT at save time)
+        Public snap As Long = -1     ' content_count_snapshot (= PR_CONTENT_COUNT at save time)
         Public path As String = ""      ' folder_path        ' by Gemini 3.0 flash, 2026/04/16: 新增路徑標識，供 GetSubtreeToList Tuple 重建使用
 
         ' by Gemini, 2026/04/10: 新增身分標識與排序標籤，供 TreeView/BFS 持久化優化使用
@@ -81,7 +81,7 @@ Partial Class Form1
     End Class
     Friend Class AttachMailListDbResult
         ' attach_maillist WHERE folder_path=? 的讀出結果
-        Public Snap As Integer = -1
+        Public Snap As Long = -1
         ' 預分配容量為 1024，降低自 SQLite 載入大量郵件快取時的 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
         Public Mails As New List(Of MailItemInfo)(1024)
     End Class
@@ -326,7 +326,9 @@ Partial Class Form1
                 ' 使用全名 (Fully Qualified Name) 避免 Imports 失敗, 並改用 Stream.CopyTo 避開擴展方法找不到的錯誤
                 Using zipFileStream As New System.IO.FileStream(zipPath, System.IO.FileMode.Create)
                     Using archive As New System.IO.Compression.ZipArchive(zipFileStream, System.IO.Compression.ZipArchiveMode.Create)
-                        Dim entry = archive.CreateEntry("OLAcache.db")
+                        ' 加入 System.IO.Compression.CompressionLevel 參數 (2026/5/8 by simon)使用最佳壓縮等級，減少備份檔案大小
+                        Dim entry = archive.CreateEntry("OLAcache.db", System.IO.Compression.CompressionLevel.SmallestSize)
+
                         Using entryStream = entry.Open()
                             ' 加上 FileShare.ReadWrite 容許其他可能卡住的唯讀鎖，防止 IOException (by Gemini, 2026/04/10)
                             Using fs As New System.IO.FileStream(_dbPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite)
@@ -336,11 +338,10 @@ Partial Class Form1
                     End Using
                 End Using
 
-                ' 壓縮完後刪除原始 db 檔
-                IO.File.Delete(_dbPath)
+                IO.File.Delete(_dbPath) ' 壓縮完後刪除原始 db 檔
             End If
 
-            ' 3. 重新建立
+            ' 3. 重新建立資料庫與表格
             InitDatabase()
             _dbg(" ├ 結束", "SSD 快取已重設，舊檔案已 Zip 備份") ' by Gemini, 2026/04/11: 修正對應開始層級 Level 1
         Catch ex As System.Exception
@@ -716,7 +717,7 @@ Partial Class Form1
 
         Catch ex As OperationCanceledException
             ' 2026/04/16: cToken 取消時 (ESC)，取代原本的 _cancelRequested + GoTo Cancelled 模式
-            ProgressBar1.Text = "RenewCache 已中斷 (ESC)"
+            ProgressBar1.Text = "RenewCache 由使用者中斷"
             _dbg("中斷", "使用者按 ESC")
         Catch ex As System.Exception
             ProgressBar1.Text = $"RenewCache 失敗: {ex.Message}"
@@ -1175,17 +1176,17 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim count As Integer = 0
-        Using cmd As New SqliteCommand(
-            "SELECT folder_path,mail_count,mail_count_all,folder_count,folder_count_all,folder_size,folder_size_all," &
-            "entry_id,store_id,is_mail,has_chinese FROM folder_stats", _db)
+        Using cmd As New SqliteCommand("SELECT folder_path,mail_count,mail_count_all,folder_count,folder_count_all,folder_size,folder_size_all," &
+                                       "entry_id,store_id,is_mail,has_chinese FROM folder_stats", _db)
+
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim path = reader.GetString(0)
                     ' 只有 NOT NULL 的欄位才塞入記憶體快取；NULL 代表「從未測量過」，跳過
-                    If Not reader.IsDBNull(1) Then _cacheMailCount.TryAdd(path, reader.GetInt32(1))
-                    If Not reader.IsDBNull(2) Then _cacheMailCountAll.TryAdd(path, reader.GetInt32(2))
-                    If Not reader.IsDBNull(3) Then _cacheFolderCount.TryAdd(path, reader.GetInt32(3))
-                    If Not reader.IsDBNull(4) Then _cacheFolderCountAll.TryAdd(path, reader.GetInt32(4))
+                    If Not reader.IsDBNull(1) Then _cacheMailCount.TryAdd(path, reader.GetInt64(1))
+                    If Not reader.IsDBNull(2) Then _cacheMailCountAll.TryAdd(path, reader.GetInt64(2))
+                    if Not reader.IsDBNull(3) Then _cacheFolderCount.TryAdd(path, reader.GetInt64(3))
+                    If Not reader.IsDBNull(4) Then _cacheFolderCountAll.TryAdd(path, reader.GetInt64(4))
                     If Not reader.IsDBNull(5) Then _cacheFolderSize.TryAdd(path, reader.GetInt64(5))
                     If Not reader.IsDBNull(6) Then _cacheFolderSizeAll.TryAdd(path, reader.GetInt64(6))
 
@@ -1221,9 +1222,7 @@ Partial Class Form1
                     Dim fp = reader.GetString(0)
                     Dim yr = reader.GetInt32(1)
                     Dim cnt = reader.GetInt32(2)
-                    If Not tempDict.ContainsKey(fp) Then
-                        tempDict(fp) = New ConcurrentDictionary(Of Integer, Integer)()
-                    End If
+                    If Not tempDict.ContainsKey(fp) Then tempDict(fp) = New ConcurrentDictionary(Of Integer, Integer)()
                     tempDict(fp)(yr) = cnt
                     count += 1
                 End While
@@ -1280,14 +1279,12 @@ Partial Class Form1
         Dim count As Integer = 0
         ' 暫存用：先按 folder_path 分組收集，最後一次性寫入 _cacheAttachMailList
         Dim tempDict As New Dictionary(Of String, (snap As Integer, mails As List(Of MailItemInfo)))()
-
         Using cmd As New SqliteCommand("SELECT entry_id,folder_path,subject,msg_size,received_time,sender_name,attach_count,item_count_snap FROM attach_maillist", _db)
+
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim fp = reader.GetString(1)
-                    If Not tempDict.ContainsKey(fp) Then
-                        tempDict(fp) = (reader.GetInt32(7), New List(Of MailItemInfo)())
-                    End If
+                    If Not tempDict.ContainsKey(fp) Then tempDict(fp) = (reader.GetInt64(7), New List(Of MailItemInfo)())
 
                     Dim mail As New MailItemInfo()
                     mail.EntryID = reader.GetString(0)
@@ -1305,10 +1302,7 @@ Partial Class Form1
         End Using
 
         For Each kvp In tempDict
-            ' 優化後：
-            _cacheAttachMailList.TryAdd(kvp.Key,
-                                       New FolderCacheTab3 With {.AttachMailList = kvp.Value.mails,
-                                                                 .ItemCountSnap = kvp.Value.snap})
+            _cacheAttachMailList.TryAdd(kvp.Key, New FolderCacheTab3 With {.AttachMailList = kvp.Value.mails, .ItemCountSnap = kvp.Value.snap})
         Next
         Return count
         _dbg("結束")
@@ -1349,9 +1343,8 @@ Partial Class Form1
         Dim tempDict As New Dictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer))()
 
         ' 2026/05/06 by Claude: 新增 message_id(7), sender_email(8); item_count_snap 移至索引 9
-        Using cmd As New SqliteCommand(
-            "SELECT entry_id,folder_path,subject,msg_size,received_time,sender_name,topic," &
-            "message_id,sender_email,item_count_snap FROM basic_maillist", _db)
+        Using cmd As New SqliteCommand("SELECT entry_id,folder_path,subject,msg_size,received_time,sender_name,topic," &
+                                       "message_id,sender_email,item_count_snap FROM basic_maillist", _db)
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim eid = reader.GetString(0)
@@ -1363,7 +1356,7 @@ Partial Class Form1
                     Dim tpc = If(reader.IsDBNull(6), "", reader.GetString(6))
                     Dim mid = If(reader.IsDBNull(7), "", reader.GetString(7))
                     Dim semail = If(reader.IsDBNull(8), "", reader.GetString(8))
-                    Dim snap = If(reader.IsDBNull(9), -1, reader.GetInt32(9))
+                    Dim snap = If(reader.IsDBNull(9), -1L, reader.GetInt64(9))
 
                     ' by Claude Sonnet 4.6, 2026/05/06: Root Cause A 修正 — fp 現在是純路徑
                     ' 記憶體 key 格式須與 GetBasicMailInfo 使用的 cacheKey 對齊
@@ -1378,9 +1371,8 @@ Partial Class Form1
                     ' 但其 snap 仍需讀取（已在上方 snap = reader.GetInt32(7) 讀取），tempDict entry 已建立
                     If eid.StartsWith("EMPTY_BASIC_") Then count += 1 : Continue While
 
-                    Dim mail As New MailItemInfo With {
-                        .EntryID = eid, .Subject = subj, .Size = sz, .SenderName = sn,
-                        .FolderPath = fp, .MessageID = mid, .SenderEmail = semail}
+                    Dim mail As New MailItemInfo With {.EntryID = eid, .Subject = subj, .Size = sz, .SenderName = sn,
+                                                       .FolderPath = fp, .MessageID = mid, .SenderEmail = semail}
                     DateTime.TryParse(rtStr, mail.ReceivedTime)
                     tempDict(cacheKey).Mails.Add((mail, tpc))
                     count += 1
@@ -1414,22 +1406,21 @@ Partial Class Form1
         If _db Is Nothing Then Return Nothing
 
         Try
-            Using cmd As New SqliteCommand(
-                "SELECT mail_count,mail_count_all,folder_count,folder_count_all," &
-                "       folder_size,folder_size_all,content_count_snapshot," &
-                "       entry_id,store_id,is_mail,has_chinese" &
-                " FROM folder_stats WHERE folder_path=@p", _db)
+            Using cmd As New SqliteCommand("SELECT mail_count,mail_count_all,folder_count,folder_count_all," &
+                                           "       folder_size,folder_size_all,content_count_snapshot,entry_id,store_id,is_mail,has_chinese" &
+                                           "  FROM folder_stats WHERE folder_path=@p", _db)
 
                 cmd.Parameters.AddWithValue("@p", fPath)
                 Using reader = cmd.ExecuteReader()
                     If Not reader.Read() Then Return Nothing
-                    Return New FolderStatsDbRow With {.mc = If(reader.IsDBNull(0), -1, reader.GetInt32(0)),
-                                                      .mca = If(reader.IsDBNull(1), -1, reader.GetInt32(1)),
-                                                      .fc = If(reader.IsDBNull(2), -1, reader.GetInt32(2)),
-                                                      .fca = If(reader.IsDBNull(3), -1, reader.GetInt32(3)),
+
+                    Return New FolderStatsDbRow With {.mc = If(reader.IsDBNull(0), -1L, reader.GetInt64(0)),
+                                                      .mca = If(reader.IsDBNull(1), -1L, reader.GetInt64(1)),
+                                                      .fc = If(reader.IsDBNull(2), -1L, reader.GetInt64(2)),
+                                                      .fca = If(reader.IsDBNull(3), -1L, reader.GetInt64(3)),
                                                       .fs = If(reader.IsDBNull(4), -1L, reader.GetInt64(4)),
                                                       .fsa = If(reader.IsDBNull(5), -1L, reader.GetInt64(5)),
-                                                      .snap = If(reader.IsDBNull(6), -1, reader.GetInt32(6)),
+                                                      .snap = If(reader.IsDBNull(6), -1L, reader.GetInt64(6)),
                                                       .eid = If(reader.IsDBNull(7), "", reader.GetString(7)),
                                                       .sid = If(reader.IsDBNull(8), "", reader.GetString(8)),
                                                       .isMail = If(reader.IsDBNull(9), -1, reader.GetInt32(9)),
@@ -1454,16 +1445,15 @@ Partial Class Form1
         Try
             Dim result As New AttachMailListDbResult()
             Dim hasRecord As Boolean = False ' by Claude Sonnet 4.6, 2026/05/06: 補齊變數宣告
-            Using cmd As New SqliteCommand(
-                "SELECT entry_id,subject,msg_size,received_time,sender_name,attach_count,item_count_snap" &
-                " FROM attach_maillist WHERE folder_path=@p", _db)
+            Using cmd As New SqliteCommand("SELECT entry_id,subject,msg_size,received_time,sender_name,attach_count,item_count_snap" &
+                                           " FROM attach_maillist WHERE folder_path=@p", _db)
 
                 cmd.Parameters.AddWithValue("@p", fPath)
                 hasRecord = False ' 移除 Dim，直接使用外層變數
                 Using reader = cmd.ExecuteReader()
                     While reader.Read() ' item_count_snap 整個 folder 共用同一值，每行都一樣，讀最後一次即可
                         hasRecord = True
-                        result.Snap = If(reader.IsDBNull(6), -1, reader.GetInt32(6))
+                        result.Snap = If(reader.IsDBNull(6), -1L, reader.GetInt64(6))
                         Dim eid = reader.GetString(0)
                         If eid.StartsWith("EMPTY_ATTACH_") Then Continue While
 
@@ -1502,15 +1492,13 @@ Partial Class Form1
             Dim hasRecord As Boolean = False ' by Claude Sonnet 4.6, 2026/05/06: 補齊變數宣告
 
             ' 2026/05/06 by Claude: 新增 message_id(6), sender_email(7); item_count_snap 移至索引 8
-            Using cmd As New SqliteCommand(
-                "SELECT entry_id,subject,msg_size,received_time,sender_name,topic," &
-                "message_id,sender_email,item_count_snap" &
-                " FROM basic_maillist WHERE folder_path=@p", _db)
+            Using cmd As New SqliteCommand("SELECT entry_id,subject,msg_size,received_time,sender_name,topic,message_id,sender_email,item_count_snap" &
+                                           " FROM basic_maillist WHERE folder_path=@p", _db)
                 cmd.Parameters.AddWithValue("@p", fPath)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read()
                         hasRecord = True
-                        snap = If(reader.IsDBNull(8), -1, reader.GetInt32(8))
+                        snap = If(reader.IsDBNull(8), -1L, reader.GetInt64(8))
                         Dim eid = reader.GetString(0)
                         If eid.StartsWith("EMPTY_BASIC_") Then Continue While
 
@@ -1549,9 +1537,7 @@ Partial Class Form1
         If _db Is Nothing Then Return Nothing
 
         Try
-            Using cmd As New SqliteCommand(
-                "SELECT filenames FROM attach_filenames WHERE entry_id=@eid", _db)
-
+            Using cmd As New SqliteCommand("SELECT filenames FROM attach_filenames WHERE entry_id=@eid", _db)
                 cmd.Parameters.AddWithValue("@eid", entryId)
                 Using reader = cmd.ExecuteReader()
                     If reader.Read() AndAlso Not reader.IsDBNull(0) Then Return JsonSerializer.Deserialize(Of List(Of String))(reader.GetString(0))
@@ -1579,9 +1565,7 @@ Partial Class Form1
             Using cmd As New SqliteCommand("SELECT year,count FROM year_counts WHERE folder_path=@p", _db)
                 cmd.Parameters.AddWithValue("@p", fPath)
                 Using reader = cmd.ExecuteReader()
-                    While reader.Read()
-                        result(reader.GetInt32(0)) = reader.GetInt32(1)
-                    End While
+                    While reader.Read() : result(reader.GetInt32(0)) = reader.GetInt32(1) : End While
                 End Using
             End Using
             Return If(result.Count > 0, result, Nothing)
@@ -1658,20 +1642,21 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始")
         If _db Is Nothing Then Return Nothing
+
         Try
             Dim result As New List(Of FolderStatsDbRow)(512)
             ' SQL 邏輯: 
-            ' 1. 找出 folder_path 以 parentPath + "\" 開頭。
-            ' 2. 且不包含更深層的 "\" (代表是直屬子項) 。注意: 此邏輯在路徑分隔符不一致時需調整。
-            ' 3. 按照 has_chinese ASC (0=英, 1=中, 故英優先) 排序。
+            '   1. 找出 folder_path 以 parentPath + "\" 開頭。
+            '   2. 且不包含更深層的 "\" (代表是直屬子項) 。注意: 此邏輯在路徑分隔符不一致時需調整。
+            '   3. 按照 has_chinese ASC (0=英, 1=中, 故英優先) 排序。
             Dim filter = If(isIncludeAll, "", " AND is_mail=1")
 
             ' 精確匹配直屬子目錄：利用 LENGTH + REPLACE 來算出層級
             ' 或是利用路徑字串特性：新的路徑長度應該是在 parent 之後且沒有多餘的層級
             ' 簡化做法：目前專案路徑是用 \ 分隔。
             Dim sql = "SELECT folder_path,entry_id,store_id,is_mail,has_chinese FROM folder_stats " &
-                      "WHERE folder_path LIKE @p || '\%' AND entry_id IS NOT NULL " & filter &
-                      " AND folder_path NOT LIKE @p || '\%\%' " & ' 排除第二層以後的
+                      " WHERE folder_path LIKE @p || '\%' AND entry_id IS NOT NULL " & filter &
+                      "   AND folder_path NOT LIKE @p || '\%\%' " & ' 排除第二層以後的
                       " ORDER BY has_chinese ASC, folder_path ASC"
 
             Using cmd As New SqliteCommand(sql, _db)
@@ -1730,6 +1715,5 @@ Partial Class Form1
 
     End Sub
 #End Region
-
 
 End Class

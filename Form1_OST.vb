@@ -335,7 +335,7 @@ Partial Class Form1
                 ' 欄位順序: 主旨, 郵件大小(Bytes), 收到日期(yyyy/MM/dd), 寄件者, EntryID
                 Dim lvi As New ListViewItem(mail.Subject)
                 lvi.SubItems.Add(mail.Size.ToString("N0"))
-                lvi.SubItems.Add(If(mail.ReceivedTime > DateTime.MinValue, mail.ReceivedTime.ToString("yyyy/MM/dd"), ""))
+                lvi.SubItems.Add(If(mail.RcvTime > DateTime.MinValue, mail.RcvTime.ToString("yyyy/MM/dd"), ""))
                 lvi.SubItems.Add(mail.SenderName)
                 lvi.SubItems.Add(mail.EntryID)
 
@@ -599,7 +599,8 @@ Partial Class Form1
                         LoadPstToTree(targetPstPath, SimTreePST)
 
                         ' 重新整理後，自動尋找並選回剛才的資料夾節點
-                        Dim foundNode = FindNodeByFolderPath(SimTreePST.Nodes, targetFolderPath)
+                        ' by Gemini 3.5 Flash, 2026/05/21: 改用 SimTreePST.GetNodeIn 高效尋路引擎，取代舊有的暴力遞迴 FindNodeByPath
+                        Dim foundNode = SimTreePST.GetNode(targetFolderPath, searchOnlyExpanded:=False)
                         If foundNode IsNot Nothing Then
                             SimTreePST.SelectedNode = foundNode
                             foundNode.EnsureVisible()
@@ -686,7 +687,6 @@ Partial Class Form1
         lv.Sort()
     End Sub
 #End Region
-
 #Region "  ├ Layer2 PST/OST 解析讀取載入"
     Private Async Sub LoadOstToTree(filePath As String, tv As SimTree)
         ' ---------------------------------------------------------------
@@ -1271,7 +1271,6 @@ Partial Class Form1
         End Try
     End Sub
 #End Region
-
 #Region "  └ Layer3 OST 郵件解析核心"
     Private Function ResetOstPassword(filePath As String) As Boolean
         ''' <summary>
@@ -1503,8 +1502,8 @@ Partial Class Form1
                         dateX = DirectCast(itemX.Tag, OstMailRow).ReceivedTime
                         dateY = DirectCast(itemY.Tag, OstMailRow).ReceivedTime
                     ElseIf TypeOf itemX.Tag Is MailItemInfo Then
-                        dateX = DirectCast(itemX.Tag, MailItemInfo).ReceivedTime
-                        dateY = DirectCast(itemY.Tag, MailItemInfo).ReceivedTime
+                        dateX = DirectCast(itemX.Tag, MailItemInfo).RcvTime
+                        dateY = DirectCast(itemY.Tag, MailItemInfo).RcvTime
                     Else
                         DateTime.TryParse(itemX.SubItems(2).Text, dateX)
                         DateTime.TryParse(itemY.SubItems(2).Text, dateY)

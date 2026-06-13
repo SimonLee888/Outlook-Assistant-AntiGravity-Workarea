@@ -1,0 +1,5 @@
+- `[x]` 實作 ETA 計算邏輯重構
+  - `[x]` 新增 `CalculateSpeedAndETA` 函數至 `Form1_MainTab345.vb`
+  - `[x]` 替換 `Form1_MainTab345.vb` 的 3 處舊寫法
+  - `[x]` 替換 `Form1_Outlook.vb` 的 2 處舊寫法
+  - `[x]` 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼

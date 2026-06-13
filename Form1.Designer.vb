@@ -77,16 +77,23 @@ Partial Class Form1
         Label1 = New Label()
         TabPage4 = New TabPage()
         SplitContainer4 = New SplitContainer()
+        Lv4Topic = New ListView()
+        ColumnHeader41 = New ColumnHeader()
+        ColumnHeader42 = New ColumnHeader()
         SimTree4 = New SimTree()
-        ListView4 = New ListView()
+        Listview4 = New ListView()
         ColumnHeader9 = New ColumnHeader()
         ColumnHeader10 = New ColumnHeader()
         ButtonDeleteMail = New Button()
         Button4 = New Button()
         TabPage5 = New TabPage()
         SplitContainer5 = New SplitContainer()
+        SimTree5 = New SimTree()
+        ListView5 = New ListView()
+        ColumnHeader1 = New ColumnHeader()
+        ColumnHeader2 = New ColumnHeader()
         TabPage6 = New TabPage()
-        txtDatabaseStats = New TextBox()
+        ListView6 = New ListView()
         SettingGroup = New GroupBox()
         SaveCache = New Button()
         RenewAttachFilename = New CheckBox()
@@ -110,10 +117,7 @@ Partial Class Form1
         LvOST = New ListView()
         SimTreePST = New SimTree()
         SimTreeOST = New SimTree()
-        SimTree5 = New SimTree()
-        ListView5 = New ListView()
-        ColumnHeader1 = New ColumnHeader()
-        ColumnHeader2 = New ColumnHeader()
+        CheckSubFolder5 = New CheckBox()
         Button5 = New Button()
         Label2 = New Label()
         ToolStripStatusLabel1 = New ToolStripStatusLabel()
@@ -153,6 +157,8 @@ Partial Class Form1
         SplitContainer4.SuspendLayout()
         TabPage5.SuspendLayout()
         CType(SplitContainer5, ComponentModel.ISupportInitialize).BeginInit()
+        SplitContainer5.Panel1.SuspendLayout()
+        SplitContainer5.Panel2.SuspendLayout()
         SplitContainer5.SuspendLayout()
         TabPage6.SuspendLayout()
         SettingGroup.SuspendLayout()
@@ -214,22 +220,25 @@ Partial Class Form1
         ' 
         ' SimTree1
         ' 
+        SimTree1.Dock = DockStyle.Fill
+        SimTree1.DrawMode = TreeViewDrawMode.OwnerDrawText
+        SimTree1.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree1.Location = New Point(0, 0)
         SimTree1.Name = "SimTree1"
-        SimTree1.Size = New Size(151, 121)
+        SimTree1.Size = New Size(317, 1270)
         SimTree1.TabIndex = 3
         ' 
         ' ListView1
         ' 
-        ListView1.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         ListView1.Columns.AddRange(New ColumnHeader() {ColumnHeader11, ColumnHeader12, ColumnHeader13, ColumnHeader14, ColumnHeader15})
+        ListView1.Dock = DockStyle.Fill
         ListView1.Font = New Font("Microsoft JhengHei UI", 10F)
         ListView1.FullRowSelect = True
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(539, 1244)
-        ListView1.TabIndex = 3
+        ListView1.Size = New Size(724, 1270)
+        ListView1.TabIndex = 4
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
         ' 
@@ -298,9 +307,12 @@ Partial Class Form1
         ' 
         ' SimTree2
         ' 
+        SimTree2.Dock = DockStyle.Fill
+        SimTree2.DrawMode = TreeViewDrawMode.OwnerDrawText
+        SimTree2.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree2.Location = New Point(0, 0)
         SimTree2.Name = "SimTree2"
-        SimTree2.Size = New Size(151, 121)
+        SimTree2.Size = New Size(317, 1270)
         SimTree2.TabIndex = 1
         ' 
         ' CheckSubFolder2
@@ -325,7 +337,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(539, 395)
+        ListView2.Size = New Size(715, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -360,7 +372,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(508, 857)
+        Chart2.Size = New Size(715, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -403,9 +415,12 @@ Partial Class Form1
         ' 
         ' SimTree3
         ' 
+        SimTree3.Dock = DockStyle.Fill
+        SimTree3.DrawMode = TreeViewDrawMode.OwnerDrawText
+        SimTree3.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree3.Location = New Point(0, 0)
         SimTree3.Name = "SimTree3"
-        SimTree3.Size = New Size(151, 121)
+        SimTree3.Size = New Size(317, 1270)
         SimTree3.TabIndex = 32
         ' 
         ' CheckSubFolder3
@@ -413,7 +428,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(504, 77)
+        CheckSubFolder3.Location = New Point(584, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -427,7 +442,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(510, 10)
+        Button3.Location = New Point(590, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -510,8 +525,8 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(539, 1133)
-        ListView3.TabIndex = 8
+        ListView3.Size = New Size(715, 1133)
+        ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
         ' 
@@ -698,11 +713,12 @@ Partial Class Form1
         ' 
         ' SplitContainer4.Panel1
         ' 
+        SplitContainer4.Panel1.Controls.Add(Lv4Topic)
         SplitContainer4.Panel1.Controls.Add(SimTree4)
         ' 
         ' SplitContainer4.Panel2
         ' 
-        SplitContainer4.Panel2.Controls.Add(ListView4)
+        SplitContainer4.Panel2.Controls.Add(Listview4)
         SplitContainer4.Panel2.Controls.Add(ButtonDeleteMail)
         SplitContainer4.Panel2.Controls.Add(Button4)
         SplitContainer4.Size = New Size(1046, 1270)
@@ -710,26 +726,55 @@ Partial Class Form1
         SplitContainer4.SplitterWidth = 5
         SplitContainer4.TabIndex = 11
         ' 
+        ' Lv4Topic
+        ' 
+        Lv4Topic.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        Lv4Topic.Columns.AddRange(New ColumnHeader() {ColumnHeader41, ColumnHeader42})
+        Lv4Topic.Font = New Font("Microsoft JhengHei UI", 10F)
+        Lv4Topic.FullRowSelect = True
+        Lv4Topic.Location = New Point(0, 250)
+        Lv4Topic.Margin = New Padding(4)
+        Lv4Topic.MultiSelect = False
+        Lv4Topic.Name = "Lv4Topic"
+        Lv4Topic.Size = New Size(317, 1000)
+        Lv4Topic.TabIndex = 14
+        Lv4Topic.UseCompatibleStateImageBehavior = False
+        Lv4Topic.View = View.Details
+        ' 
+        ' ColumnHeader41
+        ' 
+        ColumnHeader41.Text = "郵件主旨"
+        ColumnHeader41.Width = 220
+        ' 
+        ' ColumnHeader42
+        ' 
+        ColumnHeader42.Text = "數量"
+        ColumnHeader42.TextAlign = HorizontalAlignment.Right
+        ColumnHeader42.Width = 80
+        ' 
         ' SimTree4
         ' 
+        SimTree4.Dock = DockStyle.Fill
+        SimTree4.DrawMode = TreeViewDrawMode.OwnerDrawText
+        SimTree4.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree4.Location = New Point(0, 0)
         SimTree4.Name = "SimTree4"
-        SimTree4.Size = New Size(151, 121)
+        SimTree4.Size = New Size(317, 1270)
         SimTree4.TabIndex = 12
         ' 
-        ' ListView4
+        ' Listview4
         ' 
-        ListView4.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        ListView4.Columns.AddRange(New ColumnHeader() {ColumnHeader9, ColumnHeader10})
-        ListView4.Font = New Font("Microsoft JhengHei UI", 10F)
-        ListView4.FullRowSelect = True
-        ListView4.Location = New Point(0, 111)
-        ListView4.Margin = New Padding(4)
-        ListView4.Name = "ListView4"
-        ListView4.Size = New Size(539, 1133)
-        ListView4.TabIndex = 4
-        ListView4.UseCompatibleStateImageBehavior = False
-        ListView4.View = View.Details
+        Listview4.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        Listview4.Columns.AddRange(New ColumnHeader() {ColumnHeader9, ColumnHeader10})
+        Listview4.Font = New Font("Microsoft JhengHei UI", 10F)
+        Listview4.FullRowSelect = True
+        Listview4.Location = New Point(0, 111)
+        Listview4.Margin = New Padding(4)
+        Listview4.Name = "Listview4"
+        Listview4.Size = New Size(715, 1133)
+        Listview4.TabIndex = 13
+        Listview4.UseCompatibleStateImageBehavior = False
+        Listview4.View = View.Details
         ' 
         ' ColumnHeader9
         ' 
@@ -747,7 +792,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(339, 15)
+        ButtonDeleteMail.Location = New Point(603, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -759,7 +804,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(443, 15)
+        Button4.Location = New Point(499, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -785,14 +830,56 @@ Partial Class Form1
         SplitContainer5.Location = New Point(4, 4)
         SplitContainer5.Margin = New Padding(4)
         SplitContainer5.Name = "SplitContainer5"
+        ' 
+        ' SplitContainer5.Panel1
+        ' 
+        SplitContainer5.Panel1.Controls.Add(SimTree5)
+        ' 
+        ' SplitContainer5.Panel2
+        ' 
+        SplitContainer5.Panel2.Controls.Add(ListView5)
         SplitContainer5.Size = New Size(1046, 1270)
         SplitContainer5.SplitterDistance = 317
         SplitContainer5.SplitterWidth = 5
         SplitContainer5.TabIndex = 4
         ' 
+        ' SimTree5
+        ' 
+        SimTree5.Dock = DockStyle.Fill
+        SimTree5.DrawMode = TreeViewDrawMode.OwnerDrawText
+        SimTree5.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
+        SimTree5.Location = New Point(0, 0)
+        SimTree5.Name = "SimTree5"
+        SimTree5.Size = New Size(317, 1270)
+        SimTree5.TabIndex = 8
+        ' 
+        ' ListView5
+        ' 
+        ListView5.Columns.AddRange(New ColumnHeader() {ColumnHeader1, ColumnHeader2})
+        ListView5.Font = New Font("Microsoft JhengHei UI", 10F)
+        ListView5.FullRowSelect = True
+        ListView5.Location = New Point(0, 106)
+        ListView5.Margin = New Padding(4)
+        ListView5.Name = "ListView5"
+        ListView5.Size = New Size(724, 1164)
+        ListView5.TabIndex = 9
+        ListView5.UseCompatibleStateImageBehavior = False
+        ListView5.View = View.Details
+        ' 
+        ' ColumnHeader1
+        ' 
+        ColumnHeader1.Text = "郵件主旨"
+        ColumnHeader1.Width = 100
+        ' 
+        ' ColumnHeader2
+        ' 
+        ColumnHeader2.Text = "重複數量"
+        ColumnHeader2.TextAlign = HorizontalAlignment.Right
+        ColumnHeader2.Width = 100
+        ' 
         ' TabPage6
         ' 
-        TabPage6.Controls.Add(txtDatabaseStats)
+        TabPage6.Controls.Add(ListView6)
         TabPage6.Controls.Add(SettingGroup)
         TabPage6.Controls.Add(DebugGroup)
         TabPage6.Location = New Point(4, 37)
@@ -804,15 +891,23 @@ Partial Class Form1
         TabPage6.Text = "Setting"
         TabPage6.UseVisualStyleBackColor = True
         ' 
-        ' txtDatabaseStats
+        ' ListView6
         ' 
-        txtDatabaseStats.Font = New Font("Noto Sans TC", 10F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        txtDatabaseStats.Location = New Point(514, 28)
-        txtDatabaseStats.Multiline = True
-        txtDatabaseStats.Name = "txtDatabaseStats"
-        txtDatabaseStats.Size = New Size(380, 560)
-        txtDatabaseStats.TabIndex = 15
-        txtDatabaseStats.Text = "Database Stats"
+        ListView6.Activation = ItemActivation.OneClick
+        ListView6.BorderStyle = BorderStyle.None
+        ListView6.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        ListView6.ForeColor = Color.DimGray
+        ListView6.FullRowSelect = True
+        ListView6.HeaderStyle = ColumnHeaderStyle.None
+        ListView6.Location = New Point(514, 28)
+        ListView6.Name = "ListView6"
+        ListView6.Scrollable = False
+        ListView6.ShowGroups = False
+        ListView6.Size = New Size(360, 679)
+        ListView6.TabIndex = 17
+        ListView6.TabStop = False
+        ListView6.UseCompatibleStateImageBehavior = False
+        ListView6.View = View.Details
         ' 
         ' SettingGroup
         ' 
@@ -944,7 +1039,7 @@ Partial Class Form1
         ' 
         LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         LoadCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        LoadCache.Location = New Point(175, 37)
+        LoadCache.Location = New Point(173, 34)
         LoadCache.Name = "LoadCache"
         LoadCache.Size = New Size(129, 63)
         LoadCache.TabIndex = 12
@@ -1092,7 +1187,9 @@ Partial Class Form1
         ' 
         ' SimTreePST
         ' 
+        SimTreePST.DrawMode = TreeViewDrawMode.OwnerDrawText
         SimTreePST.Font = New Font("Microsoft JhengHei UI", 10F)
+        SimTreePST.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTreePST.Location = New Point(4, 629)
         SimTreePST.Name = "SimTreePST"
         SimTreePST.Size = New Size(320, 619)
@@ -1100,49 +1197,24 @@ Partial Class Form1
         ' 
         ' SimTreeOST
         ' 
+        SimTreeOST.DrawMode = TreeViewDrawMode.OwnerDrawText
         SimTreeOST.Font = New Font("Microsoft JhengHei UI", 10F)
+        SimTreeOST.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTreeOST.Location = New Point(4, 4)
         SimTreeOST.Name = "SimTreeOST"
         SimTreeOST.Size = New Size(320, 619)
         SimTreeOST.TabIndex = 0
         ' 
-        ' SimTree5
+        ' CheckSubFolder5
         ' 
-        SimTree5.Dock = DockStyle.Fill
-        SimTree5.LineColor = Color.Empty
-        SimTree5.Location = New Point(0, 0)
-        SimTree5.Name = "SimTree5"
-        SimTree5.Size = New Size(151, 121)
-        SimTree5.TabIndex = 8
-        ' 
-        ' ListView5
-        ' 
-        ListView5.Columns.AddRange(New ColumnHeader() {ColumnHeader1, ColumnHeader2})
-        ListView5.Dock = DockStyle.Fill
-        ListView5.Font = New Font("Microsoft JhengHei UI", 10F)
-        ListView5.FullRowSelect = True
-        ListView5.Location = New Point(0, 0)
-        ListView5.Margin = New Padding(4)
-        ListView5.Name = "ListView5"
-        ListView5.Size = New Size(724, 1270)
-        ListView5.TabIndex = 5
-        ListView5.UseCompatibleStateImageBehavior = False
-        ListView5.View = View.Details
-        ' 
-        ' ColumnHeader1
-        ' 
-        ColumnHeader1.Text = "郵件主旨"
-        ColumnHeader1.Width = 100
-        ' 
-        ' ColumnHeader2
-        ' 
-        ColumnHeader2.Text = "重複數量"
-        ColumnHeader2.TextAlign = HorizontalAlignment.Right
-        ColumnHeader2.Width = 100
+        CheckSubFolder5.Location = New Point(0, 0)
+        CheckSubFolder5.Name = "CheckSubFolder5"
+        CheckSubFolder5.Size = New Size(104, 24)
+        CheckSubFolder5.TabIndex = 0
         ' 
         ' Button5
         ' 
-        Button5.Location = New Point(624, 4)
+        Button5.Location = New Point(0, 4)
         Button5.Margin = New Padding(4)
         Button5.Name = "Button5"
         Button5.Size = New Size(96, 29)
@@ -1183,7 +1255,7 @@ Partial Class Form1
         ProgressBar2.DisplayStyle = ToolStripItemDisplayStyle.Text
         ProgressBar2.ForeColor = Color.DimGray
         ProgressBar2.Name = "ProgressBar2"
-        ProgressBar2.Size = New Size(520, 24)
+        ProgressBar2.Size = New Size(580, 24)
         ProgressBar2.Text = "ProgressBar2"
         ProgressBar2.TextAlign = ContentAlignment.MiddleLeft
         ' 
@@ -1256,10 +1328,11 @@ Partial Class Form1
         CType(SplitContainer4, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer4.ResumeLayout(False)
         TabPage5.ResumeLayout(False)
+        SplitContainer5.Panel1.ResumeLayout(False)
+        SplitContainer5.Panel2.ResumeLayout(False)
         CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer5.ResumeLayout(False)
         TabPage6.ResumeLayout(False)
-        TabPage6.PerformLayout()
         SettingGroup.ResumeLayout(False)
         SettingGroup.PerformLayout()
         DebugGroup.ResumeLayout(False)
@@ -1332,7 +1405,7 @@ Partial Class Form1
 
     Friend WithEvents TabPage4 As TabPage
     Friend WithEvents SimTree4 As SimTree
-    Friend WithEvents ListView4 As ListView
+    Friend WithEvents Listview4 As ListView
     Friend WithEvents ColumnHeader9 As ColumnHeader
     Friend WithEvents ColumnHeader10 As ColumnHeader
     Friend WithEvents Button4 As Button
@@ -1344,6 +1417,7 @@ Partial Class Form1
     Friend WithEvents Button5 As Button
     Friend WithEvents Label1 As Label
     Friend WithEvents ColumnHeader15 As ColumnHeader
+	Friend WithEvents CheckSubFolder5 As CheckBox
 
     Friend WithEvents TabPage6 As TabPage
     Friend WithEvents checkShowAllFolders As CheckBox
@@ -1357,7 +1431,6 @@ Partial Class Form1
     Friend WithEvents OKiLikeNoisy As CheckBox
     Friend WithEvents SettingGroup As GroupBox
     Friend WithEvents RenewCache As Button
-    Friend WithEvents txtDatabaseStats As TextBox
     Friend WithEvents RDO_Parallel2 As RadioButton
     Friend WithEvents RDO_Parallel1 As RadioButton
     Friend WithEvents RenewIncludeSize As CheckBox
@@ -1378,5 +1451,9 @@ Partial Class Form1
     Friend WithEvents ButtonDeleteMail As Button
     Friend WithEvents ColumnHeader1 As ColumnHeader
     Friend WithEvents ColumnHeader2 As ColumnHeader
+    Friend WithEvents ListView6 As ListView
+    Friend WithEvents Lv4Topic As ListView
+    Friend WithEvents ColumnHeader41 As ColumnHeader
+    Friend WithEvents ColumnHeader42 As ColumnHeader
 
 End Class

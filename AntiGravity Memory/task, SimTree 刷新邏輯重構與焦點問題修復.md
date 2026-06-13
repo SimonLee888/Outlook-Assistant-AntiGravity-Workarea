@@ -1,0 +1,10 @@
+- [x] 建立或更新 `task.md` 追蹤進度
+- [x] 修改 `Form1_MainTab12.vb`:
+    - [x] [NEW] `GetDedupedNodes`: 抽取父子去重邏輯
+    - [x] [NEW] `ComputeTab1StatsAsync`: 抽取統計邏輯 (支援 forceRefresh)
+    - [x] [NEW] `RenderTab1ListView`: 抽取渲染邏輯
+    - [x] 更新 `SimTree1_AfterSelect`: 改用新函式並修復焦點問題
+    - [x] 更新 `ForceRefreshSimTree`: Await 統計完成後再設定焦點
+    - [x] 更新 `ForceRefreshLv1Async`: 共用去重與統計流程
+    - [x] 更新 `EnterSelectedFolder`: 解決導覽後的焦點競爭
+- [x] 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼 (by Gemini 3 Flash, 2026/05/13)

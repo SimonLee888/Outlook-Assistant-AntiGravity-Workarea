@@ -31,7 +31,7 @@ Partial Class Form1
         If m.Msg = WM_SIZE Then
             Dim sizeType As Integer = m.WParam.ToInt32()
             If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
-                For Each lv In GetAllListViews(Me) : lv.Invalidate() : Next
+                For Each lv In GetAllLvList(Me) : lv.Invalidate() : Next
             End If
         End If
     End Sub
@@ -42,6 +42,11 @@ Partial Class Form1
     Private Sub _dbg(Optional msg As String = "", Optional detail As String = "")
         ' 2026/03/31 by Gemini: 改用 DebugForm 統一提供的 GetCallerName，此版本支援解析 Async 非同步方法名稱
         Dim realCaller As String = DebugForm.GetCallerName()
+
+        ' 2026/06/10 by Simon/Claude: GetCallerName() 回傳 "Form1.MethodName"，
+        ' 因所有呼叫端都在 Form1，"Form1." 前綴是冗餘資訊，直接 strip
+        If realCaller.StartsWith("Form1.") Then realCaller = realCaller.Substring(6)
+
         If _isDebugMode Then DebugForm.AddMessage3(msg, detail, realCaller)
     End Sub
 
@@ -100,7 +105,7 @@ Partial Class Form1
         _isDebugMode = False 
 #End If
         _dbg("開始") ' debugForm 開始計時
-        Dim stopwatch As New Stopwatch() : stopwatch.Start() : Cursor = Cursors.AppStarting
+        Dim stopwatch As Stopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
 
         InitLookAndFeel()       ' 設計程式外觀
         InitProgressBarEvents() ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
@@ -149,6 +154,7 @@ Partial Class Form1
                 e.Handled = True
                 e.SuppressKeyPress = True ' ✅ 防止事件繼續傳遞觸發 Lv2_KeyPress 等回上一頁邏輯
             End If
+
             ' 非運算中: 完全不設 _cancelRequested，不呼叫 _cts.Cancel()，直接放行。
             ' 讓 ListView/TreeView 等子控制項的原生 KeyDown/KeyPress 自己處理 ESC (例如 ListView2 返回年份視圖)。
             ' 2026/04/11 by Claude: 修正舊版非運算中按 ESC 仍呼叫 _cts.Cancel() 的 bug，會汙染 token，導致下一個操作取得的 cToken 已經是 cancelled 狀態。
@@ -202,7 +208,7 @@ Partial Class Form1
         ' 只有當使用者點開 "+" 號展開節點時, 才真正去讀該項目的子資料夾, 不要一開始就花時間全讀
         ' 2026/04/13 by Simon/Claude: SimTree1 與 TreeView1 同步載入 PST 目錄樹
         LoadStoreToTreeView(_pstStoreList, SimTree1)
-        ExpandTvToDefaultInbox(SimTree1)
+        GotoDefaultInbox(SimTree1)
         Await Task.Yield()
 
         ' Tab1 順利載入後，才開始載入 Tab2~Tab5 的 UI 與資料，避免一開始就全部載入造成卡頓
@@ -213,23 +219,23 @@ Partial Class Form1
         Dim delaySame As Integer = 100  ' 每個 Tab 之間的預載延遲，單位毫秒 (ms)，可以根據需要調整
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(2) Then
             InitTab2UI() : _isTabInitialized(2) = True
-            LoadStoreToTreeView(_pstStoreList, SimTree2) : ExpandTvToDefaultInbox(SimTree2)
+            LoadStoreToTreeView(_pstStoreList, SimTree2) : GotoDefaultInbox(SimTree2)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(3) Then
             InitTab3UI() : _isTabInitialized(3) = True
-            LoadStoreToTreeView(_pstStoreList, SimTree3) : ExpandTvToDefaultInbox(SimTree3)
+            LoadStoreToTreeView(_pstStoreList, SimTree3) : GotoDefaultInbox(SimTree3)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(4) Then
             InitTab4UI() : _isTabInitialized(4) = True
-            LoadStoreToTreeView(_pstStoreList, SimTree4) : ExpandTvToDefaultInbox(SimTree4)
+            LoadStoreToTreeView(_pstStoreList, SimTree4) : GotoDefaultInbox(SimTree4)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(5) Then
             InitTab5UI() : _isTabInitialized(5) = True
             ' 2026/05/02 by Claude: Tab5 改用 SimTree5，對齊 Tab1~4
-            LoadStoreToTreeView(_pstStoreList, SimTree5) : ExpandTvToDefaultInbox(SimTree5)
+            LoadStoreToTreeView(_pstStoreList, SimTree5) : GotoDefaultInbox(SimTree5)
         End If
         _dbg("結束", "全部 Tab 背景載入完畢") ' by Gemini, 2026/04/11: UI 頂層 Level 0
 
@@ -291,7 +297,7 @@ Partial Class Form1
             Dim infoReader As System.IO.FileInfo = My.Computer.FileSystem.GetFileInfo(strApp)
             Dim modeStr As String = If(_isDebugMode, "(Debug)", "(Release)")
             Me.Text = $"Outlook Assistant - by Simon Lee Studio (build {infoReader.LastWriteTime:yyyy/MM/dd HH:mm:ss}) {modeStr}"
-            '' todo: 如何設置版本號自動遞增 'myApp.MinorRevision += 1
+            ' todo: 如何設置版本號自動遞增 'myApp.MinorRevision += 1
         End If
 
         ' ── 視窗位置與背景色 ──
@@ -302,13 +308,12 @@ Partial Class Form1
         Me.BackColor = ThemeColors.Gray95
 
         ' ── TabControl 字型與分頁名稱 ──
-        Dim strTabName As String() = {"資料夾統計", "依日期統計", "尋找附件", "尋找系列郵件", "尋找重覆郵件", "Setting", "OST 解析"}
+        Dim strTabName As String() = {"1.資料夾統計", "2.依日期統計", "3.尋找附件", "4.尋找系列郵件", "5.尋找重覆郵件", "6.Setting", "7.OST 解析"}
         For i As Integer = 0 To strTabName.Length - 1
             TabControl1.TabPages(i).Text = strTabName(i)
         Next
         TabControl1.Font = New Font(_fontDefault, _fontBold)
         TabControl1.Padding = New Point(12, 8)
-        txtDatabaseStats.Font = New Font(_fontDefault, _fontRegular)
 
         ' ── 容器化佈局與動態控制項掛載 ──
         ' by Gemini, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
@@ -322,7 +327,7 @@ Partial Class Form1
         _dbg("結束")
 
     End Sub
-    Private Sub InitTreeView(tv As TreeView)
+    Private Sub InitTreeView(tv As SimTree)
         ' ---------------------------------------------------------------------------------------------------------
         ' ── 共用 Treeview 外觀設定 (by Gemini, 2026/04/01: 重構成接受單一參數，避免重複造輪子) ──
         ' ---------------------------------------------------------------------------------------------------------
@@ -330,11 +335,14 @@ Partial Class Form1
         tv.BackColor = Color.White
         tv.ForeColor = SystemColors.InactiveCaptionText
         tv.Dock = DockStyle.Fill
-        tv.Indent = 25          ' 樹狀目錄縮排距離
+        tv.Indent = 25                  ' 樹狀目錄縮排距離
+        tv.EnableHoverHighlight = True  ' 啟用滑鼠懸停高亮
+        tv.HoverColor = Form1.ThemeColors.MercuryGray
 
         ' 雙重緩衝區優化
         SendMessage(tv.Handle, TVM_SETEXTENDEDSTYLE, New IntPtr(TVS_EX_DOUBLEBUFFER), New IntPtr(TVS_EX_DOUBLEBUFFER))
 
+        AddHandler tv.GotFocus, AddressOf HandleTvGotFocus  ' 2026/05/30, added by Simon/Claude
         AddHandler tv.BeforeExpand, AddressOf LoadSubFolderToTreeView
         AddHandler tv.MouseMove, AddressOf HandleTvMouseHover
         AddHandler tv.MouseLeave, AddressOf HandleTvMouseHover
@@ -361,14 +369,14 @@ Partial Class Form1
         GetType(ListView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance Or System.Reflection.BindingFlags.NonPublic).SetValue(lv, True, Nothing)
 
         ' ✅ 2026/04/21 by Gemini 3.0 flash: 統一掛載共通互動邏輯 (鍵盤開啟、雙擊開啟、路徑同步)
-        ' 📢 僅針對 Tab3 (ListView3) 與 Tab4 (ListView4) 開啟，其餘 Tab 保持原有獨立邏輯
+        ' 📢 僅針對 Tab3 (ListView3) 與 Tab4 (Listview4) 開啟，其餘 Tab 保持原有獨立邏輯
         ' 📢 2026/05/03 by Gemini 3.1 Pro: 加入 ListView5 共享共通邏輯
-        If lv.Name = "ListView3" OrElse lv.Name = "ListView4" OrElse lv.Name = "ListView5" Then
+        If lv.Name = "ListView3" OrElse lv.Name = "Listview4" OrElse lv.Name = "ListView5" Then
             AddHandler lv.DrawColumnHeader, Sub(s, ev) ev.DrawDefault = True    ' 統一表頭繪製, 2026/4/26 by Gemini
-            ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4Lv5_KeyPress        ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
-            AddHandler lv.KeyDown, AddressOf HandleLv3Lv4Lv5_KeyDown            ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
             AddHandler lv.DrawItem, AddressOf HandleLv3Lv4Lv5_DrawItem          ' 統一項目背景繪製, 2026/05/05 by Gemini 3 Flash
             AddHandler lv.DrawSubItem, AddressOf HandleLv3Lv4Lv5_DrawSubItem    ' 統一 SubItem 繪製 (處理 Hover 變色與對齊), 2026/4/26 by Gemini
+            ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4Lv5_KeyPress        ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
+            AddHandler lv.KeyDown, AddressOf HandleLv3Lv4Lv5_KeyDown            ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
             AddHandler lv.MouseClick, AddressOf HandleLv3Lv4Lv5_MouseClick      ' 整合：單擊左鍵複製與點擊顯示路徑
             AddHandler lv.MouseDoubleClick, AddressOf HandleLv3Lv4Lv5_DoubleClick
             AddHandler lv.SelectedIndexChanged, AddressOf ShowLv3Lv4Lv5PathToProgressBar
@@ -376,18 +384,17 @@ Partial Class Form1
 
         AddHandler lv.GotFocus, AddressOf HandleLvGotFocus
         AddHandler lv.Resize, AddressOf HandleLvResize              ' 2026/04/01 by Gemini: 加入共用自動縮放事件
+        ' AddHandler lv.KeyPress, AddressOf HandleListViewKeyPress  ' 2026/04/16 by Gemini 3.1 Pro: 已拆分至各 ListView 獨立處理
         AddHandler lv.MouseMove, AddressOf HandleLvMouseHover
         AddHandler lv.MouseLeave, AddressOf HandleLvMouseHover
-        ' AddHandler lv.KeyPress, AddressOf HandleListViewKeyPress  ' 2026/04/16 by Gemini 3.1 Pro: 已拆分至各 ListView 獨立處理
 
     End Sub
     Private Sub InitSplitter(scnr As SplitContainer)
         scnr.Panel1MinSize = 0
-
+        scnr.TabStop = False
         AddHandler scnr.MouseMove, Sub(s, ev) DirectCast(s, SplitContainer).Cursor = Cursors.SizeWE
         AddHandler scnr.MouseLeave, Sub(s, ev) DirectCast(s, SplitContainer).Cursor = Cursors.Default
         AddHandler scnr.MouseDown, AddressOf HandleSplitterMouseDown
-
     End Sub
     Private Sub InitProgressBarEvents()
         ' ── ProgressBar 歷史紀錄 (by Gemini, 2026/04/02) ──
@@ -532,7 +539,7 @@ Partial Class Form1
         ' ── Button3 樣式 ──
         Button3.FlatStyle = FlatStyle.System
         Button3.FlatAppearance.BorderColor = ThemeColors.Brand_Blue
-        Button3.FlatAppearance.MouseOverBackColor = ThemeColors.AltoGray
+        Button3.FlatAppearance.MouseOverBackColor = ThemeColors.MercuryGray
         Button3.ForeColor = ThemeColors.Brand_Blue
         Button3.BringToFront()
         CheckSubFolder3.BringToFront()
@@ -606,7 +613,7 @@ Partial Class Form1
 
         InitTreeView(SimTree4)
         SimTree4.HideHorizontalScrollBar = True ' by Gemini 3.0 Flash, 2026/04/21: 隱藏水平捲軸並防止位移
-        InitListView(ListView4)
+        InitListView(Listview4)
         InitSplitter(SplitContainer4)
 
         ' 1. 設定 SimTree4 (左側目錄樹選取器)
@@ -617,6 +624,23 @@ Partial Class Form1
             .Visible = True
             .BringToFront()
         End With
+
+        ' 2026/05/29 by Simon/Claude: Phase 1 — Lv4Topic 與 SimTree4 共用 Panel1，Visible 切換顯示
+        ' 尺寸對齊 SimTree4，Anchor 取代 Dock 避免兩個 Fill 控制項互相衝突
+        Lv4Topic.SetBounds(SimTree4.Left, SimTree4.Top, SimTree4.Width, SimTree4.Height)
+        Lv4Topic.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        Lv4Topic.Visible = False        ' 預設隱藏，資料夾模式優先
+        Lv4Topic.VirtualMode = True     ' 💡 2026/05/30 by Gemini: 新增這行開啟虛擬模式
+
+        ' 雙重緩衝區優化
+        SendMessage(Lv4Topic.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+        ' by Gemini, 2026/04/10: 使用反射開啟隱藏的 DoubleBuffered 屬性，解決虛擬模式下的重繪閃爍問題
+        GetType(ListView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance Or System.Reflection.BindingFlags.NonPublic).SetValue(Lv4Topic, True, Nothing)
+
+        AddHandler Lv4Topic.Resize, AddressOf HandleLvResize
+        AddHandler Lv4Topic.MouseMove, AddressOf HandleLvMouseHover
+        AddHandler Lv4Topic.MouseLeave, AddressOf HandleLvMouseHover
+        SplitContainer4.Panel1.Controls.Add(Lv4Topic)
 
         ' 2. 建立中間/右側的二階分欄 (Nested SplitContainer) 
         ' ✅ 2026/04/20 by Gemini 2.0 Flash: 大手術！恢復為二欄佈局，徹底移除 TreeView4 與嵌套分欄
@@ -654,22 +678,20 @@ Partial Class Form1
         pnlOptions.BringToFront()
 
         ' 列表掛載於 Panel2
-        ListView4.Parent = SplitContainer4.Panel2
-        ListView4.Dock = DockStyle.Fill
-        ListView4.BringToFront()
+        Listview4.Parent = SplitContainer4.Panel2
+        Listview4.Dock = DockStyle.Fill
+        Listview4.BringToFront()
 
         ' 4. 初始化寬度
         ' 設定 SplitterDistance 時必須確保控制項已在畫面上
         SplitContainer4.SplitterDistance = SimTree1.Width
 
-        _isTab4ShowingResults = False ' 初始為資料夾模式
-
         ' 再次強制清空與狀態初始化
-        ListView4.Items.Clear()
-        ListView4.OwnerDraw = True ' by Gemini 3.1 Pro, 2026/04/26: 開啟 OwnerDraw，徹底解決 ListView 有分組時 Hover 修改 BackColor 導致的 O(N) 嚴重卡頓
+        Listview4.Items.Clear()
+        Listview4.OwnerDraw = True ' by Gemini 3.1 Pro, 2026/04/26: 開啟 OwnerDraw，徹底解決 ListView 有分組時 Hover 修改 BackColor 導致的 O(N) 嚴重卡頓
 
-        ' ── ListView4: 系列郵件欄位定義 ──
-        With ListView4
+        ' ── Listview4: 系列郵件欄位定義 ──
+        With Listview4
             .Columns.Clear()
             Dim lv4Names As String() = {"主旨", "郵件大小", "收到日期", "寄件者", "相似", "EntryID"}
             For Each n In lv4Names : .Columns.Add(n, n) : Next
@@ -776,8 +798,11 @@ Partial Class Form1
             .Columns("寄件者").Width = .Width * 0.17
             .Columns("群組").Width = CInt(.Width * 0.08) : .Columns("群組").TextAlign = HorizontalAlignment.Right
             .Columns("相似").Width = CInt(.Width * 0.08) : .Columns("相似").TextAlign = HorizontalAlignment.Center
-            .Columns("EntryID").Width = 0   ' 隱藏，僅供 OpenMailByEntryID 使用
+            .Columns("EntryID").Width = 0 : .Columns("EntryID").TextAlign = HorizontalAlignment.Right ' 隱藏，僅供 OpenMailByEntryID 使用
         End With
+
+        AddHandler ListView5.ColumnClick, AddressOf Lv5_ColumnClick
+
         _dbg("結束")
 
     End Sub
@@ -862,15 +887,15 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  └ 全域輔助函數"
-    ''' <summary>
-    ''' 標準化取消訊號重置流程：中斷舊任務、釋放資源並產生新的 Token
-    ''' 取消時以下三選一:
-    ''' 彈射座椅 --> 開門下車 --> 開門帶行李走
-    '''     Await Task.Yield() : cToken.ThrowIfCancellationRequested() (這個實測幾乎無效!!)
-    '''     Await Task.Delay(1, cToken:=cToken) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
-    '''     If cToken.IsCancellationRequested Then Return New List(Of FolderBfsEntry) 
-    ''' </summary>
     Private Function OkayNowYouHaveToken() As CancellationToken
+        ''' <summary>
+        ''' 標準化取消訊號重置流程：中斷舊任務、釋放資源並產生新的 Token
+        ''' 取消時以下三選一:
+        ''' 彈射座椅 --> 開門下車 --> 開門帶行李走
+        '''     Await Task.Yield() : cToken.ThrowIfCancellationRequested() (這個實測幾乎無效!!)
+        '''     Await Task.Delay(1, cToken:=cToken) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
+        '''     If cToken.IsCancellationRequested Then Return New List(Of FolderBfsEntry) 
+        ''' </summary>
         If _cts IsNot Nothing Then
             Try : _cts.Cancel() : _cts.Dispose() : Catch : End Try
         End If
@@ -916,8 +941,20 @@ Partial Class Form1
         '     不使用 timeBeginPeriod(1)：Windows 10 為全域設定，拉高系統計時器解析度會增加 CPU 喚醒頻率，
         '     在桌機上額外耗電約 13~25W，筆電縮短續航 10~25%，代價不成比例。
         Try
+            'Dim unused = TimeBeginPeriod(1)
+            Await Task.Delay(1, cancellationToken:=cToken)
+        Finally
+            'Dim unused1 = TimeEndPeriod(1)
+        End Try
+    End Function
+    Private Async Function PreciseDelay(baseDelayMs As Integer, Optional cToken As CancellationToken = Nothing) As Task
+        ''' <summary>
+        ''' 精準等待, 確保在 Windows 預設計時器解析度下也能盡可能接近指定的 baseDelayMs (而非誤差約 15.6ms 的 Task.Delay(baseDelayMs))
+        ''' 2026/05/26 by simon
+        ''' </summary>
+        Try
             Dim unused = TimeBeginPeriod(1)
-            Await Task.Delay(1, cToken)
+            Await Task.Delay(1, cancellationToken:=cToken)
         Finally
             Dim unused1 = TimeEndPeriod(1)
         End Try
@@ -955,13 +992,18 @@ Partial Class Form1
             If tabIndex > 5 Then
                 ' 切換到 Setting 或 OST 解析頁時，更新快取統計顯示
                 ' 2026/04/19 by Claude: 利用 tabIndex > 5 的早返回點順帶刷新 txtDatabaseStats
-                If selectedTab.Text = "Setting" Then
-                    RefreshDatabaseStats() ' 現在是 Async Sub，呼叫後會立即返回不阻塞 Tab 切換
+                If selectedTab.Text = "6.Setting" Then
+                    ' ── 步驟 1: 第一次執行時，動態建立並配置 ListView ──
+                    If ListView6.Items.Count = 0 Then
+                        ListView6.BorderStyle = BorderStyle.None
+                        ListView6.BackColor = Color.White
+                        ListView6.Columns.Add("Item", 200)
+                        ListView6.Columns.Add("Value", 120, HorizontalAlignment.Right)
+                        ListView6.BringToFront()
+                    End If
+                    RefreshLv6DbStats() ' 現在是 Async Sub，呼叫後會立即返回不阻塞 Tab 切換
 
-                    ' 保留給 Debug 分頁的特別處理 (如果有)
-                    ' 保留給 Debug 分頁的特別處理 (如果有)
-                    ' 保留給 Debug 分頁的特別處理 (如果有)
-                ElseIf selectedTab.Text = "OST 解析" Then
+                ElseIf selectedTab.Text = "7.OST 解析" Then
 
                     InitTab7UI()   ' by Gemini 3.0 Flash, 2026/04/23: 設置控制項 Anchor 與事件
 
@@ -984,14 +1026,19 @@ Partial Class Form1
             End If
 
             ' ── 步驟 2: 依照不同的頁面載入不同的treeview，並展開到預設的收件匣位置 ──
-            Dim currentTree As TreeView = GetCurrentTv()
+            Dim currentTree As SimTree = GetCurrentTv()
             If currentTree IsNot Nothing Then
                 If currentTree.Nodes.Count = 0 Then
                     LoadStoreToTreeView(_pstStoreList, currentTree)
-                    ExpandTvToDefaultInbox(currentTree)
+                    GotoDefaultInbox(currentTree)
                 End If
                 currentTree.Focus()
             End If
+
+            ' ✅ by Gemini 3.1 Pro, 2026/05/27: 切換分頁時，確保當前 ListView 依最新 ClientSize 進行零開銷的初始欄寬計算
+            Dim currentLv As ListView = GetCurrentLv()
+            If currentLv IsNot Nothing Then CalculateLvColumnSize(currentLv)
+
             _dbg("結束")
         Finally
             _isUserBusy = False
@@ -1026,7 +1073,7 @@ Partial Class Form1
         End If
 
         ' B. 清理所有 TreeView
-        For Each tv In GetAllTreeViews(Me)
+        For Each tv In GetAllTvList(Me)
             ' 強制重置 SimTree 內部選取清單，防止 Issue 2 發生 (重複物件重複統計)
             Dim st = TryCast(tv, SimTree)
             st?.ClearSelectedNodes()
@@ -1037,10 +1084,9 @@ Partial Class Form1
         LoadStoreToTreeView(_pstStoreList, SimTree1)
 
         ' D. 嘗試還原焦點與展開狀態
-        If Not SelectNodeByPath(SimTree1, oldPath, wasExpanded) Then
-            ' 若原路徑已不存在 (過濾) 或搜尋異常，則 Fallback 回收件匣
-            ExpandTvToDefaultInbox(SimTree1)
-        End If
+        '   若原路徑已不存在 (過濾) 或搜尋異常，則 Fallback 回收件匣
+        ' by Gemini 3.5 Flash, 2026/05/21: 改用 SimTree1.SelectNode 高效還原狀態，取代舊有的暴力遞迴 SelectNode
+        If Not SimTree1.SelectNode(oldPath, selectAndFire:=True, expandTarget:=wasExpanded) Then GotoDefaultInbox(SimTree1)
 
         ProgressBar2.Text = "全域資料夾過濾已變更，各頁面焦點已嘗試恢復。"
 
@@ -1082,6 +1128,19 @@ Partial Class Form1
             End If
         End If
     End Sub
+    Private Function GetCurrentSplitter() As SplitContainer
+        ''' <summary>
+        ''' 根據 TabControl1 的選擇索引，傳回當前分頁對應的 SplitContainer, by Gemini 3 Flash, 2026/05/09
+        ''' </summary>
+        Select Case TabControl1.SelectedIndex
+            Case 0 : Return SplitContainer1
+            Case 1 : Return SplitContainer2
+            Case 2 : Return SplitContainer3
+            Case 3 : Return SplitContainer4
+            Case 4 : Return SplitContainer5
+            Case Else : Return Nothing
+        End Select
+    End Function
 
     Private Sub HistoryListBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles HistoryListBox.SelectedIndexChanged
         If HistoryListBox.SelectedIndex >= 0 Then
@@ -1222,6 +1281,193 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ 滑鼠 & 鍵盤操作事件"
+    Private Async Sub HandleTvKeyDown(sender As Object, e As KeyEventArgs) Handles SimTree1.KeyDown, SimTree2.KeyDown, SimTree3.KeyDown, SimTree4.KeyDown, SimTree5.KeyDown
+        ''' <summary>
+        ''' 所有 SimTree 共用的鍵盤事件處理器，主要處理 F5 強制重整。
+        ''' by Gemini 3.0 Flash, 2026/05/18: 原專屬 SimTree1_KeyDown 已移至 Form1.vb 的通用 HandleTvKeyDown() 中
+        ''' </summary>
+        Dim tv As SimTree = TryCast(sender, SimTree)
+        If tv Is Nothing Then Return
+
+        If e.KeyCode = Keys.F5 Then
+            ' 特殊過濾：若為 SimTree4 且目前正處於話題搜尋結果模式，F5 代表重新掃描系列郵件，
+            ' 此時應由 Tv4_KeyDown 專屬處理，此處直接 Return 提早退出。
+            'If tv Is SimTree4 AndAlso _isTv4ResultMode Then Return
+            ' 2026/05/29 by Simon/Claude: 拆分SimTree4的雙重模式, 讓SimTree4回復到純粹的資料夾樹行為
+
+            e.Handled = True : e.SuppressKeyPress = True
+            Await ForceTvRefresh(tv)
+            If GetCurrentTv() Is SimTree1 Then Await ForceLv1Refresh()
+            ' by Gemini 3.5 Flash, 2026/05/29: 限制 Await ForceLv1Refresh() 只有在當前是 Tab1 (SimTree1) 的時候才需要執行
+
+        ElseIf e.KeyCode = Keys.Space Then  ' 按Space切換展開/收合
+            ' by Claude Sonnet 4.6, 2026/05/19: 從 HandleTvKeyPress 移至此處
+            ' KeyDown 比 KeyPress 更早觸發，搭配 SuppressKeyPress 可確實阻止系統捲動行為
+            Dim node As TreeNode = tv.SelectedNode
+            If node IsNot Nothing Then
+                If node.IsExpanded Then node.Collapse() Else node.Expand()
+                e.Handled = True : e.SuppressKeyPress = True  ' ✅ 阻止後續 KeyPress 觸發系統捲動
+            End If
+
+        ElseIf e.KeyCode = Keys.Enter Then
+            If tv Is SimTree4 Then
+                ' by Claude Sonnet 4.6, 2026/05/29: 將原先 Tv4_KeyDown 的 Enter 觸發搜尋移至此通用處理器，回復 SimTree4 單一掛載
+                Button4.PerformClick()
+                e.Handled = True : e.SuppressKeyPress = True
+            End If
+        End If
+    End Sub
+    Private Sub HandleTvMouseHover(sender As Object, e As EventArgs)
+        ' ---------------------------------------------------------------
+        ' 共用 TreeView / SimTree MouseHover 處理 (MouseMove + MouseLeave)
+        ' by Gemini, 2026/04/03 整合優化，提升 SimTree 離開控制項時的視覺穩定性
+        '
+        ' [2026-03-17 原始規劃保留]: 兩段結構對稱，各用一個布林封裝 SimTree 例外
+        ' 還原規則:
+        '   SimTree 選取節點 → 還原選取色 (不能用 Color.Empty，否則藍色會閃掉)
+        '   其餘節點         → Color.Empty (原生 TreeView 預設)
+        '
+        ' 套用規則:
+        '   SimTree 選取節點 → 跳過 (選取色優先，不蓋 hover 色)
+        '   其餘節點         → 淡灰色 hover
+        ' ---------------------------------------------------------------
+        ' 2026/5/14 by simon/Gemini: 試著將mouse hover作進SimTree自訂控制項內建功能, 但效果不太好, 跟原生長相有一滴滴不同
+        ' ---------------------------------------------------------------
+
+        '' 0. 如果滑鼠座標跟上一次完全一樣就直接離開，避免滑鼠沒有移動也一直觸發, 2026/4/19 by simon
+        'Dim mouseE = TryCast(e, MouseEventArgs)
+        'If mouseE IsNot Nothing Then
+        '    If mouseE.Location = _lastTvMousePoint Then Return
+        '    _lastTvMousePoint = mouseE.Location
+        'End If
+
+        'Dim tv As SimTree = CType(sender, SimTree)
+        'Dim node As TreeNode = If(mouseE IsNot Nothing, tv.GetNodeAt(mouseE.Location), Nothing)
+        'If node Is _lastHoveredTreeNode Then Return
+
+        '' ── 還原上一個 hover 節點 (對稱結構第一部分) ──
+        'If _lastHoveredTreeNode IsNot Nothing Then
+        '    Dim sim As SimTree = TryCast(tv, SimTree)
+
+        '    If sim IsNot Nothing AndAlso sim.SelectedNodes.Contains(_lastHoveredTreeNode) Then
+        '        ' SimTree 選取節點: 根據焦點還原正確的選取色 (不能 Color.Empty)
+        '        _lastHoveredTreeNode.BackColor = If(sim.Focused, SystemColors.Highlight, ThemeColors.AltoGray)
+        '        _lastHoveredTreeNode.ForeColor = If(sim.Focused, SystemColors.HighlightText, SystemColors.InactiveCaptionText)
+        '    Else
+        '        _lastHoveredTreeNode.BackColor = Color.Empty
+        '        _lastHoveredTreeNode.ForeColor = Color.Empty
+        '    End If
+        'End If
+
+        '' ── 套用新 hover 色 (對稱結構第二部分) ──
+        'If node IsNot Nothing Then
+        '    Dim skipHover As Boolean = TypeOf tv Is SimTree AndAlso CType(tv, SimTree).SelectedNodes.Contains(node)
+        '    If Not skipHover Then
+        '        node.BackColor = ThemeColors.AltoGray
+        '        node.ForeColor = SystemColors.InactiveCaptionText
+        '    End If
+        'End If
+        '_lastHoveredTreeNode = node
+
+    End Sub
+    Private Sub HandleTvKeyPress(sender As Object, e As KeyPressEventArgs)
+        ' 在這裡處理所有TreeView KeyPress 事件的程式碼
+        _dbg("開始")
+
+        If TypeOf sender Is TreeView Then
+            If e.KeyChar = ChrW(Keys.Enter) Then
+                sender.SelectedNode.Expand()            ' 按Enter展開下一層
+                Select Case sender.Name
+                    Case "SimTree1" : ListView1.Focus() : ListView1.Items(1).Selected = True
+                    Case "SimTree2" : ListView2.Focus()
+                End Select
+
+            ElseIf e.KeyChar = ChrW(Keys.Escape) Then   ' 按ESC退回上一層
+                ' ✅ by Gemini 3.0 flash, 2026/04/21: SimTree4 的 ESC 邏輯由 KeyDown 獨佔處理，此處予以排除避免衝突
+                ' If sender.Name = "SimTree4" Then Return
+                ' 2026/05/29 by Simon/Claude: 拆分SimTree4的雙重模式, 讓SimTree4回復到純粹的資料夾樹行為
+
+                ' 2026/5/30 by simon, 取消這個ESC退回上一層的功能, 操作上不太直覺
+                'If sender.SelectedNode IsNot Nothing AndAlso sender.SelectedNode.Parent IsNot Nothing Then
+                '    sender.SelectedNode.Collapse() : sender.SelectedNode = sender.SelectedNode.Parent
+                'End If
+            End If
+        End If
+
+        _dbg("結束")
+
+    End Sub
+    Private Sub HandleLvMouseHover(sender As Object, e As EventArgs)
+        ' by Gemini, 2026/04/03: 整合 MouseMove 與 MouseLeave 為單一維護點
+        Dim listView As ListView = TryCast(sender, ListView)
+        If listView Is Nothing Then Return
+
+        ' 0. 如果滑鼠座標跟上一次完全一樣就直接離開，避免滑鼠沒有移動也一直觸發, 2026/4/19 by simon
+        Dim mouseE = TryCast(e, MouseEventArgs)
+        If mouseE IsNot Nothing Then
+            If mouseE.Location = _lastLvMousePoint Then Return
+            _lastLvMousePoint = mouseE.Location
+        End If
+
+        ' 1. 判斷目前的目標項目 (如果是 MouseLeave 則為 Nothing)
+        Dim currentItem As ListViewItem = If(mouseE IsNot Nothing, listView.GetItemAt(mouseE.X, mouseE.Y), Nothing)
+
+        ' 2. 檢查目標是否改變 (優化效能，若相同則不重繪)
+        If currentItem Is _lastHoveredListItem Then Return
+
+        ' 3. 處理狀態轉變: 清除舊背景色並套用新色
+        ' 2026/04/14 by Gemini 3.0 flash: 小步優化，OwnerDraw 模式下只 Invalidate 矩形，
+        ' 絕對不改 BackColor 屬性，避免 WinForms ListView 在多項目時觸發 O(N) 版面重算拖慢效能。
+        ' ⚠️ 注意: 這裡絕對不要加 .Refresh() 或 .BeginUpdate/EndUpdate()，讓 Windows 自然處理重繪，否則會導致嚴重的效能問題和 UI 卡頓。
+        If listView.OwnerDraw Then
+            If _lastHoveredListItem IsNot Nothing Then listView.Invalidate(_lastHoveredListItem.Bounds) ' 1. 讓「舊」項目重繪 (清除舊底色)
+            If currentItem IsNot Nothing Then listView.Invalidate(currentItem.Bounds)                   ' 2. 讓「新」項目重繪 (畫上新底色)
+            _lastHoveredListItem = currentItem                                                          ' 3. 更新全域紀錄
+            Return                                                                                      ' 4. 結束，因為 UI 已經標記要重繪了
+        End If
+
+        ' by Gemini, 2026/04/10: 虛擬模式下頻繁修改 BackColor 會觸發大量繪製導致閃爍
+        ' 2026/04/26 by Gemini 3 Flash: 非 OwnerDraw 的虛擬模式仍需 Return 避免直接修改 BackColor 屬性報錯
+        If listView.VirtualMode Then Return
+
+        ' ----- 以下為非 OwnerDraw 模式 (例如 ListView2~5) -----
+        ' 2026/04/14 by Simon/Claude: Tag=Nothing 的行 (群組標題 / 合計列) 有固定 BackColor，
+        '   離開時要還原原色而非 Color.Empty；進入時也不套 hover 灰，保持原色不被蓋掉。
+        ' 2026/6/5 by Simon/Claude: 再度簡化套用新 hover 色的邏輯，直接在一般列套灰色，標題/合計列保持原色不變
+        If _lastHoveredListItem IsNot Nothing Then _lastHoveredListItem.BackColor = GetHeaderRowBackColor(_lastHoveredListItem) ' 還原標題/合計列原色
+
+        If currentItem IsNot Nothing Then currentItem.BackColor = ThemeColors.MercuryGray       ' 只對一般列套 hover 色
+        _lastHoveredListItem = currentItem
+
+    End Sub
+    Private Sub HistoryListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles HistoryListBox.MouseMove
+        Dim newHoverIndex = HistoryListBox.IndexFromPoint(e.Location)
+        If _historyHoverIndex <> newHoverIndex Then
+            ' 只重繪前一個和新碰觸的項目，而不是整個 ListBox，大幅改善 Hover 和捲動的效能卡頓
+            Dim oldIndex = _historyHoverIndex
+            _historyHoverIndex = newHoverIndex
+
+            If oldIndex <> -1 AndAlso
+                oldIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(oldIndex))
+            If _historyHoverIndex <> -1 AndAlso
+                _historyHoverIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(_historyHoverIndex))
+        End If
+
+    End Sub
+    Private Sub HistoryListBox_MouseLeave(sender As Object, e As EventArgs) Handles HistoryListBox.MouseLeave
+        If _historyHoverIndex <> -1 Then
+            Dim oldIndex = _historyHoverIndex
+            _historyHoverIndex = -1
+            If oldIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(oldIndex))
+        End If
+
+        ' 當滑鼠真正離開 Popup 範圍時再自動關閉 Popup
+        Dim pt = System.Windows.Forms.Cursor.Position
+        If _historyPopup IsNot Nothing AndAlso _historyPopup.Visible Then
+            If Not _historyPopup.Bounds.Contains(pt) Then _historyPopup.Close()
+        End If
+
+    End Sub
     Private Sub HandleSplitterMouseDown(sender As Object, e As MouseEventArgs)
         ''' <summary>
         ''' 強制讓 SplitContainer 完全無法被點選、不顯示虛線焦點框
@@ -1263,7 +1509,7 @@ Partial Class Form1
         Try
             If sc.SplitterDistance > 20 Then    ' 臨界值 20px，如果大於此寬度則進行縮合
                 sc.Tag = sc.SplitterDistance    ' 💡 記憶當前寬度在 Tag 屬性，以便下次恢復
-                sc.SplitterDistance = 10        ' 縮合至 10px 觸控區
+                sc.SplitterDistance = 6         ' 縮合至 6px 觸控區
                 _dbg("縮合側邊欄", $"{sc.Name} → 10px (原 {sc.Tag}px)")
             Else
                 ' 💡 恢復寬度，若無紀錄則預設為 250px
@@ -1288,240 +1534,31 @@ Partial Class Form1
                         End Sub)
         End Try
     End Sub
-    Private Sub HandleTvMouseHover(sender As Object, e As EventArgs)
-        ' ---------------------------------------------------------------
-        ' 共用 TreeView / SimTree MouseHover 處理 (MouseMove + MouseLeave)
-        ' by Gemini, 2026/04/03 整合優化，提升 SimTree 離開控制項時的視覺穩定性
-        '
-        ' [2026-03-17 原始規劃保留]: 兩段結構對稱，各用一個布林封裝 SimTree 例外
-        ' 還原規則:
-        '   SimTree 選取節點 → 還原選取色 (不能用 Color.Empty，否則藍色會閃掉)
-        '   其餘節點         → Color.Empty (原生 TreeView 預設)
-        '
-        ' 套用規則:
-        '   SimTree 選取節點 → 跳過 (選取色優先，不蓋 hover 色)
-        '   其餘節點         → 淡灰色 hover
-        ' ---------------------------------------------------------------
-
-        ' 0. 如果滑鼠座標跟上一次完全一樣就直接離開，避免滑鼠沒有移動也一直觸發, 2026/4/19 by simon
-        Dim mouseE = TryCast(e, MouseEventArgs)
-        If mouseE IsNot Nothing Then
-            If mouseE.Location = _lastTvMousePoint Then Return
-            _lastTvMousePoint = mouseE.Location
-        End If
-
-        Dim tv As TreeView = CType(sender, TreeView)
-        Dim node As TreeNode = If(mouseE IsNot Nothing, tv.GetNodeAt(mouseE.Location), Nothing)
-        If node Is _lastHoveredTreeNode Then Return
-
-        ' ── 還原上一個 hover 節點 (對稱結構第一部分) ──
-        If _lastHoveredTreeNode IsNot Nothing Then
-            Dim sim As SimTree = TryCast(tv, SimTree)
-
-            If sim IsNot Nothing AndAlso sim.SelectedNodes.Contains(_lastHoveredTreeNode) Then
-                ' SimTree 選取節點: 根據焦點還原正確的選取色 (不能 Color.Empty)
-                _lastHoveredTreeNode.BackColor = If(sim.Focused, SystemColors.Highlight, ThemeColors.MercuryGray)
-                _lastHoveredTreeNode.ForeColor = If(sim.Focused, SystemColors.HighlightText, SystemColors.InactiveCaptionText)
-            Else
-                _lastHoveredTreeNode.BackColor = Color.Empty
-                _lastHoveredTreeNode.ForeColor = Color.Empty
-            End If
-        End If
-
-        ' ── 套用新 hover 色 (對稱結構第二部分) ──
-        If node IsNot Nothing Then
-            Dim skipHover As Boolean = TypeOf tv Is SimTree AndAlso CType(tv, SimTree).SelectedNodes.Contains(node)
-            If Not skipHover Then
-                node.BackColor = ThemeColors.MercuryGray
-                node.ForeColor = SystemColors.InactiveCaptionText
-            End If
-        End If
-        _lastHoveredTreeNode = node
-
-    End Sub
-    Private Sub HandleTvKeyPress(sender As Object, e As KeyPressEventArgs)
-        ' 在這裡處理所有TreeView KeyPress 事件的程式碼
-        _dbg("開始")
-
-        If TypeOf sender Is TreeView Then
-            If e.KeyChar = ChrW(Keys.Enter) Then
-                sender.SelectedNode.Expand()            ' 按Enter展開下一層
-                Select Case sender.Name
-                    Case "SimTree1" : ListView1.Focus() : ListView1.Items(1).Selected = True
-                    Case "SimTree2" : ListView2.Focus()
-                End Select
-
-            ElseIf e.KeyChar = ChrW(Keys.Escape) Then   ' 按ESC退回上一層
-                ' ✅ by Gemini 3.0 flash, 2026/04/21: SimTree4 的 ESC 邏輯由 KeyDown 獨佔處理，此處予以排除避免衝突
-                If sender.Name = "SimTree4" Then Return
-
-                If sender.SelectedNode IsNot Nothing AndAlso sender.SelectedNode.Parent IsNot Nothing Then
-                    sender.SelectedNode.Collapse() : sender.SelectedNode = sender.SelectedNode.Parent
-                End If
-
-            ElseIf e.KeyChar = ChrW(Keys.Space) Then    ' 按Space切換展開/收合
-                Dim node As TreeNode = sender.SelectedNode
-                If node IsNot Nothing Then              ' ✅ 避免 Space 觸發系統預設行為 (捲動等)
-                    If node.IsExpanded Then node.Collapse() Else node.Expand() : e.Handled = True
-                End If
-            End If
-        End If
-
-        _dbg("結束")
-
-    End Sub
-    Private Sub HandleLvMouseHover(sender As Object, e As EventArgs)
-        ' by Gemini, 2026/04/03: 整合 MouseMove 與 MouseLeave 為單一維護點
-        Dim listView As ListView = TryCast(sender, ListView)
-        If listView Is Nothing Then Return
-
-        ' 0. 如果滑鼠座標跟上一次完全一樣就直接離開，避免滑鼠沒有移動也一直觸發, 2026/4/19 by simon
-        Dim mouseE = TryCast(e, MouseEventArgs)
-        If mouseE IsNot Nothing Then
-            If mouseE.Location = _lastLvMousePoint Then Return
-            _lastLvMousePoint = mouseE.Location
-        End If
-
-        ' 1. 判斷目前的目標項目 (如果是 MouseLeave 則為 Nothing)
-        Dim currentItem As ListViewItem = If(mouseE IsNot Nothing, listView.GetItemAt(mouseE.X, mouseE.Y), Nothing)
-
-        ' 2. 檢查目標是否改變 (優化效能，若相同則不重繪)
-        If currentItem Is _lastHoveredListItem Then Return
-
-        ' 3. 處理狀態轉變: 清除舊背景色並套用新色
-        ' 2026/04/14 by Gemini 3.0 flash: 小步優化，OwnerDraw 模式下只 Invalidate 矩形，
-        ' 絕對不改 BackColor 屬性，避免 WinForms ListView 在多項目時觸發 O(N) 版面重算拖慢效能。
-        ' ⚠️ 注意: 這裡絕對不要加 .Refresh() 或 .BeginUpdate/EndUpdate()，讓 Windows 自然處理重繪，否則會導致嚴重的效能問題和 UI 卡頓。
-        If listView.OwnerDraw Then
-            If _lastHoveredListItem IsNot Nothing Then listView.Invalidate(_lastHoveredListItem.Bounds)
-            _lastHoveredListItem = currentItem
-
-            If _lastHoveredListItem IsNot Nothing Then listView.Invalidate(_lastHoveredListItem.Bounds)
-            Return ' 結束，因為 UI 已經標記要重繪了
-        End If
-
-        ' by Gemini, 2026/04/10: 虛擬模式下頻繁修改 BackColor 會觸發大量繪製導致閃爍
-        ' 2026/04/26 by Gemini 3 Flash: 非 OwnerDraw 的虛擬模式仍需 Return 避免直接修改 BackColor 屬性報錯
-        If listView.VirtualMode Then Return
-
-        ' ----- 以下為非 OwnerDraw 模式 (例如 ListView2~5) -----
-        ' 2026/04/14 by Simon/Claude: Tag=Nothing 的行 (群組標題 / 合計列) 有固定 BackColor，
-        '   離開時要還原原色而非 Color.Empty；進入時也不套 hover 灰，保持原色不被蓋掉。
-        If _lastHoveredListItem IsNot Nothing Then
-            If _lastHoveredListItem.Tag Is Nothing Then
-                _lastHoveredListItem.BackColor = GetHeaderRowBackColor(_lastHoveredListItem)    ' 還原標題/合計列原色
-            Else
-                _lastHoveredListItem.BackColor = Color.Empty
-            End If
-        End If
-
-        If currentItem IsNot Nothing Then currentItem.BackColor = ThemeColors.MercuryGray       ' 只對一般列套 hover 色
-        _lastHoveredListItem = currentItem
-
-    End Sub
-    Private Sub HandleLv3Lv4Lv5_DrawItem(sender As Object, e As DrawListViewItemEventArgs)
-        ' by Gemini 3 Flash, 2026/05/05: 為 OwnerDraw 模式提供基礎渲染
-        ' 在 Details 視圖下，大部分工作由 DrawSubItem 完成，此處僅確保基本行為正確。
-        If e.Item.Selected Then
-            e.DrawDefault = True ' 選取狀態交由系統繪製，確保藍色高亮正確
-        End If
-    End Sub
-    Private Sub HandleLv3Lv4Lv5_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs)
-        ' by Gemini 3 Flash, 2026/04/26: ListView3, ListView4, ListView5 共用的 OwnerDraw 繪製邏輯
-        ' 2026/05/09 by Gemini 3 Flash: Resize 期間暫停繪製，避免文字滑動殘影
-        'If _isResizingLv Then Return
-        ' 2026/05/05 by Gemini 3 Flash: 修正非懸停狀態下的背景繪製，確保保留群組背景色 (BackColor)
-
-        ' 1. 決定底色與文字色
-        Dim backColor As Color = e.Item.BackColor
-        Dim foreColor As Color = SystemColors.WindowText
-
-        If _lastHoveredListItem IsNot Nothing AndAlso e.ItemIndex = _lastHoveredListItem.Index AndAlso Not e.Item.Selected Then
-            ' 懸停中且未被選取：使用懸停灰色
-            backColor = ThemeColors.MercuryGray
-            foreColor = SystemColors.InactiveCaptionText
-        ElseIf e.Item.Selected Then
-            ' 已選取：讓系統處理選取藍色
-            e.DrawDefault = True
-            Return
-        End If
-
-        ' 2. 繪製背景 (使用 SolidBrush 繪製 BackColor，解決懸停消失問題)
-        Using bgBrush As New SolidBrush(backColor)
-            e.Graphics.FillRectangle(bgBrush, e.Bounds)
-        End Using
-
-        ' 3. 繪製文字 (使用 TextRenderer 確保對齊與抗鋸齒)
-        Dim textRect As Rectangle = e.Bounds
-        Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine Or TextFormatFlags.PreserveGraphicsClipping
-
-        ' 依照欄位對齊方式設定旗標與微調位移 (位移量根據 USER 實測反饋調整)
-        If e.ColumnIndex = 0 Then
-            textRect.X += 2 : textRect.Width -= 2 ' 避免第一欄文字貼著邊線
-            flags = flags Or TextFormatFlags.Left
-        ElseIf e.Header.TextAlign = HorizontalAlignment.Right Then
-            flags = flags Or TextFormatFlags.Right
-        ElseIf e.Header.TextAlign = HorizontalAlignment.Center Then
-            flags = flags Or TextFormatFlags.HorizontalCenter
-            textRect.X += 1 ' 修正往左偏移的問題
-        Else
-            flags = flags Or TextFormatFlags.Left
-            textRect.X += 2 ' by USER, 2026/04/26: 寄件者之後的欄位再多補 1px (共 2px)
-        End If
-
-        TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, foreColor, flags)
-    End Sub
-    Private Sub HistoryListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles HistoryListBox.MouseMove
-        Dim newHoverIndex = HistoryListBox.IndexFromPoint(e.Location)
-        If _historyHoverIndex <> newHoverIndex Then
-            ' 只重繪前一個和新碰觸的項目，而不是整個 ListBox，大幅改善 Hover 和捲動的效能卡頓
-            Dim oldIndex = _historyHoverIndex
-            _historyHoverIndex = newHoverIndex
-
-            If oldIndex <> -1 AndAlso
-                oldIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(oldIndex))
-            If _historyHoverIndex <> -1 AndAlso
-                _historyHoverIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(_historyHoverIndex))
-        End If
-
-    End Sub
-    Private Sub HistoryListBox_MouseLeave(sender As Object, e As EventArgs) Handles HistoryListBox.MouseLeave
-        If _historyHoverIndex <> -1 Then
-            Dim oldIndex = _historyHoverIndex
-            _historyHoverIndex = -1
-            If oldIndex < HistoryListBox.Items.Count Then HistoryListBox.Invalidate(HistoryListBox.GetItemRectangle(oldIndex))
-        End If
-
-        ' 當滑鼠真正離開 Popup 範圍時再自動關閉 Popup
-        Dim pt = System.Windows.Forms.Cursor.Position
-        If _historyPopup IsNot Nothing AndAlso _historyPopup.Visible Then
-            If Not _historyPopup.Bounds.Contains(pt) Then _historyPopup.Close()
-        End If
-
+    Private Sub HandleTvGotFocus(sender As Object, e As EventArgs)
+        ' 當 SimTree 取得焦點時，若左側 Panel1 處於收合狀態，自動展開
+        ' 適用情境：ESC 從 ListView 退回 SimTree、或任何其他讓 SimTree 得焦的操作
+        ' 2026/05/30 by Simon/Claude
+        Dim sc = GetCurrentSplitter()
+        If sc IsNot Nothing AndAlso sc.SplitterDistance <= 20 Then SplitterToggle(sc)
     End Sub
 #End Region
 #Region "  ├ TreeView 導覽工具"
-    Private Sub TriggerTvAfterSelect(tv As TreeView)
-        ''' <summary>
-        ''' 定向觸發活動控制項的數據刷新 (AfterSelect)
-        ''' 僅作為補強機制，確保右側統計數據在特殊情況下能被手動刷新, by Gemini, 2026/03/30
-        ''' </summary>
-
-        ' 確保有選定節點才執行統計，否則統計函數會報錯
-        If tv Is Nothing Then Return
-        Dim targetNode As TreeNode = tv.SelectedNode
-        If targetNode Is Nothing Then Return
-
-        Dim args As New TreeViewEventArgs(targetNode)
-        ' 2026/04/13 by Simon/Claude: Tab1 改用 SimTree1，所有 AfterSelect 都走 FireAfterSelect 路徑
-        If TypeOf tv Is SimTree Then
-            DirectCast(tv, SimTree).FireAfterSelect(targetNode)
-        ElseIf TypeOf tv Is SimTree Then
-            DirectCast(tv, SimTree).FireAfterSelect(targetNode)   ' SimTree2/3/4
-        End If
-
-    End Sub
-    Private Async Sub ExpandTvToDefaultInbox(tv As TreeView)
+    ' [歷史變更與演進紀錄 by Gemini 3.5 Flash, 2026/05/21]
+    ' =========================================================================
+    ' 舊有的 FindNodeByPath、SelectNode、SelectNodeByPathRecursive 函數已被廢棄並刪除。
+    ' 其核心職責與功能（包含 Lazy Load 的節點展開與狀態還原）已完全重構至自訂控制項 SimTree.vb
+    ' 內建的 TryGetNode()、GetNodeIn() 與 SelectNode() 核心引擎中，以提升搜尋效能並達成控制項自治。
+    ' -------------------------------------------------------------------------
+    ' 過去的 Debug 與演進歷程備忘如下：
+    ' 1. FindNodeByPath:
+    '    - by Gemini 3.1 Pro, 2026/04/24: 遞迴尋找符合 targetPath 的 TreeNode，比對 Tag (Outlook.Folder) 的 FolderPath。
+    '    - 2026/05/01 by Claude: 新增 searchOnlyExpanded 參數，控制是否只搜尋已展開的節點，優化性能和使用者體驗。
+    '      searchOnlyExpanded：只搜已展開層（如果 =True 就只搜已展開的節點，=False則全部搜到底）。
+    ' 2. SelectNodeByPathRecursive & SelectNode:
+    '    - 2026/04/17 by Gemini: 若原本節點是展開的，還原時也必須主動展開，維持使用者體感的一致性。
+    '    - 剪枝檢查：如果目標路徑開頭包含目前路徑，則進入子層搜尋，若未載入則呼叫 LoadSubFolderToTreeView。
+    ' =========================================================================
+    Private Async Sub GotoDefaultInbox(tv As SimTree)
         ' by Gemini, 2026/04/06: 使用Guard Clauses重構，減少巢狀層數並確保 EndUpdate 執行安全性
         _dbg("開始", tv.Name)
 
@@ -1586,12 +1623,12 @@ Partial Class Form1
         ''' 流程：清空節點 → 重新加載根節點 → 釋放 UI 執行緒。
         ''' </summary>
         _dbg("開始", "準備刷新所有 TreeView...")
-        ProgressBar1.Text = "正在刷新 UI 樹狀結構..."
+        'ProgressBar1.Text = "正在刷新 UI 樹狀結構..."
 
         ' 讓出 UI 執行緒，確保進度文字能顯示
         Await Task.Yield()
 
-        Dim trees() As TreeView = {SimTree1, SimTree2, SimTree3, SimTree4}
+        Dim trees() As SimTree = {SimTree1, SimTree2, SimTree3, SimTree4, SimTree5}
         Dim processedCount As Integer = 0
 
         For Each tv In trees
@@ -1605,34 +1642,72 @@ Partial Class Form1
 
                     ' 2. 重新加載 Store 根節點 (Lazy Load)
                     LoadStoreToTreeView(_pstStoreList, tv)
-                    ExpandTvToDefaultInbox(tv)
+                    GotoDefaultInbox(tv)
                 Finally
                     tv.EndUpdate()
                 End Try
 
                 processedCount += 1
-                ' 每個 Tree 處理完後讓出 UI，防止大規模介面重繪導致短暫卡頓
-                Await Task.Yield()
+                Await Task.Yield()  ' 每個 Tree 處理完後讓出 UI，防止大規模介面重繪導致短暫卡頓
             End If
         Next
 
         _dbg("結束", $"已刷新 {processedCount} 個 TreeView")
-        ProgressBar1.Text = "UI 刷新完成 ✔"
+        'ProgressBar1.Text = "UI 刷新完成 ✔"
     End Function
-    Private Function GetCurrentSplitter() As SplitContainer
-        ''' <summary>
-        ''' 根據 TabControl1 的選擇索引，傳回當前分頁對應的 SplitContainer, by Gemini 3 Flash, 2026/05/09
-        ''' </summary>
-        Select Case TabControl1.SelectedIndex
-            Case 0 : Return SplitContainer1
-            Case 1 : Return SplitContainer2
-            Case 2 : Return SplitContainer3
-            Case 3 : Return SplitContainer4
-            Case 4 : Return SplitContainer5
-            Case Else : Return Nothing
-        End Select
+    Private Async Function ForceTvRefresh(tv As SimTree) As Task
+        ' ── F5 強制刷新整棵 SimTree ──────────────────────────────────────────────
+        ' 職責: 不讀任何快取，重新從 Outlook COM 讀取整棵資料夾樹並更新 _cacheFolderTree
+        '       ① 記錄目前展開路徑 + 選取路徑
+        '       ② 清 _cacheFolderTree (確保 LoadSubFolderToTreeView 重讀 COM)
+        '       ③ Nodes.Clear + LoadStoreToTreeView (重建 root 層)
+        '       ④ 逐層 node.Expand() 重建已展開路徑 (觸發 LoadSubFolderToTreeView)
+        '       ⑤ 還原選取，透過 FireAfterSelect 觸發正常 AfterSelect 流程更新 ListView
+        '
+        ' 2026/05/13 by Claude Sonnet 4.6
+        ' 2026/05/17 by Simon/Claude: ⑤ 改回 FireAfterSelect，解決 ListView 未更新的問題
+        '   原本直接呼叫 ComputeTab1FolderStats + RenderLv1 的方式繞過了 SimTree 標準流程，
+        '   導致 AfterSelect 沒有被觸發，ListView 顯示內容不對應選取的資料夾。
+        ' ─────────────────────────────────────────────────────────────────────
+        ' 2026/05/25 by Simon/Claude: 再度重構使用呼叫simTree內部方法
+        '       ① SaveTreeStateByPath（路徑字串快照）→
+        '       ② 清快取 + 清節點 + 重建 root →
+        '       ③ RestoreTreeState（按路徑重展開，觸發 LazyLoad 重讀 Outlook COM）→
+        '       ④ Fallback
+        '   若資料夾在 Outlook 已消失，重展開時天然不出現，不需另寫 diff 邏輯。
+        '   2026/05/25 by Simon/Claude: 重構使用 SaveTreeStateByPath / RestoreTreeState
+        ' ─────────────────────────────────────────────────────────────────────
+        _dbg("開始", tv.Name)
+        If _pstStoreList Is Nothing OrElse _pstStoreList.Count = 0 Then Return
+
+        ProgressBar1.Text = $"F5: 重整 {tv.Name}..." : ProgressBar2.Text = ""
+        _isUserBusy = True : Cursor = Cursors.WaitCursor
+
+        Dim currentTvState = tv.SaveTreeStateByPath()   ' ① 快照狀態收集（展開路徑 + 選取路徑，Nodes.Clear 後仍有效）
+        Try
+            '_cacheFolderTree.Clear()                   ' ② 清快取，確保 GetSortedSubFolders 重讀 Outlook
+            ClearMemoryCachesCore()                     ' 【修復關鍵 1】徹底清除所有快取，包含 _cacheFolderIDs，防止幽靈復活, 2026/6/1 by Simon/Gemini 3.1 Pro
+            _isForceRefreshing = True                   ' 確保繞過 SSD 快取，強制打 COM (若原 codebase 沒加這行請務必補上), 2026/6/1 by Simon/Gemini 3.1 Pro
+            tv.ClearSelectedNodes()
+            tv.Nodes.Clear()
+
+            LoadStoreToTreeView(_pstStoreList, tv)      ' ③ 重建 root 層
+            tv.RestoreTreeState(currentTvState)         ' ④ 重展開 + 還原選取 + 觸發 AfterSelect
+            If tv.SelectedNodes.Count = 0 Then GotoDefaultInbox(tv) ' ⑤ Fallback: 找不到舊選取時退回預設 Inbox
+
+            ProgressBar1.Text = $"F5: {tv.Name} 重整完成" : ProgressBar2.Text = ""
+
+            'Await Task.Run(Sub() SaveCachesToDB())      ' 掃描完成後，再安全地存入資料庫
+
+        Catch ex As System.Exception
+            _dbg("錯誤", ex.Message) : ProgressBar1.Text = $"F5 {tv.Name} 失敗: " & ex.Message
+        Finally
+            Cursor = Cursors.Default : _isUserBusy = False : _dbg("結束", tv.Name)
+            _isForceRefreshing = False                  ' 關閉強制更新旗標, 2026/6/1 by Simon/Gemini 3.1 Pro
+        End Try
+
     End Function
-    Private Function GetCurrentTv() As TreeView
+    Private Function GetCurrentTv() As SimTree
         ''' <summary>
         ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 TreeView/SimTree, by Gemini, 2026/03/30
         ''' </summary>
@@ -1647,60 +1722,18 @@ Partial Class Form1
         End Select
 
     End Function
-    Private Function GetCurrentLv() As ListView
-        ''' <summary>
-        ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 ListView, by simon, 2026/05/09
-        ''' </summary>
-        ' 在需要觸發 AfterSelect 或其他操作時，能夠根據目前選中的 Tab 頁面，準確地獲取對應的 ListView 控制項
-        Select Case TabControl1.SelectedIndex
-            Case 0 : Return ListView1   ' 2026/04/13 by Simon/Claude: Tab1 改用 ListView1
-            Case 1 : Return ListView2
-            Case 2 : Return ListView3
-            Case 3 : Return ListView4
-            Case 4 : Return ListView5
-            Case Else : Return Nothing
-        End Select
-    End Function
-    Private Function GetAllTreeViews(container As Control) As List(Of TreeView)
+    Private Function GetAllTvList(container As Control) As List(Of SimTree)
         ''' <summary>
         ''' 遞迴搜尋容器內所有的 TreeView (含其衍生子類如 SimTree)
         ''' </summary>
-        Dim list As New List(Of TreeView)(16) ' 預設容量 16，避免頻繁擴容
+        Dim list As New List(Of SimTree)(16) ' 預設容量 16，避免頻繁擴容
         For Each ctrl As Control In container.Controls
-            If TypeOf ctrl Is TreeView Then list.Add(CType(ctrl, TreeView)) ' 如果是 TreeView 或其衍生類 (SimTree)
-            If ctrl.HasChildren Then list.AddRange(GetAllTreeViews(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
+            If TypeOf ctrl Is SimTree Then list.Add(CType(ctrl, SimTree))
+            If ctrl.HasChildren Then list.AddRange(GetAllTvList(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
         Next
         Return list
     End Function
-    Private Function GetAllListViews(container As Control) As List(Of ListView)
-        ''' <summary>
-        ''' 遞迴搜尋容器內所有的 ListView
-        ''' </summary>
-        Dim list As New List(Of ListView)(16) ' 預設容量 16，避免頻繁擴容
-        For Each ctrl As Control In container.Controls
-            If TypeOf ctrl Is ListView Then list.Add(CType(ctrl, ListView)) ' 如果是 ListView
-            If ctrl.HasChildren Then list.AddRange(GetAllListViews(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
-        Next
-        Return list
-    End Function
-
-    Private Function FindNodeByFolderPath(nodes As TreeNodeCollection, folderPath As String) As TreeNode
-        ' ---------------------------------------------------------------
-        ' FindNodeByFolderPath — 遞迴搜尋 TreeView 節點，比對 Tag (Outlook.Folder) 的 FolderPath
-        ' by Gemini 3.1 Pro, 2026/04/24
-        ' ---------------------------------------------------------------
-        For Each n As TreeNode In nodes
-            Dim f = TryCast(n.Tag, Folder)
-            If f IsNot Nothing AndAlso String.Compare(SafeGetPath(f), folderPath, StringComparison.OrdinalIgnoreCase) = 0 Then
-                Return n
-            End If
-            ' 遞迴搜尋子節點
-            Dim childNode = FindNodeByFolderPath(n.Nodes, folderPath)
-            If childNode IsNot Nothing Then Return childNode
-        Next
-        Return Nothing
-    End Function
-    Private Function GetSelectedFolderPath(tv As TreeView) As String
+    Private Function GetSelectedFolderPath(tv As SimTree) As String
         ''' <summary>
         ''' 取得指定 TreeView 選中節點的 Outlook 路徑 (優先從 Tag.FolderPath 讀取)
         ''' </summary>
@@ -1712,46 +1745,6 @@ Partial Class Form1
 
         Dim folder = TryCast(node.Tag, Folder)
         Return If(folder IsNot Nothing, SafeGetPath(folder), node.FullPath)
-    End Function
-    Private Function SelectNodeByPath(tv As TreeView, fPath As String, Optional expandTarget As Boolean = False) As Boolean
-        ''' <summary>
-        ''' 根據路徑字串在 TreeView 中導航並選取節點。
-        ''' 此操作不依賴節點物件，適用於 Nodes.Clear 之後的狀態還原。
-        ''' </summary>
-        If tv Is Nothing OrElse String.IsNullOrEmpty(fPath) Then Return False
-        _dbg("開始還原路徑", fPath & " | Expand: " & expandTarget)
-        Return SelectNodeByPathRecursive(tv.Nodes, fPath, tv, expandTarget)
-    End Function
-    Private Function SelectNodeByPathRecursive(nodes As TreeNodeCollection, fPath As String, tv As TreeView, expandTarget As Boolean) As Boolean
-        ' 遞迴搜尋匹配路徑的節點
-        For Each node As TreeNode In nodes
-            Dim folder = TryCast(node.Tag, Folder)
-            Dim nodePath As String = If(folder IsNot Nothing, SafeGetPath(folder), node.FullPath)
-
-            ' 精確匹配目標並完成選定節點
-            If nodePath = fPath Then
-                Dim st = TryCast(tv, SimTree)
-                If st IsNot Nothing Then
-                    st.SetSelectedNode(node)
-                    st.FireAfterSelect(node)
-                Else
-                    tv.SelectedNode = node
-                End If
-                node.EnsureVisible()
-                If expandTarget Then node.Expand()  ' 2026/04/17 by Gemini: 若原本節點是展開的，還原時也必須主動展開，維持使用者體感的一致性
-                Return True ' 成功找到並選定目標節點，結束搜尋
-            End If
-
-            ' 剪枝檢查：如果目標路徑開合包含目前路徑，則進入子層搜尋
-            If fPath.StartsWith(nodePath) Then
-                ' 如果該節點尚未展開/載入子節點 (DummyNode 結構)，則手動觸發一次載入
-                If node.Nodes.Count = 1 AndAlso node.Nodes(0).Text = ":::" Then
-                    LoadSubFolderToTreeView(node, New TreeViewCancelEventArgs(node, False, TreeViewAction.Expand))
-                End If
-                If SelectNodeByPathRecursive(node.Nodes, fPath, tv, expandTarget) Then Return True ' 內層找到目標，直接回傳成功
-            End If
-        Next
-        Return False
     End Function
 #End Region
 #Region "  ├ ListView 格式工具"
@@ -1801,13 +1794,12 @@ Partial Class Form1
         ''' 定義各個 ListView 縮放時的欄位寬度比例
         ''' 2026/04/01 by Gemini
         ''' </summary>
-
         If lv.Columns.Count = 0 OrElse lv.Width <= 0 Then Return
 
         ' 2026/05/09 by Gemini 3 Flash: 終極防線 — 若寬度未變，絕不執行昂貴的 UI 重算與 _dbg 輸出
         Static lastProcessedWidths As New Dictionary(Of String, Integer)
-        If lastProcessedWidths.ContainsKey(lv.Name) AndAlso lastProcessedWidths(lv.Name) = lv.Width Then Return
-        lastProcessedWidths(lv.Name) = lv.Width
+        Dim value As Integer = Nothing
+        If lastProcessedWidths.TryGetValue(lv.Name, value) AndAlso value = lv.Width Then Return
 
         _dbg("開始", lv.Name)
         _isResizingLv = True    ' ✅ 2026/05/09 by Gemini 3 Flash: 開啟旗標，暫停 DrawSubItem 繪製
@@ -1832,7 +1824,7 @@ Partial Class Form1
                 End If
 
             ElseIf lv Is ListView2 Then ' Tab2: 年度 / 郵件個數 / 空白欄位
-                If lv.Columns.Count >= 3 Then
+                If lv.Columns.Count >= 2 Then
                     newWidths(0) = Math.Max(120, CInt(w * 0.3)) ' 第一欄(年度/月份)至少保底 120px
                     newWidths(1) = Math.Max(100, CInt(w * 0.2)) ' 第二欄(郵件數量)至少保底 100px
                     newWidths(2) = Math.Max(0, w - newWidths(0) - newWidths(1) - 5) ' 第三欄吸收所有剩餘空間
@@ -1852,7 +1844,12 @@ Partial Class Form1
                     newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5)) - 5
                 End If
 
-            ElseIf lv Is ListView4 Then ' Tab4: 主旨 / 大小 / 收到時間 / 寄件者 / 相似度 / EntryID
+            ElseIf lv Is Lv4Topic Then ' Tab4: 重複主旨 / 重複數量
+                If lv.Columns.Count >= 1 Then
+                    newWidths(1) = CInt(w * 0.2)        ' 重複數量
+                    newWidths(0) = w - newWidths(1) - 24 ' 重複主旨
+                End If
+            ElseIf lv Is Listview4 Then ' Tab4: 主旨 / 大小 / 收到時間 / 寄件者 / 相似度 / EntryID
                 If lv.Columns.Count >= 5 Then
                     newWidths(1) = CInt(w * 0.13)    ' 大小
                     newWidths(2) = CInt(w * 0.17)    ' 收到時間 (by Gemini 3 Flash, 2026/05/06: 統一改為 17%)
@@ -1861,12 +1858,13 @@ Partial Class Form1
                     newWidths(5) = CInt(w * 0.01)    ' EntryID 極小保留，避免 Resize 事件蓋掉 by Claude Sonnet 4.6, 2026/05/03
                     newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5)) - 5 ' by Claude Sonnet 4.6, 2026/05/03: 補上 EntryID 欄扣除
                 End If
+
             ElseIf lv Is ListView5 Then ' Tab5: 主旨/大小/收到日期/寄件者/群組/相似/EntryID (7欄，比 LV4 多「群組」欄) by Claude Sonnet 4.6, 2026/05/03
                 If lv.Columns.Count >= 7 Then
                     newWidths(1) = CInt(w * 0.12)    ' 郵件大小
                     newWidths(2) = CInt(w * 0.17)    ' 收到日期
-                    newWidths(3) = CInt(w * 0.17)    ' 寄件者
-                    newWidths(4) = CInt(w * 0.05)    ' 群組
+                    newWidths(3) = CInt(w * 0.15)    ' 寄件者
+                    newWidths(4) = CInt(w * 0.06)    ' 群組
                     newWidths(5) = CInt(w * 0.08)    ' 相似
                     newWidths(6) = CInt(w * 0.01)    ' EntryID 極小保留
                     newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5) + newWidths(6)) - 5
@@ -1887,6 +1885,10 @@ Partial Class Form1
                 ' 僅在數值改變時賦值，減少對 Header 的內部連動
                 If lv.Columns(i).Width <> newWidths(i) Then lv.Columns(i).Width = newWidths(i)
             Next
+
+            ' ✅ by Gemini 3.1 Pro, 2026/05/27: 將防線記錄移至賦值成功後，避免 ClientSize=0 時鎖死防線
+            lastProcessedWidths(lv.Name) = lv.Width
+
             lv.Invalidate()         ' 強制刷新
         Finally
             SendMessage(lv.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero) ' 開啟重繪
@@ -1895,6 +1897,139 @@ Partial Class Form1
         End Try
         _dbg("結束", lv.Name)
     End Sub
+    Private Sub LviSelectAll(lv As ListView, Optional e As KeyEventArgs = Nothing)
+        ' ---------------------------------------------------------------
+        ' LviSelectAll — 共用的 ListView 全選輔助函數
+        ' 整合自 Lv1_KeyDown / Lv2_KeyDown / HandleLv3Lv4Lv5_KeyDown 三處原本重複的 Ctrl+A 邏輯
+        ' 2026/05/18 by Gemini 3.0 flash: 抽離共用的 ListView 全選邏輯 (支援一般模式與虛擬模式)
+        '
+        ' 一般模式 (ListView1 / ListView2 / Listview4 / ListView5 非虛擬部分):
+        '   直接遍歷 Items 集合，逐一設為 Selected = True
+        '   預分配容量設計來源：by Gemini 3 Flash, 2026/05/04
+        '
+        ' 虛擬模式 (ListView3 / 未來擴充):
+        '   改用索引循環操作 SelectedIndices，不可枚舉 Items 集合否則例外
+        '   修復虛擬模式全選當機問題：by Gemini 3 Flash, 2026/05/09
+        '   改用 VirtualListSize 取代 Items.Count，虛擬模式下更正確：by Simon, 2026/05/18
+        '
+        ' 注意：e.Handled / e.SuppressKeyPress 屬於鍵盤事件責任，
+        '       不在此函數內設定，由呼叫端 KeyDown 事件處理函式自行負責。
+        ' ---------------------------------------------------------------
+        If lv Is Nothing Then Return
+        Dim itemCount As Integer = If(lv.VirtualMode, lv.VirtualListSize, lv.Items.Count)
+        If itemCount = 0 Then Return
+
+        _dbg("開始", $"全選 {lv.Name} (VirtualMode={lv.VirtualMode}, 共 {itemCount} 項)")
+        lv.BeginUpdate()
+        Try
+            If lv.VirtualMode Then  ' 虛擬模式：直接將所有索引加進 SelectedIndices
+                For i As Integer = 0 To lv.VirtualListSize - 1 : lv.SelectedIndices.Add(i) : Next
+            Else                    ' 一般模式：遍歷實體項目並設為 Selected
+                For Each item As ListViewItem In lv.Items : item.Selected = True : Next
+            End If
+        Finally
+            lv.EndUpdate()
+        End Try
+
+        ' 如果有傳入 KeyEventArgs，直接在這裡將按鍵事件標記為已處理
+        If e IsNot Nothing Then
+            e.Handled = True
+            e.SuppressKeyPress = True
+        End If
+
+        _dbg("結束", $"共選取 {lv.SelectedIndices.Count} 個項目")
+    End Sub
+    Private Sub LviCopyToClipboard(lv As ListView, Optional e As KeyEventArgs = Nothing)
+        ' ---------------------------------------------------------------
+        ' 抽離共用的 ListView 複製到剪貼簿邏輯
+        ' 格式: Tab 分隔欄位，換行分隔列，直接貼入 Excel 即可對齊欄位。
+        ' 
+        ' [修改歷程]
+        ' - 2026/04/27 by Claude Sonnet 4.6: 建立 Ctrl-C 複製選取列初始功能 (Sub為VB保留字，變數改用si)
+        ' - 2026/04/27 by Gemini 3.1 Pro: 新增先加入標題列 (Header) 功能
+        ' - 2026/05/04 by Gemini 3 Flash: 加入預分配容量 (Capacity) 優化多欄位 List 操作效能
+        ' - 2026/05/18 by Gemini 3.0 Flash: 抽離為共用函數，改用動態容量並加入 Try-Catch 剪貼簿保護
+        ' - 2026/05/19 by Gemini 3 Flash: 新增 ListView1 特殊判定，選取複製時連同內含 "▸"(PST名稱) 與 "▶"(合計列) 一併匯出
+        ' ---------------------------------------------------------------
+        If lv Is Nothing OrElse lv.SelectedItems.Count = 0 Then Return
+
+        _dbg("開始", $"複製 {lv.Name} 資料")
+
+        ' 1. 加入標題列 (Header) (by Gemini 3.1 Pro, 2026/04/27)
+        Dim sb As New System.Text.StringBuilder()
+        Dim headers As New List(Of String)(lv.Columns.Count)    ' 動態預分配容量，取代舊版的固定容量 (改良自 Gemini 3 Flash, 2026/05/04)
+        For Each col As ColumnHeader In lv.Columns
+            headers.Add(col.Text.Trim())
+        Next
+        sb.AppendLine(String.Join(vbTab, headers))
+
+        ' 2026/05/19 by Gemini 3 Flash: 根據 ListView 控制項名稱決定要走訪的項目集合
+        Dim itemsToCopy As IEnumerable(Of ListViewItem)
+        If lv.Name = "ListView1" Then
+            ' 【ListView1 特殊處理】因為 PST 名稱列與合計列屬於不開放選取的特殊列，無法存在於 SelectedItems 中。
+            ' 故改為走訪「全體項目」，並篩選出「被選取的項目」或是「包含 ▸、▶ 裝飾字元的特殊列」，以維持完整報表結構。
+            itemsToCopy = lv.Items.Cast(Of ListViewItem)().Where(Function(item) item.Selected OrElse item.Text.Contains("▸"c) OrElse item.Text.Contains("▶"c))
+        Else
+            ' 【其他 ListView】維持原邏輯：只複製真正被選取的項目
+            itemsToCopy = lv.SelectedItems.Cast(Of ListViewItem)()
+        End If
+
+        ' 用來統計最終實質複製了多少列的計數器 (by Gemini 3 Flash, 2026/05/19)
+        Dim copiedCount As Integer = 0
+
+        ' 2. 遍歷所有被選取(或符合ListView1條件)的項目，把子欄位以 vbTab (Tab字元) 串接
+        For Each item As ListViewItem In itemsToCopy
+            Dim cols As New List(Of String)(item.SubItems.Count)
+            ' 走訪所有子項目 (by Claude Sonnet 4.6, 2026/04/27: sub 是 VB 保留字，改用 si)
+            For Each si As ListViewItem.ListViewSubItem In item.SubItems
+                cols.Add(si.Text.Trim(" "c, "-"c, "▸"c, "▶"c))  ' 去除頭尾空白，以及 "-"、"▸" 等視覺裝飾字元
+            Next
+            sb.AppendLine(String.Join(vbTab, cols))
+            copiedCount += 1
+        Next
+
+        Try
+            Clipboard.SetText(sb.ToString())
+            ProgressBar2.Text = $"已複製標題與 {copiedCount:N0} 列到剪貼簿。"   ' 將顯示數量改為實際複製的總列數計數 (by Gemini 3 Flash, 2026/05/19)
+
+            ' 如果有傳入 KeyEventArgs，直接在這裡將按鍵事件標記為已處理
+            If e IsNot Nothing Then
+                e.Handled = True
+                e.SuppressKeyPress = True
+            End If
+
+        Catch ex As System.Exception
+            _dbg("剪貼簿存取失敗", ex.Message)
+            MessageBox.Show("無法存取剪貼簿，可能被其他程式佔用。", "複製失敗", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        End Try
+
+        _dbg("結束")
+    End Sub
+    Private Function GetCurrentLv() As ListView
+        ''' <summary>
+        ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 ListView, by simon, 2026/05/09
+        ''' </summary>
+        ' 在需要觸發 AfterSelect 或其他操作時，能夠根據目前選中的 Tab 頁面，準確地獲取對應的 ListView 控制項
+        Select Case TabControl1.SelectedIndex
+            Case 0 : Return ListView1   ' 2026/04/13 by Simon/Claude: Tab1 改用 ListView1
+            Case 1 : Return ListView2
+            Case 2 : Return ListView3
+            Case 3 : Return Listview4
+            Case 4 : Return ListView5
+            Case Else : Return Nothing
+        End Select
+    End Function
+    Private Function GetAllLvList(container As Control) As List(Of ListView)
+        ''' <summary>
+        ''' 遞迴搜尋容器內所有的 ListView
+        ''' </summary>
+        Dim list As New List(Of ListView)(16) ' 預設容量 16，避免頻繁擴容
+        For Each ctrl As Control In container.Controls
+            If TypeOf ctrl Is ListView Then list.Add(CType(ctrl, ListView)) ' 如果是 ListView
+            If ctrl.HasChildren Then list.AddRange(GetAllLvList(ctrl))   ' 如果有子容器 (如 SplitContainer, TabControl, Panel)，繼續遞迴往下層掃描
+        Next
+        Return list
+    End Function
     Private Function GetHeaderRowBackColor(item As ListViewItem) As Color
         ' 2026/04/14 by Simon/Claude: 根據 Tag=Nothing 列的文字前綴還原正確的 BackColor
         '   ▸ 開頭 = 群組標題行 → SystemColors.GradientInactiveCaption (淡藍) 
@@ -1969,6 +2104,8 @@ Partial Class Form1
         ' by Gemini, 2026/04/01: 統一管理專案色彩, 方便日後切換深色/淺色主題
         ''' <summary>主要視窗或Panel背景色 (#F2F2F2)</summary>
         Public Shared ReadOnly Gray95 As Color = Color.FromArgb(242, 242, 242)
+        ''' <summary>比DimGray更深的灰色, 主要用在字型 (#404040)</summary>
+        Public Shared ReadOnly DarkerDimGray As Color = Color.FromArgb(64, 64, 64)
         ''' <summary>滑鼠懸停(Hover)的背景色 (#E5E5E5)</summary>
         Public Shared ReadOnly MercuryGray As Color = Color.FromArgb(229, 229, 229)
         ''' <summary>輕微的格線或邊框色 (#E0E0E0)</summary>

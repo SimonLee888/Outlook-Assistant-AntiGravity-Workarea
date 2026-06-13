@@ -1,0 +1,21 @@
+# 尋路引擎重構與舊函數取代任務清單
+
+- `[x]` 建立並初始化任務清單 `task.md`
+- `[/]` 變更 `Form1_SimTree.vb` (控制項層級重構)
+  - `[/]` 升級 `NavigateToPath` 函數，擴充 `expandTarget` 參數，改用 `TryGetNode` 實現
+  - `[/]` 修改 `RestoreTreeState` 內部呼叫為 `TryGetNode`
+  - `[/]` 刪除舊有私有 `FindNodeByFullPath` 函數
+  - `[ ]` 使用 `view_file` 複檢 `Form1_SimTree.vb` 所有修改點
+- `[ ]` 變更 `Form1.vb` (主表單層級重構)
+  - `[ ]` 刪除 `FindNodeByPath` 函數
+  - `[ ]` 刪除 `SelectNodeByPath` 與 `SelectNodeByPathRecursive` 函數
+  - `[ ]` 重構 `ForceRefreshSimTree` 還原選取狀態處 (改用 `tv.GetNode` 與 `SimTree1.NavigateToPath`)
+  - `[ ]` 使用 `view_file` 複檢 `Form1.vb` 所有修改點
+- `[ ]` 變更 `Form1_MainTab12.vb` (Tab12 層級重構)
+  - `[ ]` 重構 `ReExpandNodeByPath` (將 `FindNodeByPath` 替換為 `tv.GetNode`)
+  - `[ ]` 重構 `ForceRefreshSimTree` 選回舊選取處 (將 `FindNodeByPath` 替換為 `tv.GetNode`)
+  - `[ ]` 使用 `view_file` 複檢 `Form1_MainTab12.vb` 所有修改點
+- `[ ]` 變更 `Form1_OST.vb` (OST/Tab7 層級重構)
+  - `[ ]` 重構 `CopyFolder_Click` 結尾的選取還原 (將 `FindNodeByPath` 替換為 `SimTreePST.GetNode`)
+  - `[ ]` 使用 `view_file` 複檢 `Form1_OST.vb` 所有修改點
+- `[ ]` 複檢所有修改點確認正確、複檢修改點前後是否遺留多餘程式碼

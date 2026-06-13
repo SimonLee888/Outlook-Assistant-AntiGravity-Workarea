@@ -86,13 +86,9 @@ Partial Class Form1
     End Function
 
     ' ── 常數 ───
-    Private Const GWL_STYLE As Integer = -16
-    Private Const WS_TABSTOP As Integer = &H10000
-    Private Const SW_HIDE As Integer = 0
-    Private Const WM_COMMAND As Integer = &H111
     Private Const WM_LBUTTONDOWN As Integer = &H201
     Private Const WM_LBUTTONUP As Integer = &H202
-    Private Const BM_CLICK As Integer = &HF5
+    Private Const SW_HIDE As Integer = 0
 
     ' TreeView 雙緩衝
     Private Const TV_FIRST As Integer = &H1100
@@ -109,12 +105,8 @@ Partial Class Form1
     Private Const RDW_INVALIDATE As Integer = &H1               ' debugForm resize 時閃爍, 改手動redraw
     Private Const RDW_UPDATENOW As Integer = &H100              ' debugForm resize 時閃爍, 改手動redraw
     Private Const RDW_ERASE As Integer = &H4                    ' 2026/03/28 by Gemini: 補上缺失定義
-    Private Const RDW_FRAME As Integer = &H400                  ' 2026/03/28 by Gemini: 補上缺失定義
 
     ' ↓ 新增 (2026-03-20) ListView1 進入資料夾用
-    Private Const TVM_SELECTITEM As Integer = &H110B            ' = &H1100 + 11
-    Private Const TVGN_CARET As Integer = &H9                   ' SendMessage 選取 Treeview 游標節點
-    Private Const LVM_SETITEMCOUNT As Integer = &H1000 + 47     ' = &H102F '
     Private Const WM_SETREDRAW As Integer = &HB                 ' 2026/3/26 by Gemini
     Private Const WM_SIZE As Integer = &H5                      ' 視窗尺寸變更訊息, 2026/5/7 by Claude
     Private Const SIZE_MAXIMIZED As Integer = 2                 ' WM_SIZE wParam: 最大化
@@ -125,8 +117,8 @@ Partial Class Form1
 #Region "■ 99 舊版備用 (勿刪)"
 
     ' 定義排序方式的列舉
-    'Private lv3SortOrder As SortOrder = SortOrder.Ascending    ' 設置初始排序方式為升序
-    'Private lv3LastSortColumn As Integer = -1                  ' 儲存上一次點選的列索引
+    'Private _lv3SortOrder As SortOrder = SortOrder.Ascending    ' 設置初始排序方式為升序
+    'Private _lv3LastSortColumn As Integer = -1                  ' 儲存上一次點選的列索引
     Friend Class ListViewItemComparer ' 用於比較 ListView 項目並依Column 進行排序
         Implements IComparer
         Private ReadOnly columnIndex As Integer
@@ -450,6 +442,335 @@ Partial Class Form1
         'End Try
 
     End Sub
+
+    Private Async Function ForceTvRefresh_old(tv As SimTree) As Task
+        ' ── SimTree F5 強制刷新 ──────────────────────────────────────────────
+        ' 職責: 不讀任何快取，重新從 Outlook COM 讀取整棵資料夾樹並更新 _cacheFolderTree
+        '       ① 記錄目前展開路徑 + 選取路徑
+        '       ② 清 _cacheFolderTree (確保 LoadSubFolderToTreeView 重讀 COM)
+        '       ③ Nodes.Clear + LoadStoreToTreeView (重建 root 層)
+        '       ④ 逐層 node.Expand() 重建已展開路徑 (觸發 LoadSubFolderToTreeView)
+        '       ⑤ 還原選取，透過 FireAfterSelect 觸發正常 AfterSelect 流程更新 ListView
+        '
+        ' 2026/05/13 by Claude Sonnet 4.6
+        ' 2026/05/17 by Simon/Claude: ⑤ 改回 FireAfterSelect，解決 ListView 未更新的問題
+        '   原本直接呼叫 ComputeTab1FolderStats + RenderLv1 的方式繞過了 SimTree 標準流程，
+        '   導致 AfterSelect 沒有被觸發，ListView 顯示內容不對應選取的資料夾。
+        ' 2026/05/25 by Simon/Claude: 再度重構使用呼叫simTree內部方法
+        ' ─────────────────────────────────────────────────────────────────────
+        _dbg("開始", tv.Name)
+        If _pstStoreList Is Nothing OrElse _pstStoreList.Count = 0 Then Return
+
+        ' ① 記錄展開路徑與選取路徑
+        Dim expandedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        CollectExpandedPaths(tv.Nodes, expandedPaths)
+
+        Dim selectedPaths As New List(Of String)(32)
+        For Each node As TreeNode In tv.SelectedNodes
+            Dim f As Outlook.Folder = TryCast(node.Tag, Outlook.Folder)
+            If f IsNot Nothing Then selectedPaths.Add(SafeGetPath(f))
+        Next
+
+        ProgressBar1.Text = $"F5: 重整 {tv.Name}..." : ProgressBar2.Text = ""
+        _isUserBusy = True : Cursor = Cursors.WaitCursor
+
+        Try
+            ' ② 清 _cacheFolderTree（確保 GetSortedSubFolders 重讀 COM，不用舊快取）
+            _cacheFolderTree.Clear()
+
+            ' ③ 重建 root 層
+            tv.ClearSelectedNodes()
+            tv.Nodes.Clear()
+            LoadStoreToTreeView(_pstStoreList, tv)
+
+            ' ④ 逐條路徑重展開（node.Expand() 觸發 BeforeExpand → LoadSubFolderToTreeView → 新鮮 COM）
+            For Each path In expandedPaths.OrderBy(Function(p) p.Length)   ' 由淺到深確保父節點先展開
+                ReExpandNodeByPath(tv, path)
+                Dim unused = TimeBeginPeriod(1)
+                Await Task.Delay(1)
+                Dim unused1 = TimeEndPeriod(1)
+            Next
+
+            ' ⑤ 還原選取
+            Dim firstNode As TreeNode = Nothing
+            For Each path In selectedPaths
+                ' by Gemini 3.5 Flash, 2026/05/21: 改用 tv.GetNodeIn 高效尋路引擎，取代舊有的暴力遞迴 FindNodeByPath
+                Dim found As TreeNode = tv.GetNode(path, searchOnlyExpanded:=True)
+                If found IsNot Nothing Then
+                    tv.AddSelectedNode(found)
+                    If firstNode Is Nothing Then firstNode = found
+                End If
+            Next
+
+            If firstNode IsNot Nothing Then
+                firstNode.EnsureVisible()
+                ' 2026/05/17 by Simon/Claude:
+                tv.FireAfterSelect(firstNode)
+                ' 改回 FireAfterSelect，讓 SimTree1_AfterSelect 自行處理統計與 RenderLv1，這才是 SimTree 的標準觸發流程。
+                ' 原本直接呼叫 ComputeTab1FolderStats 的方式導致 ListView1 未被正確更新。
+            Else
+                GotoDefaultInbox(tv)   ' 找不到舊選取時退回預設 Inbox
+            End If
+
+            ProgressBar1.Text = $"F5: {tv.Name} 重整完成" : ProgressBar2.Text = ""
+
+        Catch ex As System.Exception
+            _dbg("錯誤", ex.Message) : ProgressBar1.Text = $"F5 {tv.Name} 失敗: " & ex.Message
+        Finally
+            Cursor = Cursors.Default : _isUserBusy = False : _dbg("結束", tv.Name)
+        End Try
+    End Function
+    Private Sub CollectExpandedPaths(nodes As TreeNodeCollection, paths As HashSet(Of String))
+        ''' <summary>遞迴收集已展開節點的 FolderPath，供 F5 刷新前記錄狀態用</summary>
+        For Each n As TreeNode In nodes
+            Dim f As Outlook.Folder = TryCast(n.Tag, Outlook.Folder)
+            If f Is Nothing Then Continue For   ' 跳過 ":::" 佔位節點
+            If n.IsExpanded Then
+                paths.Add(SafeGetPath(f))
+                CollectExpandedPaths(n.Nodes, paths)
+            End If
+        Next
+    End Sub
+    Private Sub ReExpandNodeByPath(tv As SimTree, fullPath As String)
+        ' by Gemini 3.5 Flash, 2026/05/21: 重構以使用底層高效的尋路與展開機制，取代舊的手動逐層循環暴力比對，以防佔用執行緒
+        Dim found As TreeNode = Nothing
+        If tv.TryGetNode(fullPath, found, searchOnlyExpanded:=False, expandAlongTheWay:=True) Then
+            If found IsNot Nothing AndAlso Not found.IsExpanded AndAlso found.Nodes.Count > 0 Then found.Expand()
+        End If
+    End Sub
+    Private Async Function RenewCacheToDB_old(includeSize As Boolean) As Task
+        '    ' ---------------------------------------------------------------
+        '    ' RenewCacheToDB — 完整更新 DB 快取 (對應 Setting 頁 RenewCache 按鈕) 
+        '    '
+        '    ' 與 SaveCachesToDB 的差異：
+        '    '   SaveCache  = 把目前記憶體快取照單全收寫入 DB (不更新過期的值) 
+        '    '   RenewCache = 先用 COM 比對 snapshot → 只對有變動的資料夾重新計算 → 寫入 DB
+        '    '
+        '    ' 流程：
+        '    '   Phase 1. BFS 掃出所有 live folders (COM，~1ms/資料夾) 
+        '    '   Phase 2. 每個 folder 讀 GetLiveFolderSnapL3 vs DB snapshot → 找 dirty folders
+        '    '   Phase 3. 對每個 dirty folder 重新計算：
+        '    '              mc/fc (快，~1ms) 
+        '    '              year_counts (GetTable + GetArray，~10-50ms/資料夾) 
+        '    '              month_counts (清記憶體， Phase5 清 DB， 展開時 lazy 重算) 
+        '    '              attach_maillist (GetTable 三路比對，~5ms/資料夾) 
+        '    '              folder_size (選擇性，依 includeSize，GetTable 遍歷，~10-30s/大資料夾) 
+        '    '              清除 mca/fca/fsa 聚合快取 (讓下次點選重算) 
+        '    '              清除此 folder 的 month_counts 記憶體快取 (不重算，展開年份時 lazy) 
+        '    '   Phase 4. 清除所有 dirty folders 的 ancestor 聚合快取
+        '    '   Phase 5. 批次 DELETE dirty folders 的 month_counts DB rows (不是孤兒，不靠 Cleanup) 
+        '    '   Phase 6. CleanupOrphanFolderPath → SaveCachesToDB
+        '    '
+        '    ' 不更新項目 (設計邊界) ：
+        '    '   attach_filenames — 最耗時，留給使用者搜尋附件時 lazy 觸發
+        '    '   month_counts     — 清記憶體 + 清 DB，展開年份時 lazy 重算
+        '    ' 2026/04/09 by Claude
+        '    ' ---------------------------------------------------------------
+        '    ' 2026/04/16 by Simon/Claude: 加入 cToken (OkayNowYouHaveToken)，取代 _cancelRequested + GoTo Cancelled 模式
+        '    '   Phase1 改用 Dictionary(Of String, Outlook.Folder) liveDict，每個資料夾只讀一次 FolderPath COM 屬性，
+        '    '   Phase2/3/4 迭代 dict 的 Key/Value，完全省去重複的 folder.FolderPath COM 呼叫（~500 資料夾省 ~250ms）
+        '    '   Phase2/3 節流改用 SmartThrottle(sw, cToken, ThrottleFreq.Low)，取代 Mod N + Task.Delay(1)
+        '    '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
+        '    ' ---------------------------------------------------------------
+
+        '    Dim cToken As Threading.CancellationToken = OkayNowYouHaveToken()  ' ✅ 取得新 Token，同時取消上一次未完成的操作
+        '    _dbg("開始", $"includeSize={includeSize}")
+        '    If _db Is Nothing Then _dbg("", "DB 未初始化") : Return
+
+        '    Dim sw As New Diagnostics.Stopwatch : sw.Start()
+        '    Try
+        '        ' ── Phase 1: BFS 掃出所有 live folders ──
+        '        ' 2026/04/16: 改用 Dictionary(Of String, Outlook.Folder) liveDict
+        '        '   key = FolderPath (一次 COM 呼叫)，value = Folder 物件
+        '        '   後續 Phase2/3/4 直接用 kvp.Key 作 fPath，不再打 folder.FolderPath
+        '        ProgressBar1.Text = "RenewCache Phase1: 掃描資料夾清單..." : Cursor = Cursors.WaitCursor
+        '        Await Task.Yield
+
+        '        Dim liveDict As New Dictionary(Of String, Outlook.Folder)()
+        '        For Each store As Outlook.Store In _pstStoreList
+        '            Dim root As Outlook.Folder = TryCast(store.GetRootFolder(), Outlook.Folder)
+        '            If root Is Nothing Then Continue For
+
+        '            ' 2026/04/24 by Gemini 3.0 flash: 使用 SafeGetPath 確保 root 取得安全
+        '            Dim rootPath As String = SafeGetPath(root)
+        '            If String.IsNullOrEmpty(rootPath) Then Continue For
+
+        '            ' 2026/04/16 by Gemini: GetSubtreeToList 現在直接回傳 Tuple (Folder, FolderPath)
+        '            ' 直接將計算好的路徑存入 liveDict，完成 0 COM Call 的清單建立
+        '            For Each item In Await GetSubtreeToList(root, includeSubF:=True, cToken:=cToken)
+        '                If Not liveDict.ContainsKey(item.fPath) Then liveDict.Add(item.fPath, item.folder)
+        '            Next
+        '        Next
+        '        Dim livePaths As New HashSet(Of String)(liveDict.Keys)  ' 供 Phase6 CleanupOrphan 使用
+        '        _dbg("Phase1 完成", $"{liveDict.Count} 個 live folder")
+
+        '        ' ── Phase 2: 比對 snapshot → 找出 dirty folders ──
+        '        ' 2026/04/16: 迭代 liveDict，kvp.Key 直接當 fPath，省去 folder.FolderPath COM 呼叫
+        '        '   節流改用 SmartThrottle(swThrottle2, cToken, ThrottleFreq.Low)，取代 Mod 100 + Task.Delay(1)
+        '        ProgressBar1.Text = $"RenewCache Phase2: 比對 snapshot (共 {liveDict.Count} 個) ..."
+        '        Dim dirtyDict As New Dictionary(Of String, Outlook.Folder)()
+        '        ' by Claude Sonnet 4.6, 2026/04/25: 區分兩種「dirty」語意
+        '        '   isNewFolder = True  → DB 從未記錄（清空後首次，或真正新資料夾）
+        '        '                         Phase 3 只算 mc/fc/year_counts，跳過 attach_maillist 重掃
+        '        '                         attach_maillist 交由使用者搜尋附件時 lazy 觸發
+        '        '   isNewFolder = False → snapshot 不符（真正有信件增減）
+        '        '                         Phase 3 完整重算包含 attach_maillist（三路比對）
+        '        ' 這樣清空快取後執行 RenewCache，不會因為所有資料夾都「看起來像新的」而偷跑全量 GetTable 掃描，產生 2 萬筆非預期的 attach_maillist 內容。
+        '        Dim dirtyNewFolderSet As New HashSet(Of String)()  ' 記錄 isNewFolder=True 的路徑
+        '        Dim processed As Integer = 0
+        '        Dim swThrottle2 As New Stopwatch : swThrottle2.Start()
+        '        For Each kvp In liveDict
+        '            cToken.ThrowIfCancellationRequested()  ' 2026/04/16: 取代 _cancelRequested + GoTo Cancelled
+        '            Dim fPath As String = kvp.Key : Dim folder As Outlook.Folder = kvp.Value
+        '            Dim liveSnap As Integer = GetLiveFolderSnapL3(folder, fPath:=fPath)   ' ~0.5ms，PropertyAccessor 單次呼叫 by Gemini 3.0 flash, 2026/04/16
+        '            Dim row = DbGetFolderStats(fPath)
+
+        '            ' dirty 條件：DB 無此路徑 (新資料夾) OR snapshot 不一致 (有信件增減)
+        '            Dim isNewFolder As Boolean = (row Is Nothing)
+        '            If isNewFolder OrElse row.snap <> liveSnap Then
+        '                dirtyDict.Add(fPath, folder)
+        '                If isNewFolder Then
+        '                    dirtyNewFolderSet.Add(fPath)  ' 全新資料夾，Phase 3 跳過 attach_maillist
+
+        '                    ' by Gemini 3.0 flash, 2026/04/24: 新資料夾確保 ID 被快取，Phase 6 寫入時需要 entry_id
+        '                    _cacheFolderIDs.TryAdd(fPath, (folder.EntryID, folder.StoreID, IsMailFolder(folder, fPath), TextHasChineseChar(ExtractFolderName(fPath))))
+
+        '                    ' 使父資料夾的樹狀快取失效，確保刷新 UI 後能顯示新成員
+        '                    Dim parentPath As String = GetParentPath(fPath)
+        '                    If Not String.IsNullOrEmpty(parentPath) Then
+        '                        ' 清除父路徑的所有顯示模式快取 (|True 與 |False)
+        '                        _cacheFolderTree.TryRemove(parentPath & "|True", Nothing)
+        '                        _cacheFolderTree.TryRemove(parentPath & "|False", Nothing)
+        '                    End If
+        '                End If
+        '            End If
+
+        '            processed += 1
+        '            ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + SmartThrottle 與 onThrottled 委派
+        '            Await SmartThrottle(swThrottle2, cToken:=cToken, ThrottleFreq.Low,
+        '                                      Sub() ProgressBar1.Text = $"RenewCache Phase2: {processed}/{liveDict.Count}，dirty={dirtyDict.Count} (新={dirtyNewFolderSet.Count})...")
+        '        Next
+        '        _dbg("Phase2 完成", $"dirty={dirtyDict.Count}/{liveDict.Count} (其中全新資料夾={dirtyNewFolderSet.Count})")
+
+        '        ' ── Phase 3: 對每個 dirty folder 重新計算 ──
+        '        ' 2026/04/16: 迭代 dirtyDict，省去 folder.FolderPath COM 呼叫
+        '        '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
+        '        '   節流改用 SmartThrottle(swThrottle3, cToken, ThrottleFreq.Low)，取代 Mod 10 + Task.Delay(1)
+        '        ProgressBar1.Text = $"RenewCache Phase3: 更新 {dirtyDict.Count} 個 dirty 資料夾..." : Await Task.Delay(1, cToken)
+        '        processed = 0
+        '        Dim swThrottle3 As New Stopwatch : swThrottle3.Start()
+        '        For Each kvp In dirtyDict
+        '            cToken.ThrowIfCancellationRequested()  ' 2026/04/16: 取代 _cancelRequested + GoTo Cancelled
+        '            Dim fPath As String = kvp.Key : Dim folder As Outlook.Folder = kvp.Value
+
+        '            ' mc / fc — 快，~1ms，直接覆蓋記憶體快取
+        '            _cacheMailCount(fPath) = GetMailCountL3(folder, fPath:=fPath)
+        '            _cacheFolderCount(fPath) = GetFolderCountL3(folder, fPath:=fPath)
+
+        '            ' year_counts — 清記憶體強制 L3 重算，結果回寫快取
+        '            _cacheYearCounts.TryRemove(fPath, Nothing)
+        '            _cacheYearCounts(fPath) = Await GetYearCountsForFolderL3(folder, fPath:=fPath, cToken:=cToken)  ' 2026/04/16: 補 cToken
+
+        '            ' month_counts — 只清記憶體 (Phase5 再清 DB)，展開年份時 lazy 重算
+        '            For Each mk In _cacheMonthCounts.Keys.Where(Function(k) k.StartsWith(fPath & "_")).ToList()
+        '                _cacheMonthCounts.TryRemove(mk, Nothing)
+        '            Next
+
+        '            ' attach_maillist — 三路比對，更新記憶體快取 (不碰 attach_filenames)
+        '            ' by Claude Sonnet 4.6, 2026/04/25: 只對「真正 dirty」（snapshot 不符）的資料夾才重掃附件
+        '            '   全新資料夾（DB 從未記錄）跳過，避免清空快取後 RenewCache 偷跑全量 GetTable 掃描
+        '            '   全新資料夾的 attach_maillist 在使用者執行 Tab3 附件搜尋時透過 lazy load 建立
+        '            If Not dirtyNewFolderSet.Contains(fPath) Then
+        '                Await RenewAttachMailList(folder, fPath:=fPath)
+        '            End If
+
+        '            ' folder_size — 選擇性 (GetTable 遍歷 PR_MESSAGE_SIZE，大資料夾需 10~30s)
+        '            If includeSize Then _cacheFolderSize(fPath) = Await GetFolderSizeL3(folder, fPath:=fPath, cToken:=cToken)  ' 2026/04/16: 補 cToken
+
+        '            ' 聚合快取清除 — 讓 parent 在下次點選時重新 BFS 加總
+        '            ' by Claude Sonnet 4.6, 2026/04/25: 同時清除 |True 和 |False 兩個模式的鍵值
+        '            '   因應未來 _showAllFolders 分支鍵值架構，確保兩個模式的過期聚合都被清掉
+        '            _cacheMailCountAll.TryRemove(fPath & "|True", Nothing)
+        '            _cacheMailCountAll.TryRemove(fPath & "|False", Nothing)
+        '            _cacheMailCountAll.TryRemove(fPath, Nothing)    ' 兼容舊鍵值（無分支時寫入的）
+        '            _cacheFolderCountAll.TryRemove(fPath & "|True", Nothing)
+        '            _cacheFolderCountAll.TryRemove(fPath & "|False", Nothing)
+        '            _cacheFolderCountAll.TryRemove(fPath, Nothing)  ' 同上
+        '            _cacheFolderSizeAll.TryRemove(fPath, Nothing)
+
+        '            processed += 1
+        '            ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Low + SmartThrottle 與 onThrottled 委派
+        '            Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Low,
+        '                                      Sub() ProgressBar1.Text = $"RenewCache Phase3: {processed}/{dirtyDict.Count} 個處理中...")
+        '        Next
+        '        _dbg("Phase3 完成", $"{processed} 個 dirty folder 重新計算完畢")
+
+        '        ' ── Phase 4: 清除 dirty folders 的 ancestor 聚合快取 ──
+        '        ' 任何 dirty leaf 都讓所有 ancestor 的 mca/fca/fsa 失效
+        '        ' 2026/04/16: 改迭代 liveDict.Keys，直接用 key 作 fPath，省去 fs.FolderPath COM 呼叫
+        '        ' by Gemini 3.0 flash, 2026/04/24: 優化為「精確打擊」模式，改用 GetAncestors 直接清除，效能從 O(N*D) 降至 O(D*L)
+        '        If dirtyDict.Count > 0 Then
+        '            For Each dp In dirtyDict.Keys
+        '                For Each ancestor In GetAncestors(dp)
+        '                    ' by Claude Sonnet 4.6, 2026/04/25: 同時清除 |True / |False 兩個模式鍵值及舊式鍵值
+        '                    _cacheMailCountAll.TryRemove(ancestor & "|True", Nothing)
+        '                    _cacheMailCountAll.TryRemove(ancestor & "|False", Nothing)
+        '                    _cacheMailCountAll.TryRemove(ancestor, Nothing)
+        '                    _cacheFolderCountAll.TryRemove(ancestor & "|True", Nothing)
+        '                    _cacheFolderCountAll.TryRemove(ancestor & "|False", Nothing)
+        '                    _cacheFolderCountAll.TryRemove(ancestor, Nothing)
+        '                    _cacheFolderSizeAll.TryRemove(ancestor, Nothing)
+        '                Next
+        '            Next
+        '            _dbg("Phase4 完成", $"已針對 {dirtyDict.Count} 個異動路徑精確清除祖先快取 (含 |True/|False 模式鍵值)")
+        '        End If
+
+        '        ' ── Phase 5: 批次 DELETE dirty folders 的 month_counts DB rows ──
+        '        ' 注意: CleanupOrphan 只刪「不再存在的路徑」，不刪「仍存在但 dirty」的路徑
+        '        '       所以 dirty folder 的舊 month rows 必須在這裡主動清除
+        '        Dim dirtyPaths As New HashSet(Of String)(dirtyDict.Keys)  ' 供 Phase 5 使用
+        '        If dirtyPaths.Count > 0 AndAlso _db IsNot Nothing Then
+        '            Await Task.Run(Sub()
+        '                               Using txn = _db.BeginTransaction()
+        '                                   Try
+        '                                       Using cmd As New SqliteCommand("DELETE FROM month_counts WHERE folder_path=@p", _db, txn)
+        '                                           cmd.Parameters.Add("@p", SqliteType.Text)
+        '                                           For Each dp In dirtyPaths
+        '                                               cmd.Parameters("@p").Value = dp : cmd.ExecuteNonQuery()
+        '                                           Next
+        '                                       End Using
+        '                                       txn.Commit()
+        '                                   Catch : txn.Rollback() : Throw
+        '                                   End Try
+        '                               End Using
+        '                           End Sub)
+        '            _dbg("Phase5 完成", $"已清 {dirtyPaths.Count} 個 dirty folder 的 month_counts DB rows")
+        '        End If
+
+        '        ' ── Phase 6: 孤兒清除 + 批次寫入 ──
+        '        ProgressBar1.Text = "RenewCache Phase6: 清孤兒 + 寫入 DB..." : Await Task.Delay(1, cToken)
+        '        Await CleanupOrphanPath(livePaths)
+        '        Await SaveCachesToDB()    ' 內部會顯示 SaveCache 的進度訊息
+
+        '        sw.Stop()
+        '        Dim st = GetDBSummary()
+        '        ProgressBar1.Text = $"RenewCache 完成 ✔ dirty:{dirtyDict.Count}/{liveDict.Count} 個 / 耗時:{sw.Elapsed.TotalSeconds:0.0}s — DB:{st.fc}/{st.mb}/{st.at}/{st.yc}/{st.mc} 筆"
+        '        _dbg("完成", $"dirty={dirtyDict.Count}, total={liveDict.Count}, elapsed={sw.Elapsed.TotalSeconds:0.0}s")
+
+        '    Catch ex As OperationCanceledException
+        '        ' 2026/04/16: cToken 取消時 (ESC)，取代原本的 _cancelRequested + GoTo Cancelled 模式
+        '        ProgressBar1.Text = "RenewCache 由使用者中斷"
+        '        _dbg("中斷", "使用者按 ESC")
+        '    Catch ex As System.Exception
+        '        ProgressBar1.Text = $"RenewCache 失敗: {ex.Message}"
+        '        _dbg("錯誤", ex.Message)
+        '    Finally
+        '        Cursor = Cursors.Default
+        '        _dbg("結束")
+        '    End Try
+    End Function
+
+
 #End Region
 
 

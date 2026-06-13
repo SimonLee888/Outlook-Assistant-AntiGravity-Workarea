@@ -79,10 +79,10 @@ Public Class DebugForm
     Private WithEvents QueueTimer As New System.Windows.Forms.Timer() With {.Interval = 100} ' 每 100ms 清空一次message queue
     Private _lastRecalcWidth As Integer = 0
     Private _searchPattern As String = ""
-    Private _lastHighlightedPair As ListViewItem    ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
-    Private _historyDebug As New List(Of String)    ' by AntiGravity, 2026/04/07: 搜尋歷史紀錄
-    Private _historyIndex As Integer = 0            ' by AntiGravity, 2026/04/07: 目前歷史紀錄索引 (與 Count 相同時代表原始輸入區)
-    Private _tempInput As String = ""               ' by AntiGravity, 2026/04/07: 暫存回溯前的原始輸入內容
+    Private _lastHighlightedPair As ListViewItem        ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
+    Private _historyDebug As New List(Of String)(256)   ' by AntiGravity, 2026/04/07: 搜尋歷史紀錄
+    Private _historyIndex As Integer = 0                ' by AntiGravity, 2026/04/07: 目前歷史紀錄索引 (與 Count 相同時代表原始輸入區)
+    Private _tempInput As String = ""                   ' by AntiGravity, 2026/04/07: 暫存回溯前的原始輸入內容
     Private Class DebugItemTag          ' 2026/3/28 by Gemini: 定義快取結構，加速 OwnerDraw 繪製
         Public textFullRow As String    ' 預先合併好的整行小寫文字 (用於搜尋)
         Public isHit As Boolean         ' 是否命中目前搜尋關鍵字
@@ -91,31 +91,24 @@ Public Class DebugForm
 #End Region
 
 #Region "■ 03 表單生命週期"
-    Private Sub DebugForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        ' 2026/04/01 by Gemini: 恢復 ListView 內建雙緩衝設置
-        ' 先前為了排查 2000px 高度 Bug 暫時移除，現已確認該 Bug 兇手為 ClientSizeChanged 內的 BeginUpdate。
-        ' 恢復此設定可徹底避免 AddMessage3 (Timer 批次新增) 時產生的背景擦除閃爍。
-        Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
-        If pi IsNot Nothing Then pi.SetValue(lvwDebug, True, Nothing)
-
-        _previousTimestamp = Now
-        QueueTimer.Start()          ' .Interval = 100
-
-        ' 💡 2026/04/13 by Gemini 3 Flash: 註冊 HandleCreated，確保 ListView 重建時修復依然生效
-        AddHandler lvwDebug.HandleCreated, AddressOf OnLvwHandleCreated
-
+    Protected Overrides Sub WndProc(ByRef m As Message)
+        ' 💡 2026/04/11 by Claude Opus 4.6: 攔截 WM_SIZE 修復最大化/還原時 ListView 項目消失
+        ' 原因：雙擊標題列觸發的 WindowState 切換是瞬間完成的（不像拖動是漸進式），
+        ' OwnerDraw ListView 在項目不足以填滿視窗高度時，內部繪製管線會誤判不需要重繪。
+        ' 解法：在最大化/還原完成後，強制觸發一次 Invalidate() 讓 ListView 重新繪製所有可視項目。
+        MyBase.WndProc(m)
+        If m.Msg = WM_SIZE Then
+            Dim sizeType As Integer = m.WParam.ToInt32()
+            If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
+                ' 在 base.WndProc 之後執行，確保佈局已完成結算
+                lvwDebug.Invalidate()
+            End If
+        End If
     End Sub
-    ''' <summary>
-    ''' 2026/04/13 by Gemini 3 Flash: 當 ListView Handle 建立時，自動重新套用樣式修復與 ToolTip 隔離
-    ''' </summary>
-    Private Sub OnLvwHandleCreated(sender As Object, e As EventArgs)
-        ApplyListViewFixes()
-    End Sub
-
-    ''' <summary>
-    ''' 2026/04/13 by Gemini 3 Flash: 集中處理 Win32 樣式修復 (LabelTip 移除、隔離 ToolTip、原生雙緩衝)
-    ''' </summary>
     Private Sub ApplyListViewFixes()
+        ''' <summary>
+        ''' 2026/04/13 by Gemini 3 Flash: 集中處理 Win32 樣式修復 (LabelTip 移除、隔離 ToolTip、原生雙緩衝)
+        ''' </summary>
         Try
             ' 1. 移除 LVS_EX_LABELTIP (防止 OwnerDraw 時出現鬼影文字標籤)
             '       💡 2026/04/11 by Claude Opus 4.6 移除 LVS_EX_LABELTIP 擴充樣式
@@ -141,7 +134,26 @@ Public Class DebugForm
         End Try
 
     End Sub
+    Private Sub OnLvwHandleCreated(sender As Object, e As EventArgs)
+        ''' <summary>
+        ''' 2026/04/13 by Gemini 3 Flash: 當 ListView Handle 建立時，自動重新套用樣式修復與 ToolTip 隔離
+        ''' </summary>
+        ApplyListViewFixes()
+    End Sub
+    Private Sub DebugForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+        ' 2026/04/01 by Gemini: 恢復 ListView 內建雙緩衝設置
+        ' 先前為了排查 2000px 高度 Bug 暫時移除，現已確認該 Bug 兇手為 ClientSizeChanged 內的 BeginUpdate。
+        ' 恢復此設定可徹底避免 AddMessage3 (Timer 批次新增) 時產生的背景擦除閃爍。
+        Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
+        If pi IsNot Nothing Then pi.SetValue(lvwDebug, True, Nothing)
 
+        _previousTimestamp = Now
+        QueueTimer.Start()          ' .Interval = 100
+
+        ' 💡 2026/04/13 by Gemini 3 Flash: 註冊 HandleCreated，確保 ListView 重建時修復依然生效
+        AddHandler lvwDebug.HandleCreated, AddressOf OnLvwHandleCreated
+
+    End Sub
     Private Sub DebugForm_Shown(sender As Object, e As EventArgs) Handles Me.Shown
         ' ==============================================================
         ' by Gemini, 2026/04/01: 將重型 UI 佈局校算移到 Shown 事件
@@ -188,10 +200,10 @@ Public Class DebugForm
         ' 7. 初始化欄位
         With lvwDebug.Columns
             .Clear()
-            .Add("Debug Message", 400, HorizontalAlignment.Left) ' 寬度會在 Load 時被 RecalcColumnWidths 調整，這裡先給個預設值
+            .Add("Debug Message", 400, HorizontalAlignment.Left)    ' 寬度會在 Load 時被 RecalcColumnWidths 調整，這裡先給個預設值
             .Add("Timestamp", 115, HorizontalAlignment.Center)
-            .Add("Step (ms)", 85, HorizontalAlignment.Right)      ' by Gemini 1.5 Pro, 2026/04/11: 原 Time Span，顯示物理步進間隔
-            .Add("Elapsed (ms)", 85, HorizontalAlignment.Right)   ' by Gemini 1.5 Pro, 2026/04/11: 新增，顯示函數從開始到結束的總耗時
+            .Add("Step (ms)", 85, HorizontalAlignment.Right)        ' by Gemini 1.5 Pro, 2026/04/11: 原 Time Span，顯示物理步進間隔
+            .Add("Elapsed (ms)", 85, HorizontalAlignment.Right)     ' by Gemini 1.5 Pro, 2026/04/11: 新增，顯示函數從開始到結束的總耗時
             '.Insert(0, New ColumnHeader() With {.Text = "Debug Message", .Width = -2,    ' 2026/3/28 by Gemini: Width=-2 讓第一欄自動填滿剩餘空間，避免寫死寬度在 Load 時擠掉右側欄位
             '                                    .TextAlign = HorizontalAlignment.Left})
         End With
@@ -227,21 +239,6 @@ Public Class DebugForm
         ApplyListViewFixes()
 
     End Sub
-    ' 💡 2026/04/11 by Claude Opus 4.6: 攔截 WM_SIZE 修復最大化/還原時 ListView 項目消失
-    ' 原因：雙擊標題列觸發的 WindowState 切換是瞬間完成的（不像拖動是漸進式），
-    ' OwnerDraw ListView 在項目不足以填滿視窗高度時，內部繪製管線會誤判不需要重繪。
-    ' 解法：在最大化/還原完成後，強制觸發一次 Invalidate() 讓 ListView 重新繪製所有可視項目。
-    Protected Overrides Sub WndProc(ByRef m As Message)
-        MyBase.WndProc(m)
-        If m.Msg = WM_SIZE Then
-            Dim sizeType As Integer = m.WParam.ToInt32()
-            If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
-                ' 在 base.WndProc 之後執行，確保佈局已完成結算
-                lvwDebug.Invalidate()
-            End If
-        End If
-    End Sub
-
     Private Sub DebugForm_FormClosed(sender As Object, e As FormClosedEventArgs) Handles Me.FormClosed
         Form1.CheckDebug.Checked = False
     End Sub
@@ -350,11 +347,73 @@ Public Class DebugForm
         _msgQueue.Enqueue(newItem)                      ' 2026-03-25 by Gemini: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
 
     End Sub
+    Private Function WhoCallsMe(Optional skipLevels As Integer = 1) As String
+        ' ================================================================
+        ' WhoCallsMe: 若Form1 傳入時未指定呼叫者, 自行從 stack trace 解析呼叫者
+        ' skipLevels: 要跳過幾層 wrapper (預設 1 = 跳過 AddMessage3 本身)
+        ' 2026-03-23: 統一為 Form1.WhoCallsMe 的邏輯風格
+        ' ================================================================
+        Dim st As New StackTrace(skipLevels + 1, False)
+        For i As Integer = 0 To st.FrameCount - 1
+            Dim m = st.GetFrame(i)?.GetMethod()
+            If m IsNot Nothing AndAlso
+                m.DeclaringType IsNot Nothing AndAlso
+                m.DeclaringType IsNot GetType(DebugForm) AndAlso
+                Not m.Name.Contains("Dbg") AndAlso
+                m.Name <> "MoveNext" Then : Return $"{m.DeclaringType.Name}.{m.Name}"
+            End If
+        Next
+        Return "Unknown Method"
+
+    End Function
+    Public Shared Function GetCallerName(Optional skipLevels As Integer = 2) As String
+        ''' <summary>
+        ''' 2026/03/31 by Gemini: 集中化追蹤呼叫者名稱，支援 Async 非同步方法解析與編譯器生成的狀態機器名稱還原
+        ''' </summary>
+        ''' <param name="skipLevels">跳過的堆疊層次 (自 GetCallerName 的呼叫層算起)</param>
+        ' 2026/03/31 by Gemini: 依照先前計畫重構，
+
+        ' 使用 st.FrameCount 遍歷以確保在複雜非同步環境下仍能抓到正確層級
+        Dim st As New StackTrace(skipLevels, False)
+        For i As Integer = 0 To st.FrameCount - 1
+            Dim frame As StackFrame = st.GetFrame(i)
+            Dim m As MethodBase = frame.GetMethod()
+            If m Is Nothing OrElse m.DeclaringType Is Nothing Then Continue For
+
+            ' 排除 DebugForm 內部成員與 _dbg 相關噪音
+            Dim typeName As String = m.DeclaringType.Name
+            If m.DeclaringType Is GetType(DebugForm) OrElse typeName.Contains("DebugForm") Then Continue For
+            If m.Name.Contains("Dbg") OrElse m.Name.Contains("WhoCallsMe") Then Continue For
+
+            ' 💡 處理 Async 非同步狀態機器 (MoveNext)
+            If m.Name = "MoveNext" AndAlso m.DeclaringType.GetInterface("IAsyncStateMachine") IsNot Nothing Then
+                ' 1. VB.NET 格式: VB$StateMachine_123_MethodName
+                Dim matchVB = Regex.Match(typeName, "^VB\$StateMachine_\d+_(.*)$")
+                If matchVB.Success Then
+                    Dim originalName As String = matchVB.Groups(1).Value
+                    Dim parentType = m.DeclaringType.DeclaringType ' 狀態機器類別的上一層通常就是原始類別
+                    Return If(parentType IsNot Nothing, $"{parentType.Name}.{originalName} [Async]", $"{originalName} [Async]")
+                End If
+
+                ' 2. C# 格式: <MethodName>d__XX (兼顧未來可能混合 C# 專案的情況)
+                Dim matchCS = Regex.Match(typeName, "^<(.*)>d__.*$")
+                If matchCS.Success Then
+                    Dim originalName As String = matchCS.Groups(1).Value
+                    Dim parentType = m.DeclaringType.DeclaringType
+                    Return If(parentType IsNot Nothing, $"{parentType.Name}.{originalName} [Async]", $"{originalName} [Async]")
+                End If
+            End If
+            ' 一般同步方法
+            Return $"{m.DeclaringType.Name}.{m.Name}"
+        Next
+        Return "Unknown Caller"
+
+    End Function
     Private Sub Timer_Tick(sender As Object, e As EventArgs) Handles QueueTimer.Tick
         ' 2026-03-25 by Gemini: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
         If _msgQueue.IsEmpty Then Return
 
-        Dim itemsToAdd As New List(Of ListViewItem)()
+        Dim itemsToAdd As New List(Of ListViewItem)(256)
         Dim item As ListViewItem = Nothing
         While _msgQueue.TryDequeue(item) : itemsToAdd.Add(item) : End While
 
@@ -400,68 +459,6 @@ Public Class DebugForm
         End If
 
     End Sub
-    Private Function WhoCallsMe(Optional skipLevels As Integer = 1) As String
-        ' ================================================================
-        ' WhoCallsMe: 若Form1 傳入時未指定呼叫者, 自行從 stack trace 解析呼叫者
-        ' skipLevels: 要跳過幾層 wrapper (預設 1 = 跳過 AddMessage3 本身)
-        ' 2026-03-23: 統一為 Form1.WhoCallsMe 的邏輯風格
-        ' ================================================================
-        Dim st As New StackTrace(skipLevels + 1, False)
-        For i As Integer = 0 To st.FrameCount - 1
-            Dim m = st.GetFrame(i)?.GetMethod()
-            If m IsNot Nothing AndAlso
-                m.DeclaringType IsNot Nothing AndAlso
-                m.DeclaringType IsNot GetType(DebugForm) AndAlso
-                Not m.Name.Contains("Dbg") AndAlso
-                m.Name <> "MoveNext" Then : Return $"{m.DeclaringType.Name}.{m.Name}"
-            End If
-        Next
-        Return "Unknown Method"
-
-    End Function
-    ''' <summary>
-    ''' 2026/03/31 by Gemini: 集中化追蹤呼叫者名稱，支援 Async 非同步方法解析與編譯器生成的狀態機器名稱還原
-    ''' </summary>
-    ''' <param name="skipLevels">跳過的堆疊層次 (自 GetCallerName 的呼叫層算起)</param>
-    Public Shared Function GetCallerName(Optional skipLevels As Integer = 2) As String
-        ' 2026/03/31 by Gemini: 依照先前計畫重構，
-
-        ' 使用 st.FrameCount 遍歷以確保在複雜非同步環境下仍能抓到正確層級
-        Dim st As New StackTrace(skipLevels, False)
-        For i As Integer = 0 To st.FrameCount - 1
-            Dim frame As StackFrame = st.GetFrame(i)
-            Dim m As MethodBase = frame.GetMethod()
-            If m Is Nothing OrElse m.DeclaringType Is Nothing Then Continue For
-
-            ' 排除 DebugForm 內部成員與 _dbg 相關噪音
-            Dim typeName As String = m.DeclaringType.Name
-            If m.DeclaringType Is GetType(DebugForm) OrElse typeName.Contains("DebugForm") Then Continue For
-            If m.Name.Contains("Dbg") OrElse m.Name.Contains("WhoCallsMe") Then Continue For
-
-            ' 💡 處理 Async 非同步狀態機器 (MoveNext)
-            If m.Name = "MoveNext" AndAlso m.DeclaringType.GetInterface("IAsyncStateMachine") IsNot Nothing Then
-                ' 1. VB.NET 格式: VB$StateMachine_123_MethodName
-                Dim matchVB = Regex.Match(typeName, "^VB\$StateMachine_\d+_(.*)$")
-                If matchVB.Success Then
-                    Dim originalName As String = matchVB.Groups(1).Value
-                    Dim parentType = m.DeclaringType.DeclaringType ' 狀態機器類別的上一層通常就是原始類別
-                    Return If(parentType IsNot Nothing, $"{parentType.Name}.{originalName} [Async]", $"{originalName} [Async]")
-                End If
-
-                ' 2. C# 格式: <MethodName>d__XX (兼顧未來可能混合 C# 專案的情況)
-                Dim matchCS = Regex.Match(typeName, "^<(.*)>d__.*$")
-                If matchCS.Success Then
-                    Dim originalName As String = matchCS.Groups(1).Value
-                    Dim parentType = m.DeclaringType.DeclaringType
-                    Return If(parentType IsNot Nothing, $"{parentType.Name}.{originalName} [Async]", $"{originalName} [Async]")
-                End If
-            End If
-            ' 一般同步方法
-            Return $"{m.DeclaringType.Name}.{m.Name}"
-        Next
-        Return "Unknown Caller"
-
-    End Function
 #End Region
 
 #Region "■ 05 ListView 操作事件"
@@ -569,6 +566,7 @@ Public Class DebugForm
         ' D5 2026-03-23: 補實作多行複製，需 MultiSelect=True (於 DebugForm_Load 設定)
         If e.KeyCode = Keys.Enter Then
             CalculateSelectedTimeSpan(Nothing, Nothing)    ' Enter 鍵也觸發計算選取耗時的功能，方便快速查看
+
         ElseIf e.Control AndAlso e.KeyCode = Keys.C Then
             Dim selected = lvwDebug.SelectedItems.Cast(Of ListViewItem)().ToList()
             If selected.Count = 0 Then Return
@@ -736,10 +734,10 @@ Public Class DebugForm
         lvwDebug.Refresh()
 
     End Sub
-    ''' <summary>
-    ''' 2026/03/31 by Gemini: 集中標題管理邏輯，解決文字清空未回復、及 logic 切換未同步問題
-    ''' </summary>
     Private Sub UpdateSearchCaption()
+        ''' <summary>
+        ''' 2026/03/31 by Gemini: 集中標題管理邏輯，解決文字清空未回復、及 logic 切換未同步問題
+        ''' </summary>
         If String.IsNullOrWhiteSpace(txtDebug.Text) Then
             Me.Text = "執行期除錯視窗"
         Else
@@ -751,10 +749,10 @@ Public Class DebugForm
 #End Region
 
 #Region "■ 07 輔助函數"
-    ''' <summary>
-    ''' 2026/04/07 by AntiGravity: 攔截搜尋框按鍵，支援 Enter 紀錄歷史與上下鍵回溯
-    ''' </summary>
     Private Sub txtDebug_KeyDown(sender As Object, e As KeyEventArgs)
+        ''' <summary>
+        ''' 2026/04/07 by AntiGravity: 攔截搜尋框按鍵，支援 Enter 紀錄歷史與上下鍵回溯
+        ''' </summary>
         Select Case e.KeyCode
             Case Keys.Enter
                 AddToHistoryDebug(CType(sender, TextBox).Text)
@@ -767,11 +765,10 @@ Public Class DebugForm
                 e.Handled = True
         End Select
     End Sub
-
-    ''' <summary>
-    ''' 2026/04/07 by AntiGravity: 將關鍵字存入歷史紀錄 (去重與限額 50 筆)
-    ''' </summary>
     Private Sub AddToHistoryDebug(query As String)
+        ''' <summary>
+        ''' 2026/04/07 by AntiGravity: 將關鍵字存入歷史紀錄 (去重與限額 50 筆)
+        ''' </summary>
         Dim trimmed = query.Trim()
         If String.IsNullOrEmpty(trimmed) Then Return
         If _historyDebug.Count = 0 OrElse _historyDebug.Last() <> trimmed Then
@@ -781,11 +778,10 @@ Public Class DebugForm
         _historyIndex = _historyDebug.Count
         _tempInput = ""
     End Sub
-
-    ''' <summary>
-    ''' 2026/04/07 by AntiGravity: 導覽歷史紀錄，並處理暫存原始輸入的邏輯
-    ''' </summary>
     Private Sub NavigateHistoryDebug(direction As Integer)
+        ''' <summary>
+        ''' 2026/04/07 by AntiGravity: 導覽歷史紀錄，並處理暫存原始輸入的邏輯
+        ''' </summary>
         If _historyDebug.Count = 0 Then Return
         If _historyIndex = _historyDebug.Count AndAlso direction < 0 Then
             _tempInput = txtDebug.Text
@@ -858,7 +854,7 @@ Public Class DebugForm
     Private Function ParseSearchKeywords(searchText As String) As List(Of String)
         ' 使用 Regex 拆分搜尋關鍵字，支援雙引號括起來的片語
         ' Regex 模式: (?:""(?<q>[^""]*)""|(?<w>\S+))
-        Dim keywords As New List(Of String)()
+        Dim keywords As New List(Of String)(16)
         If String.IsNullOrWhiteSpace(searchText) Then Return keywords
         Dim pattern As String = "(?:""(?<q>[^""]*)""|(?<w>\S+))"
         Dim matches = System.Text.RegularExpressions.Regex.Matches(searchText, pattern)

@@ -496,7 +496,7 @@ Module modToBeDelete
         '    Dim startDate As New Date(year, 1, 1, 0, 0, 0) ' 建立當年的起始日期和結束日期
         '    Dim endDate As New Date(year, 12, 31, 23, 59, 59) ' 設置結束日期的時間為23:59:59
         '    ' 建立篩選字串, 使用 Restrict 方法篩選郵件項目
-        '    Dim restrictFilter As String = $"[ReceivedTime] >= '{startDate}' AND [ReceivedTime] <= '{endDate}'"
+        '    Dim restrictFilter As String = $"[RcvTime] >= '{startDate}' AND [RcvTime] <= '{endDate}'"
         '    Dim restrictedItems As Outlook.Items = selectedFolder.Items.Restrict(restrictFilter)
         '    ' 統計郵件數量並存入字典
         '    Dim intCountOfTheYear As Integer = restrictedItems.Count
@@ -521,7 +521,7 @@ Module modToBeDelete
         '             Sub(year)
         '                 Dim startDate As New Date(year, 1, 1, 0, 0, 0)
         '                 Dim endDate As New Date(year, 12, 31, 23, 59, 59)
-        '                 Dim filter As String = $"[ReceivedTime] >= '{startDate}' AND [ReceivedTime] <= '{endDate}'"
+        '                 Dim filter As String = $"[RcvTime] >= '{startDate}' AND [RcvTime] <= '{endDate}'"
         '                 Dim restrictedItems As Outlook.Items = selectedFolder.Items.Restrict(filter)
         '                 ' 統計郵件數量並存入字典
         '                 Dim intCountOfTheYear As Integer = restrictedItems.Count
@@ -734,7 +734,7 @@ Module modToBeDelete
         'For Each item As MailItem In inputItems
         '    If blnButton3_Stop = True Then Exit For
         '    Try
-        '        Dim cItem As New ListViewItem({item.Subject, item.Size.ToString("###,###,##0"), item.ReceivedTime.ToShortDateString, item.Sender.Name.ToString, item.Attachments.Count, item.EntryID})
+        '        Dim cItem As New ListViewItem({item.Subject, item.Size.ToString("###,###,##0"), item.RcvTime.ToShortDateString, item.Sender.Name.ToString, item.Attachments.Count, item.EntryID})
         '        itemList.Add(cItem)
         '    Catch ex As System.Exception
         '        DebugForm.AddMessage2("Exception: ", ex.Message)
@@ -884,7 +884,7 @@ Module modToBeDelete
         '                           Else
         '                               Dim subject As String = item.Subject
         '                               Dim size As Long = item.Size
-        '                               Dim receivedTime As Date = item.ReceivedTime
+        '                               Dim receivedTime As Date = item.RcvTime
         '                               Dim senderName As String = item.Sender.Name.ToString
         '                               Dim attachmentCount As Integer = item.Attachments.Count
         '                               Dim entryID As String = item.EntryID
@@ -893,7 +893,7 @@ Module modToBeDelete
         '                           End If
         '                           sw5.Stop() : lblStatus3.Text = sw5.Elapsed.TotalSeconds.ToString("0.00, ")
         '                           ' 將快取的值添加到 listview3 中
-        '                           Dim listItem As New ListViewItem({mailItemInfo.Subject, mailItemInfo.Size.ToString("###,###,##0"), mailItemInfo.ReceivedTime.ToShortDateString, mailItemInfo.Sender, mailItemInfo.AttachmentCount, mailItemInfo.EntryID})
+        '                           Dim listItem As New ListViewItem({mailItemInfo.Subject, mailItemInfo.Size.ToString("###,###,##0"), mailItemInfo.RcvTime.ToShortDateString, mailItemInfo.Sender, mailItemInfo.AttachmentCount, mailItemInfo.EntryID})
         '                           ListView3.Invoke(Sub() ListView3.Items.Add(listItem))
         '                           countSum += 1
         '                           Invoke(Sub() lblStatus1.Text = strKeep & " (" & countSum & " / " & inputItems.Count & ")") ' 需要改善: 更新讀取進度的計算方式(分母用GetTotalMailCount?)
@@ -933,7 +933,7 @@ Module modToBeDelete
         '                           Dim cachedItem As Tuple(Of String, Integer, Date, String, Integer, String) = Nothing
         '                           If Not cache.TryGetValue(entryKey, cachedItem) Then
         '                               ' 如果快取中沒有該郵件的資料，則加入快取
-        '                               cachedItem = Tuple.Create(item.Subject, item.Size, item.ReceivedTime, item.Sender.Name, item.Attachments.Count, item.EntryID)
+        '                               cachedItem = Tuple.Create(item.Subject, item.Size, item.RcvTime, item.Sender.Name, item.Attachments.Count, item.EntryID)
         '                               cache.Add(entryKey, cachedItem)
         '                           End If
         '                           ' 將快取中的資料加入到 ListView 中
@@ -955,14 +955,14 @@ Module modToBeDelete
     Private Class CachedMailItemInfo
         '    Public Property Subject As String
         '    Public Property Size As Long
-        '    Public Property ReceivedTime As Date
+        '    Public Property RcvTime As Date
         '    Public Property Sender As String
         '    Public Property AttachmentCount As Integer
         '    Public Property EntryID As String
         '    Public Sub New(subject As String, size As Long, receivedTime As Date, sender As String, attachmentCount As Integer, entryID As String)
         '        Me.Subject = subject
         '        Me.Size = size
-        '        Me.ReceivedTime = receivedTime
+        '        Me.RcvTime = receivedTime
         '        Me.Sender = sender
         '        Me.AttachmentCount = attachmentCount
         '        Me.EntryID = entryID
@@ -1229,7 +1229,7 @@ Module TestCodeFromClaude
     ''            itemList.Add(New ListViewItem({
     ''            mail.Subject,
     ''            mail.Size.ToString("###,###,##0"),
-    ''            mail.ReceivedTime.ToShortDateString,
+    ''            mail.RcvTime.ToShortDateString,
     ''            mail.SenderName,
     ''            mail.Attachments.Count.ToString,
     ''            mail.EntryID}))

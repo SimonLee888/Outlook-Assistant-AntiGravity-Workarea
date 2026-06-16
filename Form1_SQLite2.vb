@@ -34,21 +34,21 @@ Imports Microsoft.Office.Interop
 '       2026-04-22 新增 basic_maillist
 '       2026-06-12 新增 senders；basic_maillist 移除 topic/sender_email/updated_at，received_time 改 INTEGER
 '       folder_stats        (folder_path PK, mail_count, mail_count_all, folder_count, folder_count_all,
-'                            folder_size, folder_size_all, content_count_snap, updated_at)  ← updated_at 僅此表保留
+'                            folder_size, folder_size_all, pr_count_snap, updated_at)  ← updated_at 僅此表保留
 '       year_counts         (folder_hash+year PK, count)
 '       month_counts        (folder_hash+year+month PK, count)
 '       attach_maillist     (entry_id PK, folder_hash, subject, msg_size, received_time INTEGER, sender_name,
-'                            attach_count, item_count_snap)              ← 專供 Tab3 尋找附件使用
+'                            attach_count, pr_count_snap)           ← 專供 Tab3 尋找附件使用
 '       attach_filenames    (entry_id PK, folder_hash, filenames TEXT JSON, msg_size)
 '       basic_maillist      (entry_id PK, folder_hash, subject, msg_size, received_time INTEGER, sender_name,
-'                            sender_id, msgid_hash, item_count_snap)    ← 專供 Tab4/Tab5 系列與重複郵件使用
+'                            sender_id, msgid_hash, pr_count_snap)  ← 專供 Tab4/Tab5 系列與重複郵件使用
 '       senders             (sender_id PK AUTOINCREMENT, sender_email UNIQUE) ← email 正規化，2026-06-12 新增
 '                           
 ' 設計決策 (2026-04-06):
 '   1. 跨表 Transaction 保證原子性，一個 Connection 管理最簡單
 '   2. 手動控制 (SaveCache / LoadCache 按鈕)，Debug 階段方便目視確認正確性
 '      正式版再切換成 Layer2.5 lazy SELECT + 增量寫入
-'   3. content_count_snap 存 _cacheMailCount[path] 的值 (即 PR_CONTENT_COUNT 的讀取結果)
+'   3. pr_count_snap 存 _cacheMailCount[path] 的值 (即 PR_CONTENT_COUNT 的讀取結果)
 '      Load 後可快速判斷快取是否仍有效，完全不需要呼叫任何 COM
 '   4. MailItemInfo 欄位以文字儲存；List(Of String) 附件名稱序列化為 JSON array
 '   5. _cacheFolderTree / _cacheSubTreeList 含 COM 物件，永遠不寫入 SQLite
@@ -66,8 +66,8 @@ Partial Class Form1
     Private _dbPath As String           ' 移除 ReadOnly 與靜態初始化
 
     Private Shared _dictHashToPath As New ConcurrentDictionary(Of Long, String)     ' 路徑雜湊壓縮機制 (2026/06/11 新增)
-    Private Shared _dictEmailToSenderId As New Dictionary(Of String, Integer)       ' 2026/06/12 by Simon/Claude: sender 正規化寫入側：lowercase email → sender_id
-    Private Shared _dictSenderIdToEmail As New Dictionary(Of Integer, String)       ' 2026/06/12 by Simon/Claude: sender 正規化讀取側：sender_id → lowercase email
+    Private Shared _dictEmailToSenderId As New Dictionary(Of String, Integer)       ' 2026/06/12 by Simon/Claude Opus 4.8: sender 正規化寫入側：lowercase email → sender_id
+    Private Shared _dictSenderIdToEmail As New Dictionary(Of Integer, String)       ' 2026/06/12 by Simon/Claude Opus 4.8: sender 正規化讀取側：sender_id → lowercase email
 
     ' DB Row 結構 (供 Form1_Outlook.vb 的 Layer2.5 函數使用)
     Friend Class FolderStatsDbRow
@@ -78,7 +78,7 @@ Partial Class Form1
         Public fca As Long = -1         ' folder_count_all
         Public fs As Long = -1          ' folder_size
         Public fsa As Long = -1         ' folder_size_all
-        Public snap As Long = -1        ' content_count_snap (= PR_CONTENT_COUNT at save time)
+        Public snap As Long = -1        ' pr_count_snap (= PR_CONTENT_COUNT at save time)
         Public path As String = ""      ' folder_path        ' by Gemini 3.0 flash, 2026/04/16: 新增路徑標識，供 GetSubtreeToList Tuple 重建使用
 
         ' by Gemini, 2026/04/10: 新增身分標識與排序標籤，供 TreeView/BFS 持久化優化使用
@@ -155,12 +155,12 @@ Partial Class Form1
             ' by Claude Sonnet 4.6, 2026/06/12: 整段刪除 (原本這段 migration 的唯一目的是清理舊 bug 遺留的污染資料)
             ' 2026/06/12 by Claude: basic_maillist 欄位重排序 migration
             '   目標順序: entry_id, msg_size, subject, topic, msgid_hash, folder_hash,
-            '             sender_name, sender_email, item_count_snap, received_time, updated_at
+            '             sender_name, sender_email, pr_count_snap, received_time, updated_at
             '   用 RENAME → CREATE → INSERT SELECT → DROP 流程，因 SQLite 不支援 ALTER COLUMN ORDER
 
             _dbg("", "資料表確認完成")
 
-            ' 2026/06/12 by Simon/Claude: 載入 senders 表，供 DbGetBasicMailInfo lazy load 時能解析 sender_id
+            ' 2026/06/12 by Simon/Claude Opus 4.8: 載入 senders 表，供 DbGetBasicMailInfo lazy load 時能解析 sender_id
             LoadSendersInner()
 
             timerSaveCache.Interval = 1 * 60 * 1000 ' 每60sec自動保存一次快取資料到磁碟
@@ -218,7 +218,7 @@ Partial Class Form1
                             folder_count_all    INTEGER,
                             folder_size         INTEGER,
                             folder_size_all     INTEGER,
-                            content_count_snap  INTEGER,
+                            pr_count_snap       INTEGER,
                             entry_id            BLOB,
                             store_id            TEXT,
                             is_mail             INTEGER,
@@ -227,7 +227,7 @@ Partial Class Form1
                         );")
 
         ' 2. attach_maillist: 附件郵件清單 (專供 Tab3 尋找附件使用)
-        ' 2026/06/12 by Simon/Claude: received_time TEXT→INTEGER (Unix秒)；移除 updated_at (只寫不讀，無用)
+        ' 2026/06/12 by Simon/Claude Opus 4.8: received_time TEXT→INTEGER (Unix秒)；移除 updated_at (只寫不讀，無用)
         sb.AppendLine("
                         CREATE TABLE IF NOT EXISTS attach_maillist (
                             entry_id        BLOB    PRIMARY KEY,
@@ -237,12 +237,12 @@ Partial Class Form1
                             received_time   INTEGER,
                             sender_name     TEXT,
                             attach_count    INTEGER,
-                            item_count_snap INTEGER
+                            pr_count_snap   INTEGER
                         );
                         CREATE INDEX IF NOT EXISTS idx_mb_folder ON attach_maillist(folder_hash);")
 
         ' 3. basic_maillist: 基礎郵件清單 (專供 Tab4/Tab5 與重複郵件比對使用)
-        ' 2026/06/12 by Simon/Claude: 移除 topic (改由 GetCleanSubject(subject) 動態計算)
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 topic (改由 GetCleanSubject(subject) 動態計算)
         '   移除 sender_email (改以 sender_id 外鍵指向 senders 表，節省重複儲存)
         '   received_time TEXT→INTEGER (Unix秒)；移除 updated_at (只寫不讀)
         sb.AppendLine("
@@ -255,12 +255,12 @@ Partial Class Form1
                             sender_name     TEXT,
                             sender_id       INTEGER,
                             msgid_hash      BLOB,
-                            item_count_snap INTEGER
+                            pr_count_snap   INTEGER
                         );
                         CREATE INDEX IF NOT EXISTS idx_basic_folder ON basic_maillist(folder_hash);")
 
         ' 4. attach_filenames: 附件名稱清單
-        ' 2026/06/12 by Simon/Claude: 移除 updated_at (只寫不讀)
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at (只寫不讀)
         sb.AppendLine("
                         CREATE TABLE IF NOT EXISTS attach_filenames (
                             entry_id        BLOB    PRIMARY KEY,
@@ -271,7 +271,7 @@ Partial Class Form1
                         CREATE INDEX IF NOT EXISTS idx_ma_folder ON attach_filenames(folder_hash);")
 
         ' 5. year_counts: 年份統計
-        ' 2026/06/12 by Simon/Claude: 移除 updated_at (只寫不讀)
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at (只寫不讀)
         sb.AppendLine("
                         CREATE TABLE IF NOT EXISTS year_counts (
                             folder_hash     INTEGER NOT NULL,
@@ -282,7 +282,7 @@ Partial Class Form1
                         CREATE INDEX IF NOT EXISTS idx_yc_folder ON year_counts(folder_hash);")
 
         ' 6. month_counts: 月份統計
-        ' 2026/06/12 by Simon/Claude: 移除 updated_at (只寫不讀)
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at (只寫不讀)
         sb.AppendLine("
                         CREATE TABLE IF NOT EXISTS month_counts (
                             folder_hash INTEGER NOT NULL,
@@ -292,7 +292,7 @@ Partial Class Form1
                             PRIMARY KEY (folder_hash, year, month)
                         );")
 
-        ' 7. senders: 寄件者 email 正規化表 (2026/06/12 by Simon/Claude 新增)
+        ' 7. senders: 寄件者 email 正規化表 (2026/06/12 by Simon/Claude Opus 4.8 新增)
         '   只存不重複的 sender_email；basic_maillist 透過 sender_id 外鍵參照
         sb.AppendLine("
                         CREATE TABLE IF NOT EXISTS senders (
@@ -306,24 +306,26 @@ Partial Class Form1
         Return sb.ToString()
 
     End Function
-    Private Function GetDBSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, mc As Integer, basic As Integer, kb As Long, lastTs As String)
+    Private Function GetDBSummary() As (fc As Integer, mb As Integer, at As Integer, yc As Integer, mc As Integer, basic As Integer, senders As Integer, kb As Long, lastTs As String)
         ' ---------------------------------------------------------------
         ' GetDBSummary — 取得 DB 統計摘要，供按鈕顯示
-        ' 回傳 (folder_stats, attach_maillist, attach_filenames, year_counts, month_counts, basic_maillist, KB, lastTs)
+        ' 回傳 (folder_stats, attach_maillist, attach_filenames, year_counts, month_counts, basic_maillist, senders, KB, lastTs)
         ' 2026/04/09 新增 mc = month_counts 行數
         ' 2026/04/10 新增 lastTs = 最後 updated_at 時間
         ' 2026/04/22 by Gemini 3 Flash: 新增 basic = basic_maillist 行數
+        ' 2026/06/14 by Simon/Claude Opus 4.8: 新增 senders = senders 行數 (供 Tab6 Lv6 顯示)
         ' ---------------------------------------------------------------
-        If _db Is Nothing Then Return (0, 0, 0, 0, 0, 0, 0L, "N/A")
+        If _db Is Nothing Then Return (0, 0, 0, 0, 0, 0, 0, 0L, "N/A")
 
         Try
-            Dim fc, mb, at, yc, mcount, basicCount As Integer : Dim lastTs As String = "N/A"
+            Dim fc, mb, at, yc, mcount, basicCount, sendersCount As Integer : Dim lastTs As String = "N/A"
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM folder_stats", _db) : fc = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
-            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_maillist", _db) : mb = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM basic_maillist", _db) : basicCount = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
-            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_filenames", _db) : at = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM senders", _db) : sendersCount = Convert.ToInt32(cmd.ExecuteScalar()) : End Using ' 2026/06/14 by Simon/Claude Opus 4.8
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM year_counts", _db) : yc = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
             Using cmd As New SqliteCommand("SELECT COUNT(*) FROM month_counts", _db) : mcount = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_maillist", _db) : mb = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("SELECT COUNT(*) FROM attach_filenames", _db) : at = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
 
             ' 抓取最後一次成功的儲存時間字串 (取最大的 updated_at)
             Using cmd As New SqliteCommand("SELECT MAX(updated_at) FROM folder_stats", _db)
@@ -332,11 +334,11 @@ Partial Class Form1
             End Using
 
             Dim fi As New IO.FileInfo(_dbPath)
-            Return (fc, mb, at, yc, mcount, basicCount, If(fi.Exists, fi.Length \ 1024L, 0L), lastTs)
+            Return (fc, mb, at, yc, mcount, basicCount, sendersCount, If(fi.Exists, fi.Length \ 1024L, 0L), lastTs)
 
         Catch ex As System.Exception
             _dbg("       ├ 錯誤", ex.Message) ' by Gemini, 2026/04/11: Level 3
-            Return (0, 0, 0, 0, 0, 0, 0L, "Err")
+            Return (0, 0, 0, 0, 0, 0, 0, 0L, "Err")
         Finally : If _iLikeNoisy Then _dbg(" ├ 結束")
         End Try
 
@@ -457,7 +459,7 @@ Partial Class Form1
     ''' Unix 秒 (INTEGER) → 本機 DateTime (遇 0 或負數回傳 DateTime.MinValue)
     ''' </summary>
     Private Shared Function UnixSecondsToLocalTime(unixSec As Long) As DateTime
-        ' 2026/06/12 by Simon/Claude: 配合 received_time TEXT→INTEGER 正規化
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 配合 received_time TEXT→INTEGER 正規化
         ' unixSec ≤ 0 (含 NULL → 0 的情況) 回傳 DateTime.MinValue，避免顯示 1970-01-01
         Return If(unixSec <= 0, DateTime.MinValue, DateTimeOffset.FromUnixTimeSeconds(unixSec).LocalDateTime)
     End Function
@@ -465,7 +467,7 @@ Partial Class Form1
     ''' 安全轉換 DateTime -> Unix seconds（遇 MinValue 回傳 0）
     ''' </summary>
     Private Shared Function LocalTimeToUnixSeconds(dt As DateTime) As Long
-        ' 2026/06/12 by Simon/Claude: 修正 DateTimeOffset.ctor 在 Local-kind DateTime
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 修正 DateTimeOffset.ctor 在 Local-kind DateTime
         If dt = DateTime.MinValue Then Return 0L
         Return New DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Local)).ToUnixTimeSeconds()
     End Function
@@ -493,7 +495,7 @@ Partial Class Form1
             For Each k In _cacheFolderCount.Keys : livePaths.Add(k) : Next
             For Each k In _cacheAttachMailList.Keys : livePaths.Add(k) : Next
 
-            ' 2026/06/12 by Simon/Claude: lazy-load 安全保護
+            ' 2026/06/12 by Simon/Claude Opus 4.8: lazy-load 安全保護
             ' _cacheMailCount 等字典因 lazy-load 在重啟後可能不完整（記憶體中看不到 ≠ Outlook 中已刪除）
             ' 把 folder_stats 現有路徑全部列為 live，確保 CleanupOrphanPath 不誤刪仍存在的資料夾
             ' 真正的孤兒清理由 RenewCacheToDB（完整 COM BFS 逐一 GetFolderFromID 確認）負責
@@ -513,7 +515,7 @@ Partial Class Form1
                                                Dim a = SaveAttachFilenamesInner(txn)
                                                Dim y = SaveYearCountsInner(txn)
                                                Dim m = SaveMonthCountsInner(txn)    ' 2026/04/09 新增
-                                               Dim s = SaveSendersInner(txn)        ' 2026/06/12 by Simon/Claude: 先建立 senders 表，供 SaveBasicMailInfoInner 查 sender_id
+                                               Dim s = SaveSendersInner(txn)        ' 2026/06/12 by Simon/Claude Opus 4.8: 先建立 senders 表，供 SaveBasicMailInfoInner 查 sender_id
                                                Dim basic = SaveBasicMailInfoInner(txn)
                                                txn.Commit()
                                                Return (f, b, a, y, m, s, basic)
@@ -580,7 +582,7 @@ Partial Class Form1
                                        Dim a = LoadAttachFilenamesInner()
                                        Dim y = LoadYearCountsInner()
                                        Dim m = LoadMonthCountsInner()       ' 2026/04/09 新增
-                                       Dim s = LoadSendersInner()           ' 2026/06/12 by Simon/Claude: 先載入 senders 字典，供 LoadBasicMailInfoInner 解析 sender_id
+                                       Dim s = LoadSendersInner()           ' 2026/06/12 by Simon/Claude Opus 4.8: 先載入 senders 字典，供 LoadBasicMailInfoInner 解析 sender_id
                                        Dim basic = LoadBasicMailInfoInner() ' 2026/04/22 by Gemini 3.1 Pro 新增
                                        Return (f, b, a, y, m, s, basic)
                                    End Function)
@@ -829,23 +831,23 @@ Partial Class Form1
 
                                Dim dF, dB, dA, dM, dBasic As Integer
                                Using txn As SqliteTransaction = _db.BeginTransaction()
-                                   Using c1 As New SqliteCommand("DELETE FROM folder_stats WHERE folder_path=@p", _db, txn),
-                                         c2 As New SqliteCommand("DELETE FROM attach_maillist WHERE folder_hash=@h", _db, txn),
-                                         c3 As New SqliteCommand("DELETE FROM attach_filenames WHERE folder_hash=@h", _db, txn),
-                                         c4 As New SqliteCommand("DELETE FROM month_counts WHERE folder_hash=@h", _db, txn),
-                                         c5 As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_hash=@h", _db, txn)
+                                   Using c1 As New SqliteCommand("DELETE FROM folder_stats WHERE folder_path=@fp", _db, txn),
+                                         c2 As New SqliteCommand("DELETE FROM attach_maillist WHERE folder_hash=@fh", _db, txn),
+                                         c3 As New SqliteCommand("DELETE FROM attach_filenames WHERE folder_hash=@fh", _db, txn),
+                                         c4 As New SqliteCommand("DELETE FROM month_counts WHERE folder_hash=@fh", _db, txn),
+                                         c5 As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_hash=@fh", _db, txn)
 
-                                       c1.Parameters.Add("@p", SqliteType.Text)
-                                       c2.Parameters.Add("@h", SqliteType.Integer) : c3.Parameters.Add("@h", SqliteType.Integer)
-                                       c4.Parameters.Add("@h", SqliteType.Integer) : c5.Parameters.Add("@h", SqliteType.Integer)
+                                       c1.Parameters.Add("@fp", SqliteType.Text)
+                                       c2.Parameters.Add("@fh", SqliteType.Integer) : c3.Parameters.Add("@fh", SqliteType.Integer)
+                                       c4.Parameters.Add("@fh", SqliteType.Integer) : c5.Parameters.Add("@fh", SqliteType.Integer)
 
                                        For Each s In stalePaths
                                            Dim h = StringToXxHash64(s) ' 取得孤兒的 Hash
-                                           c1.Parameters("@p").Value = s : dF += c1.ExecuteNonQuery()
-                                           c2.Parameters("@h").Value = h : dB += c2.ExecuteNonQuery()
-                                           c3.Parameters("@h").Value = h : dA += c3.ExecuteNonQuery()
-                                           c4.Parameters("@h").Value = h : dM += c4.ExecuteNonQuery()
-                                           c5.Parameters("@h").Value = h : dBasic += c5.ExecuteNonQuery()
+                                           c1.Parameters("@fp").Value = s : dF += c1.ExecuteNonQuery()
+                                           c2.Parameters("@fh").Value = h : dB += c2.ExecuteNonQuery()
+                                           c3.Parameters("@fh").Value = h : dA += c3.ExecuteNonQuery()
+                                           c4.Parameters("@fh").Value = h : dM += c4.ExecuteNonQuery()
+                                           c5.Parameters("@fh").Value = h : dBasic += c5.ExecuteNonQuery()
                                        Next
                                    End Using
                                    txn.Commit()
@@ -865,12 +867,30 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' SaveFolderStatsInner — Transaction 內批次寫入 folder_stats
         ' 注意: 在 Task.Run 背景執行緒呼叫，不可碰 UI 控制項
-        ' content_count_snap = _cacheMailCount[path]，即 PR_CONTENT_COUNT 讀取結果
+        ' pr_count_snap = _cacheMailCount[path]，即 PR_CONTENT_COUNT 讀取結果
         ' ---------------------------------------------------------------
         _dbg("    ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
-        Dim sql = "INSERT OR REPLACE INTO folder_stats" &
-                  " (folder_path,mail_count,mail_count_all,folder_count,folder_count_all,folder_size,folder_size_all,content_count_snap,entry_id,store_id,is_mail,has_chinese,updated_at) " &
-                  "VALUES (@path,@mc,@mca,@fc,@fca,@fs,@fsa,@snap,@eid,@sid,@ism,@hasch,@ts)"
+        ' 2026/06/14 by Simon/Claude Opus 4.8: INSERT OR REPLACE → UPSERT。
+        '   原 INSERT OR REPLACE 是「整列覆寫」: 當 path 在 allPaths 但 _cacheFolderIDs 查無時(line 941 Else 分支)，
+        '   entry_id/store_id/is_mail/has_chinese 會被寫成 NULL，把 DB 既有的身分證洗掉。
+        '   而樹載入 DbGetOrderedSubFolderIDs 帶 "entry_id IS NOT NULL" → 這些資料夾從樹消失
+        '   (重現: 第 2 次 do-nothing 關閉存檔 → 第 3 次啟動 Gmail_2022 底下只剩收件匣)。
+        '   且會自我延續: eid 被洗→下次 lazy-load 因 .eid 空只補 _cacheFolderCount(進 allPaths) 不補 _cacheFolderIDs→再被洗。
+        '   修法: 改 ON CONFLICT DO UPDATE — 統計欄照常覆寫(與原行為一致)；身分欄以 COALESCE(新值, 舊值) 保留，
+        '         新值為 NULL(快取沒身分證)時不動 DB 既有值 → entry_id 永不被洗掉，並打斷上述自我延續循環。
+        Dim sql = "INSERT INTO folder_stats" &
+                  " (folder_path,mail_count,mail_count_all,folder_count,folder_count_all,folder_size,folder_size_all,pr_count_snap,entry_id,store_id,is_mail,has_chinese,updated_at) " &
+                  "VALUES (@fp,@mc,@mca,@fc,@fca,@fs,@fsa,@pr,@eid,@sid,@ism,@hasch,@ts) " &
+                  "ON CONFLICT(folder_path) DO UPDATE SET " &
+                  " mail_count=excluded.mail_count, mail_count_all=excluded.mail_count_all," &
+                  " folder_count=excluded.folder_count, folder_count_all=excluded.folder_count_all," &
+                  " folder_size=excluded.folder_size, folder_size_all=excluded.folder_size_all," &
+                  " pr_count_snap=excluded.pr_count_snap," &
+                  " entry_id   =COALESCE(excluded.entry_id,    entry_id)," &
+                  " store_id   =COALESCE(excluded.store_id,    store_id)," &
+                  " is_mail    =COALESCE(excluded.is_mail,     is_mail)," &
+                  " has_chinese=COALESCE(excluded.has_chinese, has_chinese)," &
+                  " updated_at =excluded.updated_at"
 
         ' 蒐集六個 dict 中所有出現過的 folder_path 聯集
         Dim allPaths As New HashSet(Of String)()
@@ -882,7 +902,7 @@ Partial Class Form1
         For Each k In _cacheFolderSizeAll.Keys : allPaths.Add(k) : Next
         For Each k In _cacheFolderIDs.Keys : allPaths.Add(k) : Next ' by Gemini 3.0 flash, 2026/04/18: 額外聯集身分標識字典的 Key，確保僅掃描過但未統計的資料夾也能存入 SSD
 
-        ' 2026/06/12 by Simon/Claude: folder_stats 作為主表，確保所有引用 folder_hash 的子表路徑都被收錄
+        ' 2026/06/12 by Simon/Claude Opus 4.8: folder_stats 作為主表，確保所有引用 folder_hash 的子表路徑都被收錄
         ' 重啟後 LoadFolderStatsInner 還原完整 _dictHashToPath，防止 LoadBasicMailInfoInner 等批次載入 skip 資料
         For Each k In _cacheBasicMailInfo.Keys : allPaths.Add(k) : Next
         For Each k In _cacheAttachMailList.Keys : allPaths.Add(k) : Next
@@ -896,14 +916,14 @@ Partial Class Form1
         Dim count As Integer = 0
         Dim ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
         Using cmd As New SqliteCommand(sql, _db, txn)
-            cmd.Parameters.Add("@path", SqliteType.Text)
+            cmd.Parameters.Add("@fp", SqliteType.Text)
             cmd.Parameters.Add("@mc", SqliteType.Integer)
             cmd.Parameters.Add("@mca", SqliteType.Integer)
             cmd.Parameters.Add("@fc", SqliteType.Integer)
             cmd.Parameters.Add("@fca", SqliteType.Integer)
             cmd.Parameters.Add("@fs", SqliteType.Integer)
             cmd.Parameters.Add("@fsa", SqliteType.Integer)
-            cmd.Parameters.Add("@snap", SqliteType.Integer)
+            cmd.Parameters.Add("@pr", SqliteType.Integer)
             cmd.Parameters.Add("@eid", SqliteType.Blob)     ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
             cmd.Parameters.Add("@sid", SqliteType.Text)
             cmd.Parameters.Add("@ism", SqliteType.Integer)
@@ -922,14 +942,14 @@ Partial Class Form1
                 Dim hasFca = _cacheFolderCountAll.TryGetValue(path, fca)
                 Dim hasFs = _cacheFolderSize.TryGetValue(path, fs)
                 Dim hasFsa = _cacheFolderSizeAll.TryGetValue(path, fsa)
-                cmd.Parameters("@path").Value = path
+                cmd.Parameters("@fp").Value = path
                 cmd.Parameters("@mc").Value = If(hasMc, CObj(mc), DBNull.Value)
                 cmd.Parameters("@mca").Value = If(hasMca, CObj(mca), DBNull.Value)
                 cmd.Parameters("@fc").Value = If(hasFc, CObj(fc), DBNull.Value)
                 cmd.Parameters("@fca").Value = If(hasFca, CObj(fca), DBNull.Value)
                 cmd.Parameters("@fs").Value = If(hasFs, CObj(fs), DBNull.Value)
                 cmd.Parameters("@fsa").Value = If(hasFsa, CObj(fsa), DBNull.Value)
-                cmd.Parameters("@snap").Value = If(hasMc, CObj(mc), DBNull.Value)
+                cmd.Parameters("@pr").Value = If(hasMc, CObj(mc), DBNull.Value)
 
                 ' by Gemini, 2026/04/10: 寫入身分標識與標籤 (從 _cacheFolderIDs 提取)
                 Dim idInfo As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
@@ -961,20 +981,20 @@ Partial Class Form1
         ' 每筆寫入 (folder_path, year, count)，PRIMARY KEY = (folder_path, year)
         ' ---------------------------------------------------------------
         _dbg("    ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
-        Dim sql = "INSERT OR REPLACE INTO year_counts (folder_hash,year,count) VALUES (@fp,@yr,@cnt)"
+        Dim sql = "INSERT OR REPLACE INTO year_counts (folder_hash,year,count) VALUES (@fh,@yr,@cnt)"
         Dim count As Integer = 0
 
         Using cmd As New SqliteCommand(sql, _db, txn)
-            cmd.Parameters.Add("@fp", SqliteType.Integer)
+            cmd.Parameters.Add("@fh", SqliteType.Integer)
             cmd.Parameters.Add("@yr", SqliteType.Integer)
             cmd.Parameters.Add("@cnt", SqliteType.Integer)
 
             ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-            ' 2026/06/12 by Simon/Claude: 移除 updated_at（只寫不讀，折省 ~1MB 儲存）
+            ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at（只寫不讀，折省 ~1MB 儲存）
             For Each kvp In _cacheYearCounts
                 Dim fp = kvp.Key
                 For Each yr In kvp.Value
-                    cmd.Parameters("@fp").Value = FolderPathToHash64(fp)
+                    cmd.Parameters("@fh").Value = FolderPathToHash64(fp)
                     cmd.Parameters("@yr").Value = yr.Key
                     cmd.Parameters("@cnt").Value = yr.Value
                     cmd.ExecuteNonQuery() : count += 1
@@ -995,11 +1015,11 @@ Partial Class Form1
         '   ├ 2026/04/09 修正：改用三欄 PK，移除 cache_key 欄位
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始")
-        Dim sql = "INSERT OR REPLACE INTO month_counts (folder_hash,year,month,count) VALUES (@fp,@yr,@mo,@cnt)"
+        Dim sql = "INSERT OR REPLACE INTO month_counts (folder_hash,year,month,count) VALUES (@fh,@yr,@mo,@cnt)"
         Dim count As Integer = 0
 
         Using cmd As New SqliteCommand(sql, _db, txn)
-            cmd.Parameters.Add("@fp", SqliteType.Integer)
+            cmd.Parameters.Add("@fh", SqliteType.Integer)
             cmd.Parameters.Add("@yr", SqliteType.Integer)
             cmd.Parameters.Add("@mo", SqliteType.Integer)
             cmd.Parameters.Add("@cnt", SqliteType.Integer)
@@ -1014,9 +1034,9 @@ Partial Class Form1
                 If Not Integer.TryParse(cacheKey.Substring(lastUnderscore + 1), yearVal) Then Continue For
 
                 ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-                ' 2026/06/12 by Simon/Claude: 移除 updated_at（只寫不讀）
+                ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at（只寫不讀）
                 For Each mo In kvp.Value
-                    cmd.Parameters("@fp").Value = FolderPathToHash64(fPath)
+                    cmd.Parameters("@fh").Value = FolderPathToHash64(fPath)
                     cmd.Parameters("@yr").Value = yearVal
                     cmd.Parameters("@mo").Value = mo.Key
                     cmd.Parameters("@cnt").Value = mo.Value
@@ -1032,23 +1052,23 @@ Partial Class Form1
     Private Function SaveAttachMailListInner(txn As SqliteTransaction) As Integer
         ' ---------------------------------------------------------------
         ' SaveAttachMailListInner — Transaction 內批次寫入 attach_maillist (Tab3 Phase1) 
-        ' 2026/06/12 by Simon/Claude: received_time TEXT→INTEGER (Unix秒)；移除 updated_at
+        ' 2026/06/12 by Simon/Claude Opus 4.8: received_time TEXT→INTEGER (Unix秒)；移除 updated_at
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim sql = "INSERT OR REPLACE INTO attach_maillist" &
-                  " (entry_id,folder_hash,subject,msg_size,received_time,sender_name,attach_count,item_count_snap)" &
-                  " VALUES (@eid,@fp,@subj,@sz,@rt,@sn,@ac,@snap)"
+                  " (entry_id,folder_hash,subject,msg_size,received_time,sender_name,attach_count,pr_count_snap)" &
+                  " VALUES (@eid,@fh,@subj,@sz,@rt,@sn,@ac,@pr)"
 
         Dim count As Integer = 0
         Using cmd As New SqliteCommand(sql, _db, txn)
             cmd.Parameters.Add("@eid", SqliteType.Blob)     ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
-            cmd.Parameters.Add("@fp", SqliteType.Integer)
+            cmd.Parameters.Add("@fh", SqliteType.Integer)
             cmd.Parameters.Add("@subj", SqliteType.Text)
             cmd.Parameters.Add("@sz", SqliteType.Integer)
-            cmd.Parameters.Add("@rt", SqliteType.Integer)   ' 2026/06/12 by Simon/Claude: INTEGER Unix秒
+            cmd.Parameters.Add("@rt", SqliteType.Integer)   ' 2026/06/12 by Simon/Claude Opus 4.8: INTEGER Unix秒
             cmd.Parameters.Add("@sn", SqliteType.Text)
             cmd.Parameters.Add("@ac", SqliteType.Integer)
-            cmd.Parameters.Add("@snap", SqliteType.Integer)
+            cmd.Parameters.Add("@pr", SqliteType.Integer)
 
             ' _cacheAttachMailList: Dictionary(Of String, FolderCacheTab3)
             ' key = folder_path, value.AttachMailList = List(Of MailItemInfo)
@@ -1061,25 +1081,25 @@ Partial Class Form1
                     ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
                     ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存
                     cmd.Parameters("@eid").Value = HexStringToByteArray("EMPTY_ATTACH_" & fp)
-                    cmd.Parameters("@fp").Value = FolderPathToHash64(fp)
+                    cmd.Parameters("@fh").Value = FolderPathToHash64(fp)
                     cmd.Parameters("@subj").Value = ""
                     cmd.Parameters("@sz").Value = 0
-                    cmd.Parameters("@rt").Value = 0L   ' 2026/06/12 by Simon/Claude: sentinel 用 epoch 0
+                    cmd.Parameters("@rt").Value = 0L   ' 2026/06/12 by Simon/Claude Opus 4.8: sentinel 用 epoch 0
                     cmd.Parameters("@sn").Value = ""
                     cmd.Parameters("@ac").Value = 0
-                    cmd.Parameters("@snap").Value = snap
+                    cmd.Parameters("@pr").Value = snap
                     cmd.ExecuteNonQuery() : count += 1
                 Else
-                    ' 2026/06/12 by Simon/Claude: 本機時間轉 Unix 秒儲存，讀回時 FromUnixTimeSeconds().LocalDateTime 還原
+                    ' 2026/06/12 by Simon/Claude Opus 4.8: 本機時間轉 Unix 秒儲存，讀回時 FromUnixTimeSeconds().LocalDateTime 還原
                     For Each mail In mails
                         cmd.Parameters("@eid").Value = HexStringToByteArray(mail.EntryID)
-                        cmd.Parameters("@fp").Value = FolderPathToHash64(fp)
+                        cmd.Parameters("@fh").Value = FolderPathToHash64(fp)
                         cmd.Parameters("@subj").Value = If(mail.Subject, "")
                         cmd.Parameters("@sz").Value = mail.Size
                         cmd.Parameters("@rt").Value = LocalTimeToUnixSeconds(mail.RcvTime)
                         cmd.Parameters("@sn").Value = If(mail.SenderName, "")
                         cmd.Parameters("@ac").Value = mail.AttachCount
-                        cmd.Parameters("@snap").Value = snap
+                        cmd.Parameters("@pr").Value = snap
                         cmd.ExecuteNonQuery() : count += 1
                     Next
                 End If
@@ -1098,7 +1118,7 @@ Partial Class Form1
         '   SQLite 未列出的欄位自動填 NULL，不需要明確傳入。
         ' ---------------------------------------------------------------
         _dbg("開始")
-        Dim sql = "INSERT OR REPLACE INTO attach_filenames" & " (entry_id,folder_hash,filenames)" & " VALUES (@eid,@fp,@fn)"
+        Dim sql = "INSERT OR REPLACE INTO attach_filenames" & " (entry_id,folder_hash,filenames)" & " VALUES (@eid,@fh,@fn)"
         Dim count As Integer = 0
 
         ' 反查 EntryID → folder_path (從 Phase1 快取中建立對應表) 
@@ -1111,16 +1131,16 @@ Partial Class Form1
 
         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
         ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-        ' 2026/06/12 by Simon/Claude: 移除 updated_at（只寫不讀）
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at（只寫不讀）
         Using cmd As New SqliteCommand(sql, _db, txn)
             cmd.Parameters.Add("@eid", SqliteType.Blob)
-            cmd.Parameters.Add("@fp", SqliteType.Integer)
+            cmd.Parameters.Add("@fh", SqliteType.Integer)
             cmd.Parameters.Add("@fn", SqliteType.Text)
 
             For Each kvp In _cacheAttachFilename
                 Dim fp = "" : entryToFolder.TryGetValue(kvp.Key, fp)
                 cmd.Parameters("@eid").Value = HexStringToByteArray(kvp.Key)
-                cmd.Parameters("@fp").Value = FolderPathToHash64(fp)
+                cmd.Parameters("@fh").Value = FolderPathToHash64(fp)
                 cmd.Parameters("@fn").Value = JsonSerializer.Serialize(kvp.Value)
                 cmd.ExecuteNonQuery() : count += 1
             Next
@@ -1133,7 +1153,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' SaveSendersInner — 收集 _cacheBasicMailInfo 中的唯一 email，
         '   批次 INSERT OR IGNORE 進 senders 表，再重建兩個記憶體字典
-        ' 2026/06/12 by Simon/Claude: 配合 sender_email 正規化架構新增
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 配合 sender_email 正規化架構新增
         '   呼叫時機：SaveBasicMailInfoInner 之前（同一 Transaction）
         '   完成後 _dictEmailToSenderId 可供 SaveBasicMailInfoInner 直接查 sender_id
         ' ---------------------------------------------------------------
@@ -1147,10 +1167,10 @@ Partial Class Form1
 
         If allEmails.Count = 0 Then Return 0
 
-        Using cmd As New SqliteCommand("INSERT OR IGNORE INTO senders (sender_email) VALUES (@e)", _db, txn)
-            cmd.Parameters.Add("@e", SqliteType.Text)
+        Using cmd As New SqliteCommand("INSERT OR IGNORE INTO senders (sender_email) VALUES (@se)", _db, txn)
+            cmd.Parameters.Add("@se", SqliteType.Text)
             For Each email In allEmails
-                cmd.Parameters("@e").Value = email
+                cmd.Parameters("@se").Value = email
                 cmd.ExecuteNonQuery()
             Next
         End Using
@@ -1166,25 +1186,25 @@ Partial Class Form1
         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
         ' 2026/06/11 by Gemini/Simon: 把 message_id 轉成 xxHash64，並同時改成 BLOB 儲存節省空間
         ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存
-        ' 2026/06/12 by Simon/Claude: 移除 topic (動態計算)、sender_email (改 sender_id)、updated_at
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 topic (動態計算)、sender_email (改 sender_id)、updated_at
         '   received_time TEXT→INTEGER (Unix秒)；SaveSendersInner() 必須在此函式前呼叫
         ' ---------------------------------------------------------------
         _dbg("開始")
         Dim sql = "INSERT OR REPLACE INTO basic_maillist" &
-                  " (entry_id,folder_hash,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,item_count_snap)" &
-                  " VALUES (@eid,@fp,@subj,@sz,@rt,@sn,@sid,@mid,@snap)"
+                  " (entry_id,folder_hash,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,pr_count_snap)" &
+                  " VALUES (@eid,@fh,@subj,@sz,@rt,@sn,@sid,@mid,@pr)"
 
         Dim count As Integer = 0
         Using cmd As New SqliteCommand(sql, _db, txn)
             cmd.Parameters.Add("@eid", SqliteType.Blob)
-            cmd.Parameters.Add("@fp", SqliteType.Integer)
+            cmd.Parameters.Add("@fh", SqliteType.Integer)
             cmd.Parameters.Add("@subj", SqliteType.Text)
             cmd.Parameters.Add("@sz", SqliteType.Integer)
-            cmd.Parameters.Add("@rt", SqliteType.Integer)   ' 2026/06/12 by Simon/Claude: INTEGER Unix秒
+            cmd.Parameters.Add("@rt", SqliteType.Integer)   ' 2026/06/12 by Simon/Claude Opus 4.8: INTEGER Unix秒
             cmd.Parameters.Add("@sn", SqliteType.Text)
-            cmd.Parameters.Add("@sid", SqliteType.Integer)  ' 2026/06/12 by Simon/Claude: sender_id (NULL 若無 email)
+            cmd.Parameters.Add("@sid", SqliteType.Integer)  ' 2026/06/12 by Simon/Claude Opus 4.8: sender_id (NULL 若無 email)
             cmd.Parameters.Add("@mid", SqliteType.Blob)
-            cmd.Parameters.Add("@snap", SqliteType.Integer)
+            cmd.Parameters.Add("@pr", SqliteType.Integer)
 
             For Each kvp In _cacheBasicMailInfo
                 ' 2026/05/06 by Claude: key 已是純路徑，不再需 .Split
@@ -1195,18 +1215,18 @@ Partial Class Form1
                 If mails.Count = 0 Then
                     ' by Gemini 3 Flash, 2026/05/06: 實作「空結果持久化」，記住此資料夾已掃描且為 0 筆
                     cmd.Parameters("@eid").Value = HexStringToByteArray("EMPTY_BASIC_" & fp)
-                    cmd.Parameters("@fp").Value = FolderPathToHash64(fp)
+                    cmd.Parameters("@fh").Value = FolderPathToHash64(fp)
                     cmd.Parameters("@subj").Value = ""
                     cmd.Parameters("@sz").Value = 0
                     cmd.Parameters("@rt").Value = 0L
                     cmd.Parameters("@sn").Value = ""
                     cmd.Parameters("@sid").Value = DBNull.Value
                     cmd.Parameters("@mid").Value = DBNull.Value
-                    cmd.Parameters("@snap").Value = snap
+                    cmd.Parameters("@pr").Value = snap
                     cmd.ExecuteNonQuery() : count += 1
                 Else
                     For Each item In mails
-                        ' 2026/06/12 by Simon/Claude: 查 _dictEmailToSenderId，無 email 時存 NULL
+                        ' 2026/06/12 by Simon/Claude Opus 4.8: 查 _dictEmailToSenderId，無 email 時存 NULL
                         Dim emailKey = item.Mail.SenderEmail?.Trim()?.ToLower()
                         Dim sid As Object
                         Dim foundId As Integer
@@ -1217,14 +1237,14 @@ Partial Class Form1
                         End If
 
                         cmd.Parameters("@eid").Value = HexStringToByteArray(item.Mail.EntryID)
-                        cmd.Parameters("@fp").Value = FolderPathToHash64(fp)
+                        cmd.Parameters("@fh").Value = FolderPathToHash64(fp)
                         cmd.Parameters("@subj").Value = If(item.Mail.Subject, "")
                         cmd.Parameters("@sz").Value = item.Mail.Size
-                        cmd.Parameters("@rt").Value = LocalTimeToUnixSeconds(item.Mail.RcvTime) ' 2026/06/12 by Simon/Claude: 本機時間轉 Unix 秒
+                        cmd.Parameters("@rt").Value = LocalTimeToUnixSeconds(item.Mail.RcvTime) ' 2026/06/12 by Simon/Claude Opus 4.8: 本機時間轉 Unix 秒
                         cmd.Parameters("@sn").Value = If(item.Mail.SenderName, "")
                         cmd.Parameters("@sid").Value = sid
                         cmd.Parameters("@mid").Value = HexStringToByteArray(If(item.Mail.MsgIDhash, ""))
-                        cmd.Parameters("@snap").Value = snap
+                        cmd.Parameters("@pr").Value = snap
                         cmd.ExecuteNonQuery() : count += 1
                     Next
                 End If
@@ -1348,7 +1368,7 @@ Partial Class Form1
     Private Function LoadAttachMailListInner() As Integer
         ' ---------------------------------------------------------------
         ' LoadAttachMailListInner — 重建 _cacheAttachMailList (按 folder_path 分組)
-        ' 2026/06/12 by Simon/Claude: received_time 改從 INTEGER 讀取 (Unix秒→LocalDateTime)
+        ' 2026/06/12 by Simon/Claude Opus 4.8: received_time 改從 INTEGER 讀取 (Unix秒→LocalDateTime)
         '   順手修正舊版 bug: mail.Size 誤讀 index 2 (subject)，應讀 index 3 (msg_size)
         ' ---------------------------------------------------------------
         _dbg("開始")
@@ -1356,7 +1376,7 @@ Partial Class Form1
         ' 暫存用：先按 folder_path 分組收集，最後一次性寫入 _cacheAttachMailList
         Dim tempDict As New Dictionary(Of String, (snap As Integer, mails As List(Of MailItemInfo)))()
         Using cmd As New SqliteCommand(
-            "SELECT entry_id,folder_hash,subject,msg_size,received_time,sender_name,attach_count,item_count_snap FROM attach_maillist", _db)
+            "SELECT entry_id,folder_hash,subject,msg_size,received_time,sender_name,attach_count,pr_count_snap FROM attach_maillist", _db)
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim fp As String = ""
@@ -1364,7 +1384,7 @@ Partial Class Form1
                     If Not tempDict.ContainsKey(fp) Then tempDict(fp) = (reader.GetInt64(7), New List(Of MailItemInfo)())
 
                     ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
-                    ' 2026/06/12 by Simon/Claude: received_time 改為 INTEGER (Unix秒)
+                    ' 2026/06/12 by Simon/Claude Opus 4.8: received_time 改為 INTEGER (Unix秒)
                     Dim mail As New MailItemInfo With {.EntryID = ByteArrayToHexString(reader.GetFieldValue(Of Byte())(0)),
                                                        .Subject = If(reader.IsDBNull(2), "", reader.GetString(2)),
                                                        .Size = If(reader.IsDBNull(3), 0L, reader.GetInt64(3)),  ' 2026/06/12 修正 bug: 原為 index 2
@@ -1412,7 +1432,7 @@ Partial Class Form1
     Private Function LoadSendersInner() As Integer
         ' ---------------------------------------------------------------
         ' LoadSendersInner — 載入 senders 表，重建 _dictEmailToSenderId / _dictSenderIdToEmail
-        ' 2026/06/12 by Simon/Claude: 配合 sender_email 正規化架構新增
+        ' 2026/06/12 by Simon/Claude Opus 4.8: 配合 sender_email 正規化架構新增
         '   - 寫入側 (_dictEmailToSenderId): SaveBasicMailInfoInner 查詢 sender_id
         '   - 讀取側 (_dictSenderIdToEmail): Load/DbGet 函式還原 SenderEmail
         ' ---------------------------------------------------------------
@@ -1445,7 +1465,7 @@ Partial Class Form1
         ' 2026/04/22 by Gemini 3.1 Pro: 補齊載入邏輯，解決重啟後重複掃描問題
         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
         ' 2026/06/11 by Gemini/Simon: 把 message_id 轉成 xxHash64，並同時改成 BLOB 儲存節省空間
-        ' 2026/06/12 by Simon/Claude: topic 改由 GetCleanSubject(subject) 動態計算，不再從 DB 讀欄位
+        ' 2026/06/12 by Simon/Claude Opus 4.8: topic 改由 GetCleanSubject(subject) 動態計算，不再從 DB 讀欄位
         '   sender_email 改由 _dictSenderIdToEmail 從 sender_id 還原；received_time 改 INTEGER
         ' ---------------------------------------------------------------
         _dbg("開始")
@@ -1454,9 +1474,9 @@ Partial Class Form1
         Dim tempDict As New Dictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Integer))()
 
         ' 2026/06/12: 新欄位順序 — entry_id(0),folder_hash(1),subject(2),msg_size(3),
-        '             received_time INTEGER(4),sender_name(5),sender_id(6),msgid_hash(7),item_count_snap(8)
+        '             received_time INTEGER(4),sender_name(5),sender_id(6),msgid_hash(7),pr_count_snap(8)
         Using cmd As New SqliteCommand(
-            "SELECT entry_id,folder_hash,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,item_count_snap FROM basic_maillist", _db)
+            "SELECT entry_id,folder_hash,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,pr_count_snap FROM basic_maillist", _db)
             Using reader = cmd.ExecuteReader()
                 While reader.Read()
                     Dim eidStr = ByteArrayToHexString(reader.GetFieldValue(Of Byte())(0))
@@ -1465,7 +1485,7 @@ Partial Class Form1
                     Dim sz = reader.GetInt64(3)
                     Dim rt As Long = If(reader.IsDBNull(4), 0L, reader.GetInt64(4))
                     Dim sn = If(reader.IsDBNull(5), "", reader.GetString(5))
-                    Dim semail = _dictSenderIdToEmail.GetValueOrDefault(If(reader.IsDBNull(6), 0, reader.GetInt32(6)), "") ' 2026/06/12 by Simon/Claude: sender_id → email 反查
+                    Dim semail = _dictSenderIdToEmail.GetValueOrDefault(If(reader.IsDBNull(6), 0, reader.GetInt32(6)), "") ' 2026/06/12 by Simon/Claude Opus 4.8: sender_id → email 反查
                     Dim mid = If(reader.IsDBNull(7), "", ByteArrayToHexString(reader.GetFieldValue(Of Byte())(7)))
                     Dim snap = If(reader.IsDBNull(8), -1L, reader.GetInt64(8))
 
@@ -1511,10 +1531,10 @@ Partial Class Form1
 
         Try
             Using cmd As New SqliteCommand("SELECT mail_count,mail_count_all,folder_count,folder_count_all," &
-                                           "       folder_size,folder_size_all,content_count_snap,entry_id,store_id,is_mail,has_chinese" &
-                                           "  FROM folder_stats WHERE folder_path=@p", _db)
+                                           "       folder_size,folder_size_all,pr_count_snap,entry_id,store_id,is_mail,has_chinese" &
+                                           "  FROM folder_stats WHERE folder_path=@fp", _db)
 
-                cmd.Parameters.AddWithValue("@p", fPath)
+                cmd.Parameters.AddWithValue("@fp", fPath)
                 Using reader = cmd.ExecuteReader()
                     If Not reader.Read() Then Return Nothing
 
@@ -1550,9 +1570,9 @@ Partial Class Form1
 
         Try
             Dim result As New ConcurrentDictionary(Of Integer, Integer)()
-            Using cmd As New SqliteCommand("SELECT year,count FROM year_counts WHERE folder_hash=@fp", _db)
+            Using cmd As New SqliteCommand("SELECT year,count FROM year_counts WHERE folder_hash=@fh", _db)
                 ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-                cmd.Parameters.AddWithValue("@fp", FolderPathToHash64(fPath))
+                cmd.Parameters.AddWithValue("@fh", FolderPathToHash64(fPath))
                 Using reader = cmd.ExecuteReader()
                     While reader.Read() : result(reader.GetInt32(0)) = reader.GetInt32(1) : End While
                 End Using
@@ -1577,9 +1597,9 @@ Partial Class Form1
         If _db Is Nothing Then Return Nothing
         Try
             Dim result As New ConcurrentDictionary(Of Integer, Integer)()
-            Using cmd As New SqliteCommand("SELECT month,count FROM month_counts WHERE folder_hash=@fp AND year=@yr", _db)
+            Using cmd As New SqliteCommand("SELECT month,count FROM month_counts WHERE folder_hash=@fh AND year=@yr", _db)
                 ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-                cmd.Parameters.AddWithValue("@fp", FolderPathToHash64(fPath))
+                cmd.Parameters.AddWithValue("@fh", FolderPathToHash64(fPath))
                 cmd.Parameters.AddWithValue("@yr", year)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read() : result(reader.GetInt32(0)) = reader.GetInt32(1) : End While
@@ -1605,16 +1625,16 @@ Partial Class Form1
         Try
             Dim result As New AttachMailListDbResult()
             Dim hasRecord As Boolean = False ' by Claude Sonnet 4.6, 2026/05/06: 補齊變數宣告
-            Using cmd As New SqliteCommand("SELECT entry_id,subject,msg_size,received_time,sender_name,attach_count,item_count_snap" &
-                                           "  FROM attach_maillist WHERE folder_hash=@p", _db)
+            Using cmd As New SqliteCommand("SELECT entry_id,subject,msg_size,received_time,sender_name,attach_count,pr_count_snap" &
+                                           "  FROM attach_maillist WHERE folder_hash=@fh", _db)
 
                 ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-                cmd.Parameters.AddWithValue("@p", FolderPathToHash64(fPath))
+                cmd.Parameters.AddWithValue("@fh", FolderPathToHash64(fPath))
                 hasRecord = False ' 移除 Dim，直接使用外層變數
 
                 ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
                 Using reader = cmd.ExecuteReader()
-                    While reader.Read() ' item_count_snap 整個 folder 共用同一值，每行都一樣，讀最後一次即可
+                    While reader.Read() ' pr_count_snap 整個 folder 共用同一值，每行都一樣，讀最後一次即可
                         hasRecord = True
                         result.Snap = If(reader.IsDBNull(6), -1L, reader.GetInt64(6))
                         Dim eid = ByteArrayToHexString(reader.GetFieldValue(Of Byte())(0))
@@ -1669,7 +1689,7 @@ Partial Class Form1
         ' 回傳 Nothing 表示 DB 中無此資料夾的郵件記錄
         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
         ' 2026/06/11 by Gemini/Simon: 把 message_id 轉成 xxHash64，並同時改成 BLOB 儲存節省空間
-        ' 2026/06/12 by Simon/Claude: topic 改動態計算；sender_id→email；received_time 改 INTEGER
+        ' 2026/06/12 by Simon/Claude Opus 4.8: topic 改動態計算；sender_id→email；received_time 改 INTEGER
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始")
         If _db Is Nothing Then Return Nothing
@@ -1679,14 +1699,14 @@ Partial Class Form1
             Dim hasRecord As Boolean = False
 
             ' 2026/06/12: 新欄位順序 — entry_id(0),subject(1),msg_size(2),received_time INTEGER(3),
-            '             sender_name(4),sender_id(5),msgid_hash(6),item_count_snap(7)
-            Using cmd As New SqliteCommand("SELECT entry_id,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,item_count_snap" &
-                                           "  FROM basic_maillist WHERE folder_hash=@p", _db)
+            '             sender_name(4),sender_id(5),msgid_hash(6),pr_count_snap(7)
+            Using cmd As New SqliteCommand("SELECT entry_id,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,pr_count_snap" &
+                                           "  FROM basic_maillist WHERE folder_hash=@fh", _db)
                 ' 2026/06/12 by Gemini/Simon: folder_hash 查詢
-                cmd.Parameters.AddWithValue("@p", FolderPathToHash64(fPath))
+                cmd.Parameters.AddWithValue("@fh", FolderPathToHash64(fPath))
 
-                ' 2026/06/12 by Simon/Claude: received_time 改為 INTEGER (Unix秒)
-                ' 2026/06/12 by Simon/Claude: sender_id → email 反查
+                ' 2026/06/12 by Simon/Claude Opus 4.8: received_time 改為 INTEGER (Unix秒)
+                ' 2026/06/12 by Simon/Claude Opus 4.8: sender_id → email 反查
                 Using reader = cmd.ExecuteReader()
                     While reader.Read()
                         hasRecord = True
@@ -1724,7 +1744,7 @@ Partial Class Form1
         ' 取代原來 300 個別查詢的瓶頸；由 PreLoadBasicMailCacheAsync 呼叫。
         ' 回傳 key=folder_path, value=(Mails, Snap)；不做 snap 驗證，由呼叫端決定。
         ' 2026/05/11 by Simon/Claude: 優化B
-        ' 2026/06/12 by Simon/Claude: topic 改由 GetCleanSubject(subject) 動態計算
+        ' 2026/06/12 by Simon/Claude Opus 4.8: topic 改由 GetCleanSubject(subject) 動態計算
         ' ---------------------------------------------------------------
         Dim result As New Dictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long))(folderPaths.Count)
         If _db Is Nothing OrElse folderPaths.Count = 0 Then Return result
@@ -1738,12 +1758,12 @@ Partial Class Form1
             Next
 
             ' SQLite 預設 variable 上限 999，300 個路徑絕對安全
-            Dim paramNames = Enumerable.Range(0, folderPaths.Count).Select(Function(i) "@fp" & i.ToString()).ToList()
+            Dim paramNames = Enumerable.Range(0, folderPaths.Count).Select(Function(i) "@fh" & i.ToString()).ToList()
 
-            ' 2026/06/12 by Simon/Claude: 更新 SELECT 欄位：移除 topic/sender_email/updated_at，加 sender_id；received_time 改 INTEGER
+            ' 2026/06/12 by Simon/Claude Opus 4.8: 更新 SELECT 欄位：移除 topic/sender_email/updated_at，加 sender_id；received_time 改 INTEGER
             ' 新欄位順序 — entry_id(0),folder_hash(1),subject(2),msg_size(3),received_time INTEGER(4),
-            '             sender_name(5),sender_id(6),msgid_hash(7),item_count_snap(8)
-            Dim sql As String = "SELECT entry_id,folder_hash,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,item_count_snap" &
+            '             sender_name(5),sender_id(6),msgid_hash(7),pr_count_snap(8)
+            Dim sql As String = "SELECT entry_id,folder_hash,subject,msg_size,received_time,sender_name,sender_id,msgid_hash,pr_count_snap" &
                                 "  FROM basic_maillist WHERE folder_hash IN (" & String.Join(",", paramNames) & ")"
 
             Using cmd As New SqliteCommand(sql, _db)
@@ -1762,8 +1782,8 @@ Partial Class Form1
 
                         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
                         ' 2026/06/11 by Gemini/Simon: 把 message_id 轉成 xxHash64，並同時改成 BLOB 儲存節省空間
-                        ' 2026/06/12 by Simon/Claude: received_time 改為 INTEGER (Unix秒)
-                        ' 2026/06/12 by Simon/Claude: sender_id → email 反查
+                        ' 2026/06/12 by Simon/Claude Opus 4.8: received_time 改為 INTEGER (Unix秒)
+                        ' 2026/06/12 by Simon/Claude Opus 4.8: sender_id → email 反查
                         Dim eid As String = ByteArrayToHexString(reader.GetFieldValue(Of Byte())(0))
                         If eid.StartsWith("EMPTY_BASIC_") Then Continue While   ' sentinel row，只記 snap
 
@@ -1796,19 +1816,21 @@ Partial Class Form1
             Dim result As New List(Of FolderStatsDbRow)(512)
             ' 過濾條件: 路徑以 rootPath 開頭，且 entry_id 不為空。若沒勾全選，則只抓 is_mail=1 的。
             Dim filter = If(isIncludeAll, "", " AND is_mail=1")
-            Dim sql = $"SELECT folder_path,entry_id,store_id,is_mail,has_chinese FROM folder_stats " &
-                      $"WHERE folder_path LIKE @p || '%' AND entry_id IS NOT NULL" & filter
+            ' 2026/06/13 by Simon/Claude Opus 4.8: 補 folder_count → 填 row.fc，供 IsSubtreeComplete 的「集合內子夾數 == fc」完整性檢查
+            Dim sql = $"SELECT folder_path,entry_id,store_id,is_mail,has_chinese,folder_count FROM folder_stats " &
+                      $"WHERE folder_path LIKE @fp || '%' AND entry_id IS NOT NULL" & filter
 
             Using cmd As New SqliteCommand(sql, _db)
-                cmd.Parameters.AddWithValue("@p", rootPath)
+                cmd.Parameters.AddWithValue("@fp", rootPath)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read()
                         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
                         result.Add(New FolderStatsDbRow With {.path = reader.GetString(0),
                                                               .eid = If(reader.IsDBNull(1), "", ByteArrayToHexString(reader.GetFieldValue(Of Byte())(1))),
-                                                              .sid = reader.GetString(2),
+                                                              .sid = If(reader.IsDBNull(2), "", reader.GetString(2)),
                                                               .isMail = reader.GetInt32(3),
-                                                              .hasCh = reader.GetInt32(4)})
+                                                              .hasCh = reader.GetInt32(4),
+                                                              .fc = If(reader.IsDBNull(5), -1L, reader.GetInt64(5))})
                     End While
                 End Using
             End Using
@@ -1838,23 +1860,24 @@ Partial Class Form1
             ' 或是利用路徑字串特性：新的路徑長度應該是在 parent 之後且沒有多餘的層級
             ' 簡化做法：目前專案路徑是用 \ 分隔。
             Dim sql = "SELECT folder_path,entry_id,store_id,is_mail,has_chinese FROM folder_stats " &
-                      " WHERE folder_path LIKE @p || '\%' AND entry_id IS NOT NULL " & filter &
-                      "   AND folder_path NOT LIKE @p || '\%\%' " & ' 排除第二層以後的
+                      " WHERE folder_path LIKE @fp || '\%' AND entry_id IS NOT NULL " & filter &
+                      "   AND folder_path NOT LIKE @fp || '\%\%' " & ' 排除第二層以後的
                       " ORDER BY has_chinese ASC, folder_path ASC"
 
             Using cmd As New SqliteCommand(sql, _db)
-                cmd.Parameters.AddWithValue("@p", parentPath)
+                cmd.Parameters.AddWithValue("@fp", parentPath)
                 Using reader = cmd.ExecuteReader()
                     While reader.Read()
                         ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
                         result.Add(New FolderStatsDbRow With {.path = reader.GetString(0),
                                                               .eid = ByteArrayToHexString(reader.GetFieldValue(Of Byte())(1)),
-                                                              .sid = reader.GetString(2),
+                                                              .sid = If(reader.IsDBNull(2), "", reader.GetString(2)),
                                                               .isMail = reader.GetInt32(3),
                                                               .hasCh = reader.GetInt32(4)})
                     End While
                 End Using
             End Using
+
             Return If(result.Count > 0, result, Nothing)
         Catch ex As System.Exception
             _dbg(" ├ 錯誤", parentPath & ": " & ex.Message)
@@ -1870,8 +1893,8 @@ Partial Class Form1
         If _db Is Nothing Then Return list
 
         Try
-            ' 2026/06/12 by Simon/Claude: 更新 SELECT 欄位順序，並移除 has_chinese（UI 只在 TreeView 用到，且不常變動，不適合放在全量查詢裡）
-            Dim sql As String = "SELECT folder_path, entry_id, store_id, content_count_snap, 
+            ' 2026/06/12 by Simon/Claude Opus 4.8: 更新 SELECT 欄位順序，並移除 has_chinese（UI 只在 TreeView 用到，且不常變動，不適合放在全量查詢裡）
+            Dim sql As String = "SELECT folder_path, entry_id, store_id, pr_count_snap, 
                                         mail_count, folder_count, folder_size, mail_count_all, folder_count_all, folder_size_all, is_mail FROM folder_stats"
             ' 建立並填入原有的結構
             Using cmd As New SqliteCommand(sql, _db)
@@ -1913,10 +1936,10 @@ Partial Class Form1
         Try
             Using txn = _db.BeginTransaction()
                 Using cmd As New SqliteCommand(
-                    "INSERT OR REPLACE INTO month_counts (folder_hash,year,month,count) VALUES (@fp,@yr,@mo,@cnt)", _db, txn)
+                    "INSERT OR REPLACE INTO month_counts (folder_hash,year,month,count) VALUES (@fh,@yr,@mo,@cnt)", _db, txn)
                     ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-                    ' 2026/06/12 by Simon/Claude: 移除 updated_at（只寫不讀）
-                    cmd.Parameters.Add("@fp", SqliteType.Integer).Value = FolderPathToHash64(fPath)
+                    ' 2026/06/12 by Simon/Claude Opus 4.8: 移除 updated_at（只寫不讀）
+                    cmd.Parameters.Add("@fh", SqliteType.Integer).Value = FolderPathToHash64(fPath)
                     cmd.Parameters.Add("@yr", SqliteType.Integer).Value = year
                     cmd.Parameters.Add("@mo", SqliteType.Integer)
                     cmd.Parameters.Add("@cnt", SqliteType.Integer)
@@ -1947,8 +1970,8 @@ Partial Class Form1
 
         Try
             ' 2026/06/12 by Gemini/Simon: 把 folder_path TEXT 改成 folder_hash INTEGER 儲存，並新增一個記憶體字典 _dictHashToPath 來反查雜湊對應的路徑
-            Using cmd As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_hash=@h", _db)
-                cmd.Parameters.AddWithValue("@h", FolderPathToHash64(fPath))
+            Using cmd As New SqliteCommand("DELETE FROM basic_maillist WHERE folder_hash=@fh", _db)
+                cmd.Parameters.AddWithValue("@fh", FolderPathToHash64(fPath))
                 Dim rows = cmd.ExecuteNonQuery()
                 _dbg("DbDeleteBasicMailInfoByPath", $"{ExtractFolderName(fPath)}: 清除 {rows} 筆")
             End Using
@@ -1956,7 +1979,171 @@ Partial Class Form1
             _dbg("DbDeleteBasicMailInfoByPath 錯誤", $"{ExtractFolderName(fPath)}: {ex.Message}")
         End Try
     End Sub
-    Friend Sub DbShowDebugStat(tableName As String)
+    Private Async Function DbVacuumIfNeeded() As Task
+        ' 2026/06/16 by Claude Sonnet 4.6: 檢查碎片比例，超過門檻才執行 VACUUM
+        ' VACUUM 會重建整個 DB 檔案，執行期間 DB 鎖定，不可做其他讀寫
+        ' 使用 5% 門檻：避免每次 RenewCache 後都強制執行（大多數情況碎片很少）
+        If _db Is Nothing Then Return
+        Try
+            Dim pageCount As Long = 0, freelistPages As Long = 0
+            Using cmd As New SqliteCommand("PRAGMA page_count", _db) : pageCount = Convert.ToInt64(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("PRAGMA freelist_count", _db) : freelistPages = Convert.ToInt64(cmd.ExecuteScalar()) : End Using
+
+            Dim ratio As Single = If(pageCount > 0, freelistPages / pageCount, 0)
+            _dbg($"freelist={freelistPages}/{pageCount} 頁 ({ratio:P1})")
+            If ratio > 0.05 Then
+                ProgressBar1.Text = "碎片超過 5%，開始執行 VACUUM..." : ProgressBar2.Text = "VACUUM 整理中..."
+                _dbg("碎片超過 5%，開始執行 VACUUM...")
+                Await Task.Run(Sub()
+                                   Using cmd As New SqliteCommand("VACUUM", _db) : cmd.ExecuteNonQuery() : End Using
+                               End Sub)
+                ProgressBar1.Text = "DB VACUUM 完成"
+            Else
+                ProgressBar1.Text = "碎片比例低於 5%，略過 VACUUM"
+                _dbg("碎片比例低於 5%，略過 VACUUM")
+            End If
+        Catch ex As Exception
+            _dbg("錯誤", ex.Message)
+        End Try
+    End Function
+    Friend Async Function DbShowDbFileStat() As Task
+        ''' <summary>
+        ''' 點擊 ListView6 "DB 檔案大小" 時呼叫的兩段式輸出：
+        '''   階段一 (UI thread)   : PRAGMA 頁面資訊 + 各表筆數 (瞬間完成)
+        '''   階段二 (Task.Run)    : 用 CAST AS BLOB 算各表純資料淨重 (~3-5 秒)
+        ''' 因 e_sqlite3.dll 預設未啟用 SQLITE_ENABLE_DBSTAT_VTAB，本函數不嘗試 dbstat，
+        ''' 改用「淨重比例分配」估算各表實體佔用 (相對排名準確，絕對值約 ±20%)。
+        ''' 2026/06/13 by Simon/Claude Opus 4.8
+        ''' </summary>
+        If _db Is Nothing Then Return
+
+        ' Task.Run 內呼叫 _dbg 的 stack trace 會抓到編譯器生成的 lambda 名稱，故預先封裝 forwarder
+        ' 直接走 DebugForm.AddMessage3 並傳入 forcedCaller，與 _dbg() 的 Release-build 行為等效
+        Dim _dbgFwd As Action(Of String, String) = Sub(a, b)
+                                                       If _isDebugMode Then DebugForm.AddMessage3(a, b, "DbShowDbFileStat")
+                                                   End Sub
+        _dbgFwd("開始", "📊DB 檔案大小")
+
+        Try
+            ' ===== 階段一：UI thread 上的瞬時資料 =====
+            ' 1. 檔案實體大小
+            Dim fpath As New IO.FileInfo(_dbPath)
+            Dim fileSizeMB As Single = fpath.Length / 1024 / 1024
+
+            ' 2. PRAGMA 頁面資訊：page_size × page_count = DB 主檔內容大小 (不含 -wal/-shm 暫存檔)
+            Dim pageSize As Integer = 0, pageCount As Long = 0, freelistPages As Long = 0
+            Using cmd As New SqliteCommand("PRAGMA page_size", _db) : pageSize = Convert.ToInt32(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("PRAGMA page_count", _db) : pageCount = Convert.ToInt64(cmd.ExecuteScalar()) : End Using
+            Using cmd As New SqliteCommand("PRAGMA freelist_count", _db) : freelistPages = Convert.ToInt64(cmd.ExecuteScalar()) : End Using
+            Dim freelistMB As Single = freelistPages * pageSize / 1024 / 1024
+            Dim dbPagesMB As Single = pageCount * pageSize / 1024 / 1024
+
+            ' 3. 列出全部 user table (排除 sqlite_ 開頭的系統表)
+            Dim tableNames As New List(Of String)
+            Using cmd As New SqliteCommand("Select name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", _db)
+                Using rd = cmd.ExecuteReader()
+                    While rd.Read() : tableNames.Add(rd.GetString(0)) : End While
+                End Using
+            End Using
+
+            ' 2026/06/14 by Simon/Claude Opus 4.8: 依固定邏輯順序重排顯示，與 Tab6 Lv6 一致 (取代上面的字母序)。
+            ' 不在清單內的新表自動排到尾端 (保留 ORDER BY name 的字母序)，避免將來新增表時漏顯示。
+            Dim _displayOrder = New String() {"folder_stats", "senders", "basic_maillist", "year_counts", "month_counts", "attach_maillist", "attach_filenames"}
+            tableNames = tableNames.OrderBy(Function(n) If(Array.IndexOf(_displayOrder, n) < 0, Integer.MaxValue, Array.IndexOf(_displayOrder, n))).ToList()
+
+            ' 4. 每張表的筆數 (COUNT(*) 很快，留在 UI thread 內)
+            Dim rowCounts As New Dictionary(Of String, Long)
+            For Each t In tableNames
+                Using cmd As New SqliteCommand($"SELECT COUNT(*) FROM [{t}]", _db)
+                    rowCounts(t) = Convert.ToInt64(cmd.ExecuteScalar())
+                End Using
+            Next
+
+            ' 5. 預先收集每張表的欄位清單 (供 Task.Run 內組 SQL，避免 Task.Run 內再讀 PRAGMA)
+            Dim colMap As New Dictionary(Of String, List(Of String))
+            For Each t In tableNames
+                Dim cols As New List(Of String)
+                Using cmd As New SqliteCommand($"PRAGMA table_info([{t}])", _db)
+                    Using rd = cmd.ExecuteReader()
+                        While rd.Read() : cols.Add(rd("name").ToString()) : End While
+                    End Using
+                End Using
+                colMap(t) = cols
+            Next
+
+            ' ----- 階段一輸出 -----
+            _dbgFwd(" ├", $"資料庫路徑: {_dbPath}")
+            _dbgFwd(" ├", $"檔案實體大小: {fileSizeMB:F3} MB (page_size={pageSize}, page_count={pageCount}, 主檔約 {dbPagesMB:F3} MB)")
+            _dbgFwd(" ├", $"freelist 碎片: {freelistPages} 頁 ≈ {freelistMB:F3} MB")
+            _dbgFwd(" ├", "資料表筆數:")
+            For Each t In tableNames
+                _dbgFwd(" │", $" [{t}]".PadRight(22) & rowCounts(t).ToString("N0").PadLeft(10) & " 筆")
+            Next
+
+            ' ===== 階段二：背景算各表純資料淨重 =====
+            ' Task.Run 內對 _db 操作：第一階段已結束，無 overlap，符合 SqliteConnection thread-safety 規範
+            Dim netResult = Await Task.Run(
+                Function() As Dictionary(Of String, Single)
+                    Dim result As New Dictionary(Of String, Single)
+                    For Each t In tableNames
+                        Try
+                            Dim cols = colMap(t)
+                            If cols.Count = 0 Then result(t) = 0 : Continue For
+                            ' 2026/06/13 by Simon/Claude Opus 4.8: 改用逗號分隔，對齊 DbShowTableStat 的寫法。
+                            ' 原本用 " + " 串接所有 SUM()，SQLite 中 NULL + 任何值 = NULL，
+                            ' 任一欄全為 NULL 時整條表達式變 NULL，外層 IsDBNull 判成 0F (錯誤)。
+                            ' 改為逗號分隔各欄成獨立 SELECT 欄位，每欄各自 IsDBNull 處理，互不干擾。
+                            Dim parts As New List(Of String)
+                            For Each c In cols : parts.Add($"SUM(length(CAST([{c}] AS BLOB)))") : Next
+                            Dim sql = "SELECT " & String.Join(", ", parts) & $" FROM [{t}]"
+                            Using cmd As New SqliteCommand(sql, _db)
+                                Using rd = cmd.ExecuteReader()
+                                    If rd.Read() Then
+                                        Dim total As Single = 0
+                                        For i As Integer = 0 To cols.Count - 1
+                                            If Not rd.IsDBNull(i) Then total += Convert.ToSingle(rd(i)) / 1024.0F / 1024.0F
+                                        Next
+                                        result(t) = total
+                                    Else
+                                        result(t) = 0
+                                    End If
+                                End Using
+                            End Using
+                        Catch ex As System.Exception
+                            result(t) = -1 ' 標記錯誤，輸出時跳過
+                        End Try
+                    Next
+                    Return result
+                End Function)
+
+            ' ----- 階段二輸出：淨重 + 按比例估算實體佔用 -----
+            ' 估算法：(扣除 freelist 後的有效實體) × (本表淨重 / 全部淨重) ≈ 本表實體佔用
+            ' 此法相對排名極準，絕對值含 index/row header/b-tree overhead 攤分，誤差 ±20% 內
+            Dim totalNetMB As Single = 0
+            For Each t In tableNames
+                If netResult.ContainsKey(t) AndAlso netResult(t) >= 0 Then totalNetMB += netResult(t)
+            Next
+            Dim usefulMB As Single = dbPagesMB - freelistMB
+
+            _dbgFwd(" ├", "純資料淨重明細 (CAST AS BLOB):")
+            For Each t In tableNames
+                If Not netResult.ContainsKey(t) OrElse netResult(t) < 0 Then
+                    _dbgFwd(" │", $" [{t}]".PadRight(22) & "讀取失敗")
+                    Continue For
+                End If
+                Dim netMB As Single = netResult(t)
+                Dim estPhys As Single = If(totalNetMB > 0, usefulMB * (netMB / totalNetMB), 0F)
+                _dbgFwd(" │", $" [{t}]".PadRight(22) & $"{netMB:F2} MB".PadLeft(12) & $"  估算實體 ≈ {estPhys:F2} MB")
+            Next
+            _dbgFwd(" │", $" 所有資料表淨重總計: {totalNetMB:F2} MB")
+            _dbgFwd(" │", $" 檔案 vs 淨重 : {(fileSizeMB - totalNetMB):F2} MB (索引 + header + b-tree + freelist)")
+            _dbgFwd("結束", "DB 檔案大小")
+
+        Catch ex As System.Exception
+            _dbgFwd(" ├ 錯誤", $"DbShowDbFileStat: {ex.Message}")
+        End Try
+    End Function
+    Friend Async Function DbShowTableStat(tableName As String) As Task
         ''' <summary>
         ''' 深度分析快取表：動態計算精準 Bytes 淨容量、並還原真實的實體 SSD 大小誤差 (壓縮邏輯)
         ''' </summary>
@@ -2028,7 +2215,7 @@ Partial Class Form1
             _dbg("結束", $"[{tableName}]")
 
         Catch ex As System.Exception : _dbg(" ├ 錯誤", $"分析 {tableName} 失敗: {ex.Message}") : End Try
-    End Sub
+    End Function
 #End Region
 
 End Class

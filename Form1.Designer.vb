@@ -337,7 +337,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(715, 395)
+        ListView2.Size = New Size(713, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -372,7 +372,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(715, 857)
+        Chart2.Size = New Size(713, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -428,7 +428,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(584, 77)
+        CheckSubFolder3.Location = New Point(582, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -442,7 +442,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(590, 10)
+        Button3.Location = New Point(588, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -525,7 +525,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(715, 1133)
+        ListView3.Size = New Size(713, 1133)
         ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -771,7 +771,7 @@ Partial Class Form1
         Listview4.Location = New Point(0, 111)
         Listview4.Margin = New Padding(4)
         Listview4.Name = "Listview4"
-        Listview4.Size = New Size(715, 1133)
+        Listview4.Size = New Size(713, 1133)
         Listview4.TabIndex = 13
         Listview4.UseCompatibleStateImageBehavior = False
         Listview4.View = View.Details
@@ -792,7 +792,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(603, 15)
+        ButtonDeleteMail.Location = New Point(601, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -804,7 +804,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(499, 15)
+        Button4.Location = New Point(497, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -903,7 +903,7 @@ Partial Class Form1
         ListView6.Name = "ListView6"
         ListView6.Scrollable = False
         ListView6.ShowGroups = False
-        ListView6.Size = New Size(360, 679)
+        ListView6.Size = New Size(360, 704)
         ListView6.TabIndex = 17
         ListView6.TabStop = False
         ListView6.UseCompatibleStateImageBehavior = False

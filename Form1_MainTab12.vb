@@ -13,13 +13,8 @@ Partial Class Form1
     Private _fontBold = System.Drawing.FontStyle.Bold
     Private _fontItalic = System.Drawing.FontStyle.Italic
 
-    Private _ctxListView1 As ContextMenuStrip
-    ' 可複選Treeview 自訂控制項 及 ContextMenu 成員變數，只初始化一次，不在每次右鍵時重新建立
     ' delete: 2026/04/01 by simon, 直接從設計工具建立 SimTree 控制項到 Form1
-    'Private WithEvents SimTree1 As New SimTree
-    'Private WithEvents SimTree2 As New SimTree
-    'Private WithEvents SimTree3 As New SimTree
-    'Private WithEvents SimTree4 As New SimTree
+    Private ctxMenuLv1 As ContextMenuStrip
 
     ' ── 全域勾選狀態變數 (by Gemini, 2026/04/10: 優化效能，避免頻繁讀取 UI) ──
     Private _includeSubTab2 As Boolean = False
@@ -294,7 +289,7 @@ Partial Class Form1
     End Sub
     Private Sub Lv1_MouseClick(sender As Object, e As MouseEventArgs) Handles ListView1.MouseClick
         ' ✅ 直接顯示已初始化好的選單，不重複建立和 AddHandler
-        If e.Button = MouseButtons.Right Then _ctxListView1.Show(System.Windows.Forms.Cursor.Position)
+        If e.Button = MouseButtons.Right Then ctxMenuLv1.Show(System.Windows.Forms.Cursor.Position)
         ' 2026/3/6: 原有程式碼每次都會新建一個ContextMenuStrip, 每次都新建一個都要重新AddHandler會造成memory leak
         ' 現在改成只在initial的時候建立一次, 之後每次右鍵點擊的時候直接Show()就好, 不用再重複建立
     End Sub
@@ -415,8 +410,9 @@ Partial Class Form1
         ProgressBar2.Text = $"F5: 讀取 {ExtractFolderName(rootPath)}..."
 
         Dim rootMc As Long = GetMailCountL3(folder, rootPath)
-        Dim rootMca As Long = Await GetMailCountAllL3(folder, cToken:=cToken)
-        Dim rootFca As Long = Await GetFolderCountAllL3(folder, cToken:=cToken)
+        ' 2026/06/13 by Simon/Claude Opus 4.8: forceRefresh:=True 一路 thread 到 L2.5/L3，F5 跳過記憶體+DB 快取直打 L3 完整重掃
+        Dim rootMca As Long = Await GetMailCountAllL3(folder, cToken:=cToken, forceRefresh:=True)
+        Dim rootFca As Long = Await GetFolderCountAllL3(folder, cToken:=cToken, forceRefresh:=True)
         Dim rootFc As Long = GetFolderCountL3(folder, rootPath)
 
         ' 更新快取
@@ -434,8 +430,9 @@ Partial Class Form1
             cToken.ThrowIfCancellationRequested()
             Dim childPath As String = rootPath & "\" & child.Name
             _cacheMailCount(childPath) = GetMailCountL3(child, childPath)
-            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, cToken:=cToken)
-            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, cToken:=cToken)
+            ' 2026/06/13 by Simon/Claude Opus 4.8: 同上，子資料夾亦以 forceRefresh:=True 強制重掃
+            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, cToken:=cToken, forceRefresh:=True)
+            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, cToken:=cToken, forceRefresh:=True)
             _cacheFolderCount(childPath) = GetFolderCountL3(child, childPath)
 
             rows.Add(New FolderBfsEntry With {.Folder = child, .FolderPath = childPath,
@@ -710,7 +707,7 @@ Partial Class Form1
         ' 2026/04/13 by Simon/Claude: B方案新增，5欄格式
         Dim totalMailStr As String = totalMail.ToString("N0") & " "
         Dim totalSubStr As String = totalSub.ToString("N0") & " "
-        Dim lvi As New ListViewItem({"▶ 合計 (" & selectedCount.ToString("N0") & " 個資料夾) ", "", totalSubStr, totalMailStr, ""})
+        Dim lvi As New ListViewItem({"▶ 合計 (" & selectedCount.ToString("N0") & " 個 PST 檔案) ", "", totalSubStr, totalMailStr, ""})
         lvi.Font = New Font(ListView1.Font, _fontBold)
         lvi.BackColor = Color.FromArgb(220, 235, 252)
         lvi.ForeColor = Color.FromArgb(0, 70, 140)

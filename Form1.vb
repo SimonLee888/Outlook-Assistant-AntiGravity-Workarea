@@ -39,37 +39,51 @@ Partial Class Form1
 
 #Region "■ 01 全域宣告"
     <System.Diagnostics.Conditional("DEBUG")>
-    Private Sub _dbg(Optional msg As String = "", Optional detail As String = "")
-        ' 2026/03/31 by Gemini: 改用 DebugForm 統一提供的 GetCallerName，此版本支援解析 Async 非同步方法名稱
-        Dim realCaller As String = DebugForm.GetCallerName()
+    Private Sub _dbg(Optional msg As String = "", Optional detail As String = "", <System.Runtime.CompilerServices.CallerMemberName> Optional caller As String = "")
+        ' Tier 1, 2026/06/15 by Simon/Claude Opus 4.8: 守衛提前 — 顯示關閉時直接 return。
+        ' 原本守衛在最後一行，導致 _isDebugMode=False 時 573 處呼叫每次仍付出呼叫端解析成本後才丟掉。
+        If Not _isDebugMode Then Return
 
-        ' 2026/06/10 by Simon/Claude: GetCallerName() 回傳 "Form1.MethodName"，
+        ' 2026/03/31 by Gemini: 改用 DebugForm 統一提供的 GetCallerName，此版本支援解析 Async 非同步方法名稱
+        ' Tier 2, 2026/06/15 by Simon/Claude Opus 4.8: 預設改走編譯期注入的 CallerMemberName (零成本, 無 StackTrace/反射/Regex)。
+        ' CallerMemberName 對 async 方法會自動還原乾淨原始名稱，但不帶 [Async] 標記。
+        ' 若要恢復 [Async] 辨識：把 _useStackCaller 設 True 改走 GetCallerName；確定永遠不需要時，可直接把下面那行 If 註解掉。
+        Dim realCaller As String = caller
+        If _useStackCaller Then realCaller = DebugForm.GetCallerName()
+
+        ' 2026/06/10 by Simon/Claude Opus 4.8: GetCallerName() 回傳 "Form1.MethodName"，
         ' 因所有呼叫端都在 Form1，"Form1." 前綴是冗餘資訊，直接 strip
+        ' (CallerMemberName 回傳純方法名不含前綴，此行對它為 no-op；僅 GetCallerName 路徑會 strip)
         If realCaller.StartsWith("Form1.") Then realCaller = realCaller.Substring(6)
 
-        If _isDebugMode Then DebugForm.AddMessage3(msg, detail, realCaller)
+        DebugForm.AddMessage3(msg, detail, realCaller)
     End Sub
+
+    Private _isDebugMode As Boolean                     ' 是否為 Debug 模式，根據 VS 的編譯組態自動設定，是否顯示 DebugForm 以及是否啟用內部調試訊息
+    Private _iLikeNoisy As Boolean = False              ' 是否啟用過濾debug message 噪音的功能，預設為 False 不顯示高頻率的迴圈訊息，想要詳細訊息轟炸就切成 True
+    ' Tier 2, 2026/06/15 by Simon/Claude Opus 4.8: 呼叫端名稱解析方式開關。
+    ' False = 用 CallerMemberName (編譯期注入, 零成本, 但 async 不帶 [Async] 標記)；
+    ' True  = 用 GetCallerName (StackTrace, 較慢, 保留 [Async])
+    Private _useStackCaller As Boolean = False
 
     'Private _isFirstInit As Boolean = True          ' 第一次啟動程式
     ' by Gemini, 2026/04/01: 延遲載入 UI 的狀態旗標
     ' Index   0: 取代原 _isFirstInit，標記 Form 與 Tab1 是否處於「首次啟動/首次選定」階段 (True=首次啟動中)
     ' Index 1~5: 對應 Tab1~Tab5 的 UI 是否已完成掛載 (True=已完成)
-    Private _isTabInitialized(10) As Boolean        ' 記錄每個 Tab 的 UI 是否已經初始化完成, (0)是FormLoad的第一次啟動, (1)~(5)分別對應 Tab1~Tab5
-    Private _isUserBusy As Boolean = False          ' ✅ 2026/04/01 by Gemini: 使用者操作忙碌旗標，用於暫緩背景預載程序
-    Private _isDebugMode As Boolean                 ' 是否為 Debug 模式，根據 VS 的編譯組態自動設定，是否顯示 DebugForm 以及是否啟用內部調試訊息
-    Private _iLikeNoisy As Boolean = False          ' 是否啟用過濾debug message 噪音的功能，預設為 False 不顯示高頻率的迴圈訊息，想要詳細訊息轟炸就切成 True
-    Private _isClosing As Boolean = False           ' added by Gemini, 2026/04/08: 關閉流程旗標，確保 FormClosing 中的非同步儲存完成後再釋放資源並允許關閉
-    'Private _cancelRequested As Boolean = False    ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
-    Private _cts As CancellationTokenSource         ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
+    Private _isTabInitialized(10) As Boolean            ' 記錄每個 Tab 的 UI 是否已經初始化完成, (0)是FormLoad的第一次啟動, (1)~(5)分別對應 Tab1~Tab5
+    Private _isUserBusy As Boolean = False              ' ✅ 2026/04/01 by Gemini: 使用者操作忙碌旗標，用於暫緩背景預載程序
+    Private _isClosing As Boolean = False               ' added by Gemini, 2026/04/08: 關閉流程旗標，確保 FormClosing 中的非同步儲存完成後再釋放資源並允許關閉
+    'Private _cancelRequested As Boolean = False        ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
+    Private _cts As CancellationTokenSource             ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
     '2026/3/10重構時停止使用全域變數來記錄遞迴過程中的資料, 改用傳遞參數以避免多線程或重入呼叫時資料被改寫的問題
     'Private _intTotalMailCount As Integer          ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
     'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
-    Private _lastTvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
-    Private _lastLvMousePoint As Point = Point.Empty ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
+    Private _lastTvMousePoint As Point = Point.Empty    ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
+    Private _lastLvMousePoint As Point = Point.Empty    ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
 
+    Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
     Private _lvResizePending As ListView = Nothing
     Private _lvResizeTimer As New System.Windows.Forms.Timer() With {.Interval = 100}
-    Private _isResizingLv As Boolean = False        ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
@@ -375,11 +389,18 @@ Partial Class Form1
             AddHandler lv.DrawColumnHeader, Sub(s, ev) ev.DrawDefault = True    ' 統一表頭繪製, 2026/4/26 by Gemini
             AddHandler lv.DrawItem, AddressOf HandleLv3Lv4Lv5_DrawItem          ' 統一項目背景繪製, 2026/05/05 by Gemini 3 Flash
             AddHandler lv.DrawSubItem, AddressOf HandleLv3Lv4Lv5_DrawSubItem    ' 統一 SubItem 繪製 (處理 Hover 變色與對齊), 2026/4/26 by Gemini
+
+            AddHandler lv.SelectedIndexChanged, AddressOf ShowLv3Lv4Lv5PathToProgressBar
+
             ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4Lv5_KeyPress        ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
             AddHandler lv.KeyDown, AddressOf HandleLv3Lv4Lv5_KeyDown            ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
             AddHandler lv.MouseClick, AddressOf HandleLv3Lv4Lv5_MouseClick      ' 整合：單擊左鍵複製與點擊顯示路徑
             AddHandler lv.MouseDoubleClick, AddressOf HandleLv3Lv4Lv5_DoubleClick
-            AddHandler lv.SelectedIndexChanged, AddressOf ShowLv3Lv4Lv5PathToProgressBar
+            AddHandler lv.MouseDown, AddressOf HandleLv3Lv4Lv5_MouseDown        ' 2026/06/14 by Simon/Claude Opus 4.8: 右鍵先選取
+
+            ' 2026/06/14 by Simon/Claude Opus 4.8: 建立 Lv3/4/5 共用刷新右鍵選單 (須在 InitListView(ListView3/4/5) 之前)
+            InitLv3Lv4Lv5RefreshMenu()
+            lv.ContextMenuStrip = ctxMenuRefresh
         End If
 
         AddHandler lv.GotFocus, AddressOf HandleLvGotFocus
@@ -464,9 +485,9 @@ Partial Class Form1
         ' 在 hover / select 狀態下不被 OS 覆蓋 (DrawSubItem handler 在 Form1_MainTabs.vb) 
         ListView1.OwnerDraw = True
 
-        _ctxListView1 = New ContextMenuStrip()
-        _ctxListView1.Items.Add("進入資料夾 (&E)", Nothing, Sub(sender, e) EnterSelectedFolder(ListView1.SelectedItems(0)))
-        _ctxListView1.Items.Add("統計資料夾大小 (&C)", Nothing, AddressOf ComputeFolderSize)
+        ctxMenuLv1 = New ContextMenuStrip()
+        ctxMenuLv1.Items.Add("進入資料夾 (&E)", Nothing, Sub(sender, e) EnterSelectedFolder(ListView1.SelectedItems(0)))
+        ctxMenuLv1.Items.Add("統計資料夾大小 (&C)", Nothing, AddressOf ComputeFolderSize)
         _isTabInitialized(1) = True
         _dbg("結束")
 
@@ -1063,14 +1084,12 @@ Partial Class Form1
         _cacheFolderCountAll.Clear()
         _dbg("已切換顯示所有資料夾 (FolderTree/MailCountAll/FolderCountAll 快取已清空)", $"Mode: {_showAllFolders}")
 
-        ' A. 備份當前路徑與展開狀態 (僅優先還原 Tab1)
-        Dim oldPath As String = ""
-        Dim wasExpanded As Boolean = False
-        Dim currentSelected = TryCast(SimTree1, SimTree)?.SelectedNode
-        If currentSelected IsNot Nothing Then
-            oldPath = GetSelectedFolderPath(SimTree1)
-            wasExpanded = currentSelected.IsExpanded
-        End If
+        ' A. 備份 Tab1 完整展開與選取狀態 (路徑字串，Nodes.Clear 後仍有效)
+        ' 2026/06/15 by Simon/Claude Opus 4.8: 改用 SaveTreeStateByPath 快照「所有」展開路徑，
+        '   取代舊版僅備份單一選取節點 (oldPath/wasExpanded)，
+        '   使切換 _showAllFolders 後已展開的節點保持展開、不被擅自收合。
+        ' todo: 為什麼只備份 Tab1 的狀態？
+        Dim st1State = SimTree1.SaveTreeStateByPath()
 
         ' B. 清理所有 TreeView
         For Each tv In GetAllTvList(Me)
@@ -1081,12 +1100,15 @@ Partial Class Form1
         Next
 
         ' C. 重新載入 Tab1 的樹 (其餘 Tab 採 Lazy Load，切換時才重載)
+        ' todo: 若這裡強制重載會不會又有副作用?
         LoadStoreToTreeView(_pstStoreList, SimTree1)
 
-        ' D. 嘗試還原焦點與展開狀態
-        '   若原路徑已不存在 (過濾) 或搜尋異常，則 Fallback 回收件匣
-        ' by Gemini 3.5 Flash, 2026/05/21: 改用 SimTree1.SelectNode 高效還原狀態，取代舊有的暴力遞迴 SelectNode
-        If Not SimTree1.SelectNode(oldPath, selectAndFire:=True, expandTarget:=wasExpanded) Then GotoDefaultInbox(SimTree1)
+        ' D. 還原所有展開路徑 + 選取，並觸發統計 (RestoreTreeState 對已消失資料夾天然容錯)
+        '   若選取項目於切換後被過濾消失 (SelectedNode = Nothing)，Fallback 回收件匣
+        ' by Gemini 3.5 Flash, 2026/05/21: 原採 SimTree1.SelectNode 還原單一焦點
+        ' 2026/06/15 by Simon/Claude Opus 4.8: 改用 RestoreTreeState 一併還原全部展開狀態
+        SimTree1.RestoreTreeState(st1State, selectAndFire:=True)
+        If SimTree1.SelectedNode Is Nothing Then GotoDefaultInbox(SimTree1)
 
         ProgressBar2.Text = "全域資料夾過濾已變更，各頁面焦點已嘗試恢復。"
 

@@ -78,7 +78,11 @@ Public Class DebugForm
     Private _msgQueue As New System.Collections.Concurrent.ConcurrentQueue(Of ListViewItem)
     Private WithEvents QueueTimer As New System.Windows.Forms.Timer() With {.Interval = 100} ' 每 100ms 清空一次message queue
     Private _lastRecalcWidth As Integer = 0
+
     Private _searchPattern As String = ""
+    Private _searchRegex As Regex = Nothing             ' Tier 3, 2026/06/15 by Simon/Claude: 由 _searchPattern 預編譯, DrawSubItem 直接套用, 省去每格字串多載重複解析
+    Private _fillBrush As New SolidBrush(Color.White)   ' Tier 3, 2026/06/15 by Simon/Claude: 背景填色重用同一支 brush (改 .Color 即可), 取代每格 New SolidBrush/Dispose
+
     Private _lastHighlightedPair As ListViewItem        ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
     Private _historyDebug As New List(Of String)(256)   ' by AntiGravity, 2026/04/07: 搜尋歷史紀錄
     Private _historyIndex As Integer = 0                ' by AntiGravity, 2026/04/07: 目前歷史紀錄索引 (與 Count 相同時代表原始輸入區)
@@ -99,10 +103,7 @@ Public Class DebugForm
         MyBase.WndProc(m)
         If m.Msg = WM_SIZE Then
             Dim sizeType As Integer = m.WParam.ToInt32()
-            If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
-                ' 在 base.WndProc 之後執行，確保佈局已完成結算
-                lvwDebug.Invalidate()
-            End If
+            If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then lvwDebug.Invalidate()
         End If
     End Sub
     Private Sub ApplyListViewFixes()
@@ -298,7 +299,8 @@ Public Class DebugForm
                             Try
                                 If lvwDebug.Items(0).Bounds.Y <> 0 Then lvwDebug.TopItem = lvwDebug.Items(0)
                             Catch : End Try
-                            lvwDebug.Refresh()
+                            lvwDebug.RedrawItems(0, lvwDebug.Items.Count - 1, False)
+                            lvwDebug.Update()
                         End Sub)
         End If
 
@@ -339,8 +341,8 @@ Public Class DebugForm
         ' 2026/3/28 by Gemini: 預先計算快取資訊存入tag備用
         Dim tag As New DebugItemTag()
         tag.textFullRow = (newItem.Text & " " & newItem.SubItems(1).Text & " " & newItem.SubItems(2).Text & " " & newItem.SubItems(3).Text).ToLower()
-        tag.isHit = CheckIsHitInternal(tag.textFullRow) ' 新訊息加入瞬間也要先比對是否已符合搜尋字串
-        tag.timeStamp = timeNow                         ' 2026/3/28 by Gemini: 保留原始精度供日後計算
+        tag.isHit = _searchPattern.Length > 0 AndAlso CheckIsHitInternal(tag.textFullRow)   ' 新訊息加入瞬間也要先比對是否已符合搜尋字串 ' 2026/6/13 改成：_searchPattern 空的話直接跳過
+        tag.timeStamp = timeNow                                                             ' 2026/3/28 by Gemini: 保留原始精度供日後計算
         newItem.Tag = tag
 
         ' by Gemini, 2026/04/03: 區隔邏輯與 Enqueue
@@ -420,43 +422,46 @@ Public Class DebugForm
         If itemsToAdd.Count > 0 Then
             ' 2026/03/31 by Gemini: 自動為「結束」行預算總耗時
             ' 2026/04/11 by Gemini: 改填入 SubItems(3) (Elapsed 欄位)，並支援跨集合搜尋 (itemsToAdd)
-            For Each lvi In itemsToAdd
-                If lvi.Text.Contains("結束") Then
-                    Dim pair As ListViewItem = FindSimilarPair(lvi, itemsToAdd)
-                    If pair IsNot Nothing Then
-                        Dim tagCurrent = TryCast(lvi.Tag, DebugItemTag)
-                        Dim tagPair = TryCast(pair.Tag, DebugItemTag)
+            ' 2206/06/13 by Claude: 效能優化 - 現在要新增的項目如果包含「結束」，才進行配對搜尋，避免每次 Timer 都無差別地 O(N²) 搜尋整個 itemsToAdd 集合
+            If itemsToAdd.Any(Function(lvi) lvi.Text.Contains("結束")) Then
+                For Each lvi In itemsToAdd
+                    If lvi.Text.Contains("結束") Then
+                        Dim pair As ListViewItem = FindSimilarPair(lvi, itemsToAdd)
+                        If pair IsNot Nothing Then
+                            Dim tagCurrent = TryCast(lvi.Tag, DebugItemTag)
+                            Dim tagPair = TryCast(pair.Tag, DebugItemTag)
 
-                        If tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
-                            Dim totalMs As Double = Math.Abs((tagCurrent.timeStamp - tagPair.timeStamp).TotalMilliseconds)
-                            lvi.SubItems(3).Text = totalMs.ToString("#,##0.00")
-                            ' by Gemini, 2026/04/11: 填入數值後同步更新搜尋快取
-                            tagCurrent.textFullRow = (lvi.Text & " " & lvi.SubItems(1).Text & " " & lvi.SubItems(2).Text & " " & lvi.SubItems(3).Text).ToLower()
+                            If tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
+                                Dim totalMs As Double = Math.Abs((tagCurrent.timeStamp - tagPair.timeStamp).TotalMilliseconds)
+                                lvi.SubItems(3).Text = totalMs.ToString("#,##0.00")
+                                ' by Gemini, 2026/04/11: 填入數值後同步更新搜尋快取
+                                tagCurrent.textFullRow = (lvi.Text & " " & lvi.SubItems(1).Text & " " & lvi.SubItems(2).Text & " " & lvi.SubItems(3).Text).ToLower()
+                            End If
                         End If
                     End If
-                End If
-            Next
+                Next
+            End If
 
             With lvwDebug
-                .BeginUpdate()
-                .Items.AddRange(itemsToAdd.ToArray())
-                .EndUpdate()
+                    .BeginUpdate()
+                    .Items.AddRange(itemsToAdd.ToArray())
+                    .EndUpdate()
 
-                ' 💡 2026/04/01 by Gemini:
-                ' EnsureVisible 必須在 EndUpdate 之後呼叫，避免在暫停繪製期間滾動引發的瞬間畫面撕裂與閃爍
-                If .Items.Count > 0 Then
-                    Dim lastItem = .Items(.Items.Count - 1)
-                    lastItem.EnsureVisible()
+                    ' 💡 2026/04/01 by Gemini:
+                    ' EnsureVisible 必須在 EndUpdate 之後呼叫，避免在暫停繪製期間滾動引發的瞬間畫面撕裂與閃爍
+                    If .Items.Count > 0 Then
+                        Dim lastItem = .Items(.Items.Count - 1)
+                        lastItem.EnsureVisible()
 
-                    ' 2026/04/09 by Gemini: 修正游標前進但舊選取殘留的問題
-                    ' 由於已開啟 MultiSelect=True，直接設 Selected=True 會變成加選
-                    ' 因此需先手動清除前次的選取，再設定最後一項，並賦予 Focused 確保游標真正前進
-                    .SelectedItems.Clear()
-                    lastItem.Selected = True
-                    lastItem.Focused = True
-                End If
-            End With
-        End If
+                        ' 2026/04/09 by Gemini: 修正游標前進但舊選取殘留的問題
+                        ' 由於已開啟 MultiSelect=True，直接設 Selected=True 會變成加選
+                        ' 因此需先手動清除前次的選取，再設定最後一項，並賦予 Focused 確保游標真正前進
+                        .SelectedItems.Clear()
+                        lastItem.Selected = True
+                        lastItem.Focused = True
+                    End If
+                End With
+            End If
 
     End Sub
 #End Region
@@ -619,7 +624,9 @@ Public Class DebugForm
             backColor = SystemColors.Highlight
             foreColor = SystemColors.HighlightText
         End If
-        Using brush As New SolidBrush(backColor) : e.Graphics.FillRectangle(brush, e.Bounds) : End Using
+        'Using brush As New SolidBrush(backColor) : e.Graphics.FillRectangle(brush, e.Bounds) : End Using
+        ' Tier 3, 2026/06/15 by Simon/Claude: 重用 member brush，改 .Color 取代每格 New SolidBrush/Dispose
+        _fillBrush.Color = backColor : e.Graphics.FillRectangle(_fillBrush, e.Bounds)
 
         Dim itemText As String = e.SubItem.Text
         If String.IsNullOrEmpty(itemText) Then Return
@@ -631,13 +638,15 @@ Public Class DebugForm
         ' 2026/3/27 by Gemini: 必須強制使用 NoPadding 才能跟 MeasureText(NoPadding) 的手動座標完全對齊
         ' Text bounds (一致的 6px 留白，模擬預設繪製但不產生跳躍)
         Dim textRect As Rectangle = e.Bounds : textRect.Inflate(-6, 0)
-        Dim searchText As String = txtDebug.Text.Trim()
+
         Dim tag = TryCast(e.Item.Tag, DebugItemTag)
         Dim isHitCell As Boolean = False
         Dim matches As System.Text.RegularExpressions.MatchCollection = Nothing
+
         ' 2026/3/28 by Gemini: 讀取快取狀態與預先定義好的 Regex 模式，達成 O(1) 繪製準備
-        If tag IsNot Nothing AndAlso tag.isHit AndAlso Not String.IsNullOrEmpty(_searchPattern) Then
-            matches = System.Text.RegularExpressions.Regex.Matches(itemText, _searchPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+        ' Tier 3, 2026/06/15 by Simon/Claude: 改用預編譯的 _searchRegex 實例，取代每格 Regex.Matches 字串多載
+        If tag IsNot Nothing AndAlso tag.isHit AndAlso _searchRegex IsNot Nothing Then
+            matches = _searchRegex.Matches(itemText)
             If matches IsNot Nothing AndAlso matches.Count > 0 Then isHitCell = True
         End If
 
@@ -684,14 +693,16 @@ Public Class DebugForm
                 ' 💡 2026/04/13 by Gemini 3 Flash: 邊界防禦 (高亮塊)
                 If currentX + szMatch.Width > textRect.Right Then
                     Using highlightBrush As New SolidBrush(Color.Yellow)
-                        e.Graphics.FillRectangle(highlightBrush, New Rectangle(currentX, e.Bounds.Y + 2, textRect.Right - currentX, e.Bounds.Height - 4))
+                        ' Tier 3, 2026/06/15 by Simon/Claude: 改用 framework 快取的 Brushes.Yellow，零配置
+                        e.Graphics.FillRectangle(Brushes.Yellow, New Rectangle(currentX, e.Bounds.Y + 2, textRect.Right - currentX, e.Bounds.Height - 4))
                     End Using
                     TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, New Rectangle(currentX, e.Bounds.Y, textRect.Right - currentX, e.Bounds.Height), Color.Black, flags Or TextFormatFlags.EndEllipsis)
                     lastPos = itemText.Length : Exit For
                 End If
 
                 Using highlightBrush As New SolidBrush(Color.Yellow)
-                    e.Graphics.FillRectangle(highlightBrush, New Rectangle(currentX, e.Bounds.Y + 2, szMatch.Width, e.Bounds.Height - 4))
+                    ' Tier 3, 2026/06/15 by Simon/Claude: 同上，改用 Brushes.Yellow
+                    e.Graphics.FillRectangle(Brushes.Yellow, New Rectangle(currentX, e.Bounds.Y + 2, szMatch.Width, e.Bounds.Height - 4))
                 End Using
                 Dim rMatch As New Rectangle(currentX, e.Bounds.Y, szMatch.Width, e.Bounds.Height)
                 TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, rMatch, Color.Black, flags)
@@ -841,6 +852,9 @@ Public Class DebugForm
         Dim keywords = ParseSearchKeywords(txtDebug.Text.Trim())
         _searchPattern = If(keywords.Count > 0,
             String.Join("|", keywords.OrderByDescending(Function(k) k.Length).Select(Function(kw) System.Text.RegularExpressions.Regex.Escape(kw))), "")
+
+        ' Tier 3, 2026/06/15 by Simon/Claude: 僅在搜尋字串變動時重建 Regex 實例 (含 IgnoreCase)，供 DrawSubItem 重複使用，避免每格用字串多載重新解析 pattern
+        _searchRegex = If(String.IsNullOrEmpty(_searchPattern), Nothing, New Regex(_searchPattern, RegexOptions.IgnoreCase))
 
         lvwDebug.BeginUpdate()
         For Each lvi As ListViewItem In lvwDebug.Items

@@ -7,23 +7,7 @@ Imports Microsoft.Office.Interop.Outlook
 Partial Class Form1
 
 #Region "■ 01 全域宣告"
-    Private _fontDefault As New Font("Microsoft Jhenghei", 10.0F, _fontRegular, GraphicsUnit.Point, 0)
-    Private _fontHeader As New Font("Microsoft Jhenghei", 10.0F, _fontBold, GraphicsUnit.Point, 0)
-    Private _fontRegular = System.Drawing.FontStyle.Regular
-    Private _fontBold = System.Drawing.FontStyle.Bold
-    Private _fontItalic = System.Drawing.FontStyle.Italic
-
-    ' delete: 2026/04/01 by simon, 直接從設計工具建立 SimTree 控制項到 Form1
     Private ctxMenuLv1 As ContextMenuStrip
-
-    ' ── 全域勾選狀態變數 (by Gemini, 2026/04/10: 優化效能，避免頻繁讀取 UI) ──
-    Private _includeSubTab2 As Boolean = False
-    Private _includeSubTab3 As Boolean = False
-    Private _showAllFolders As Boolean = False
-
-    Private _lastHoveredPointIndex As Integer = -1              ' 記住上一個 hover 的點，-1 表示沒有
-    'Private _lastHoveredTreeNode As TreeNode = Nothing         ' 2026/5/14 by simon/Gemini: 將mouse hover作成內建功能
-    Private _lastHoveredListItem As ListViewItem = Nothing
 
     Private _tab1SelectSeq As Integer = 0                       ' Tab1 快速點選防護序號
     Private _tab2SelectSeq As Integer = 0                       ' Tab2 快速點選防護序號
@@ -152,6 +136,7 @@ Partial Class Form1
     '     - GetFolderSizeOld (問題資料夾的 fallback，新版 GetFolderSizeLegacy 仍呼叫)
     ' ==============================================================
 #Region "  ├ Layer1 UI事件層"
+    ' delete: 2026/04/01 by simon, 直接從設計工具建立 SimTree 控制項到 Form1
     Private Async Sub SimTree1_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTree1.AfterSelect
         ' ==============================================================
         ' === Layer 1 (UI 事件層) — SimTree1 多選版 ===
@@ -411,8 +396,8 @@ Partial Class Form1
 
         Dim rootMc As Long = GetMailCountL3(folder, rootPath)
         ' 2026/06/13 by Simon/Claude Opus 4.8: forceRefresh:=True 一路 thread 到 L2.5/L3，F5 跳過記憶體+DB 快取直打 L3 完整重掃
-        Dim rootMca As Long = Await GetMailCountAllL3(folder, cToken:=cToken, forceRefresh:=True)
-        Dim rootFca As Long = Await GetFolderCountAllL3(folder, cToken:=cToken, forceRefresh:=True)
+        Dim rootMca As Long = Await GetMailCountAllL3(folder, forceRefresh:=True, cToken:=cToken)
+        Dim rootFca As Long = Await GetFolderCountAllL3(folder, forceRefresh:=True, cToken:=cToken)
         Dim rootFc As Long = GetFolderCountL3(folder, rootPath)
 
         ' 更新快取
@@ -431,8 +416,8 @@ Partial Class Form1
             Dim childPath As String = rootPath & "\" & child.Name
             _cacheMailCount(childPath) = GetMailCountL3(child, childPath)
             ' 2026/06/13 by Simon/Claude Opus 4.8: 同上，子資料夾亦以 forceRefresh:=True 強制重掃
-            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, cToken:=cToken, forceRefresh:=True)
-            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, cToken:=cToken, forceRefresh:=True)
+            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, forceRefresh:=True, cToken:=cToken)
+            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, forceRefresh:=True, cToken:=cToken)
             _cacheFolderCount(childPath) = GetFolderCountL3(child, childPath)
 
             rows.Add(New FolderBfsEntry With {.Folder = child, .FolderPath = childPath,
@@ -631,7 +616,7 @@ Partial Class Form1
         _dbg("開始")
         ListView1.BeginUpdate()         ' BeginUpdate 可防止大規模更新時的畫面閃爍
         ListView1.Items.Clear()
-        _lastHoveredListItem = Nothing  ' 2026/04/14 fix: 重建清單前清掉 stale 參照，避免第一次 hover 閃動
+        _lastHoveredLvItem = Nothing  ' 2026/04/14 fix: 重建清單前清掉 stale 參照，避免第一次 hover 閃動
 
         If items IsNot Nothing AndAlso items.Count > 0 Then ListView1.Items.AddRange(items.ToArray())
         ListView1.EndUpdate()
@@ -770,7 +755,7 @@ Partial Class Form1
                     If Not sizeItemPaths.Contains(fp) Then Continue For
 
                     lvi.SubItems(4).Text = "計算中..."
-                    Dim dl As Long : _cacheFolderSize.TryRemove(fp, dl) : _cacheFolderSizeAll.TryRemove(fp, dL)
+                    Dim dl As Long : _cacheFolderSize.TryRemove(fp, dl) : _cacheFolderSizeAll.TryRemove(fp, dl)
                     Dim sz As Long = Await GetFolderSizeAllAsync(t.SubFolder, fp, cToken)
                     lvi.SubItems(4).Text = If(sz >= 0, (sz / 1024 / 1024).ToString("N2") & " MB", "計算失敗")
                     If sz >= 0 Then _cacheFolderSizeAll(fp) = sz
@@ -808,7 +793,7 @@ Partial Class Form1
         '   最好的解法是什麼都不做 (且不設 DrawDefault=True)，讓畫面保留原本 DrawSubItem 畫好的狀態。
         If e.Item.Tag Is Nothing Then
             ' 不做任何事，保持原有的畫面像素
-        ElseIf e.Item Is _lastHoveredListItem AndAlso Not e.Item.Selected Then
+        ElseIf e.Item Is _lastHoveredLvItem AndAlso Not e.Item.Selected Then
             ' 2026/04/14: 自己處理 Hover，不要將 DrawDefault 設為 True，讓它進入 DrawSubItem 畫淡灰底
         Else
             e.DrawDefault = True
@@ -842,7 +827,7 @@ Partial Class Form1
             ' 全面回歸使用與原生系統 (DrawDefault) 一致的 Win32 GDI 引擎 (TextRenderer.DrawText)。
             TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, e.Item.ForeColor, flags)
 
-        ElseIf e.Item Is _lastHoveredListItem AndAlso Not e.Item.Selected Then
+        ElseIf e.Item Is _lastHoveredLvItem AndAlso Not e.Item.Selected Then
             ' 2026/04/14 by Gemini 3.1 Pro: 為了避免修改 BackColor 觸發版面重算效能異常，我們手動為 Hover 項目自訂繪製底色
             Using bgBrush As New SolidBrush(ThemeColors.MercuryGray)
                 e.Graphics.FillRectangle(bgBrush, e.Bounds)
@@ -1710,7 +1695,7 @@ Partial Class Form1
         Dim avgLabel As New TextAnnotation With {.Name = "平均值標籤",
                                                  .Text = "AVG: " & average.ToString("N0"),
                                                  .ForeColor = ThemeColors.avgLineColor,
-                                                 .Font = New Font("Tahoma", 10.0F, System.Drawing.FontStyle.Bold),
+                                                 .Font = New Font("Tahoma", 10.0F, FontStyle.Bold),
                                                  .AnchorDataPoint = avgSeries.Points(1),            ' 錨定在最右側長條的中間點 X 座標
                                                  .AnchorAlignment = ContentAlignment.BottomCenter,  ' ★ 強制對齊點的正上方 (避免 MS Chart 自動亂飄移) 
                                                  .AnchorOffsetX = 0,    ' 保持置中

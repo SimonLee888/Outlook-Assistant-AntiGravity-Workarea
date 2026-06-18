@@ -1,5 +1,4 @@
 ﻿Imports System.Collections.Concurrent
-Imports System.IO.Hashing
 Imports System.Runtime.InteropServices
 Imports System.Text
 Imports System.Text.RegularExpressions
@@ -32,7 +31,7 @@ Partial Class Form1
     Private WithEvents _olApp As Outlook.Application = Nothing
     Private _olNS As Outlook.NameSpace = Nothing
     Private _pstStoreList As List(Of Outlook.Store) = Nothing
-    Private _rdo As Redemption.RDOSession = Nothing ' _rdoSession 就等同是outlook.namespace 的意思, 就是Redemption的MAPI session
+    Private _rdo As Redemption.RDOSession = Nothing     ' _rdoSession 就等同是outlook.namespace 的意思, 就是Redemption的MAPI session
     ' 2026-03-22 新增: 用於測試 Redemption.dll 整合 (注意: session.MAPIOBJECT 必須在 Outlook MAPI 連線建立後才能設定 (Form1_Load 尾端)
     '------------------------------------------------------------------------------------------------
     ' Outlook 物件(OOM)	    Redemption 物件 (RDO)     說明
@@ -42,6 +41,13 @@ Partial Class Form1
     ' Outlook.Folder	    Redemption.RDOFolder	對應資料夾層級。
     ' Outlook.MailItem	    Redemption.RDOMail	    對應單封郵件層級。
     ' Outlook.Store	        Redemption.RDOStore	    對應 PST 或 Exchange 帳戶。
+    Private Shared ReadOnly _rdoFastPath As Boolean = False
+    ' 2026/06/13 by Simon/Claude Opus 4.8: GetMailCountAllL3 / GetFolderCountAllL3 的 RDO 快速路徑(⓪TotalItemCount / ①平行枚舉)開關。
+    '   問題: Redemption 走 MAPI 會枚舉到 OOM 看不到的隱藏/非-IPM 夾(Recoverable Items、Conversation Action Settings…)，
+    '         導致子樹計數比 OOM 多算(實測資料夾數 27 vs 22)，且 ⓪TotalItemCount 是單一彙總值無法做 is_mail 過濾。
+    '   現策略: 暫關此快速路徑，這兩個 All 計數一律走 ② OOM 完整骨架 + 計數層模式過濾，結構性保證與 OOM 一致。
+    '           (每夾仍由 GetMailCountL3 內部各自享有 RDO 加速，故僅損失「單次彙總呼叫」這層、成本由夾數而非郵件數決定。)
+    '   若日後要恢復 RDO 快速路徑: 須先在 GetSubtreeToListL3_Rdo 比照 OOM 可見性/IsMailFolder 過濾隱藏夾，再把此開關設 True。
 
     Private Shared _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)       ' 資料夾是否為郵件類型
     Private Shared _cacheMailCount As New ConcurrentDictionary(Of String, Long)             ' 自身資料夾的郵件個數
@@ -54,22 +60,13 @@ Partial Class Form1
     Private Shared _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Folder))     ' GetSortedSubFolders() 已排序的子資料夾清單
     Private Shared _cacheAttachMailList As New ConcurrentDictionary(Of String, FolderCacheTab3) ' 包含附件的郵件預掃描結果 (速度很快, 不用存入SSD?)
     Private Shared _cacheAttachFilename As New ConcurrentDictionary(Of String, List(Of String)) ' 所有附件檔名清單
+    Private Shared _cacheMailBody As New ConcurrentDictionary(Of String, String)                ' by Gemini 3 Flash, 2026/04/26: Tab4 相似度計算用的 Body 快取 (session 級，避免重複讀取 Outlook mailitem.Body)
+
     Private Shared _cacheYearCounts As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
     Private Shared _cacheMonthCounts As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
-
-    Private Shared _cacheSubTreeList As New ConcurrentDictionary(Of String, List(Of (folder As Outlook.Folder, fPath As String)))               ' GetSubtreeToList() 的樹狀展開平坦化清單 (by Gemini, 2026/04/10: 帶路徑優化)
-    ' 2026/06/13 by Simon/Claude Opus 4.8: GetMailCountAllL3 / GetFolderCountAllL3 的 RDO 快速路徑(⓪TotalItemCount / ①平行枚舉)開關。
-    '   問題: Redemption 走 MAPI 會枚舉到 OOM 看不到的隱藏/非-IPM 夾(Recoverable Items、Conversation Action Settings…)，
-    '         導致子樹計數比 OOM 多算(實測資料夾數 27 vs 22)，且 ⓪TotalItemCount 是單一彙總值無法做 is_mail 過濾。
-    '   現策略: 暫關此快速路徑，這兩個 All 計數一律走 ② OOM 完整骨架 + 計數層模式過濾，結構性保證與 OOM 一致。
-    '           (每夾仍由 GetMailCountL3 內部各自享有 RDO 加速，故僅損失「單次彙總呼叫」這層、成本由夾數而非郵件數決定。)
-    '   若日後要恢復 RDO 快速路徑: 須先在 GetSubtreeToListL3_Rdo 比照 OOM 可見性/IsMailFolder 過濾隱藏夾，再把此開關設 True。
-    Private Shared ReadOnly _allCountUseRdoFastPath As Boolean = False
-    Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))  ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
-    Private Shared _cacheBasicMailInfo As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long)) ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
-
-    Private _lv4BodyCache As New ConcurrentDictionary(Of String, String)    ' by Gemini 3 Flash, 2026/04/26: Tab4 相似度計算用的 Body 快取 (session 級，避免重複讀取 Outlook mailitem.Body)
-    Private _isForceRefreshing As Boolean = False                           ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
+    Private Shared _cacheSubTreeList As New ConcurrentDictionary(Of String, List(Of (folder As Outlook.Folder, fPath As String)))                           ' GetSubtreeToList() 的樹狀展開平坦化清單 (by Gemini, 2026/04/10: 帶路徑優化)
+    Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))              ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
+    Private Shared _cacheBasicMailInfo As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long))    ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
 
     Private Enum RefreshResult
         ' 2026/06/14 by Simon/Claude Opus 4.8: 單封刷新結果，供呼叫端決定失效郵件政策 (NotFound vs 暫時錯誤)
@@ -99,18 +96,18 @@ Partial Class Form1
         Dim AttachMailList As List(Of MailItemInfo) ' 所有 hasAttachment 候選 (無大小篩選)
         Dim ItemCountSnap As Long                   ' 快取當下的 PR_CONTENT_COUNT，失效偵測用
     End Structure
-    Private Structure RefreshStats
-        ' 2026/06/14 by Simon/Claude Opus 4.8: 一次刷新作業的統計，供狀態列回饋
-        Dim Updated As Integer
-        Dim NotFound As Integer
-        Dim Errored As Integer
-    End Structure
 
     ' 2026/06/12 by Simon/Claude Opus 4.8: Compiled Regex，程式啟動時編譯一次，後續呼叫零額外開銷
     ' Pattern 說明：^ 錨定開頭；[：:] 同吃半形/全形冒號；外層 + 一次處理所有巢狀前綴
     Private Shared ReadOnly _subjectPrefixRe As New Regex(
         "^(?:(?:RE|FW|FWD|AW|WG|VS|Rép|TR|回覆|回信|轉寄|轉發|回复|答复|转发|返信|転送|답장|회신|전달)\s*[：:]\s*)+",
         RegexOptions.IgnoreCase Or RegexOptions.Compiled)
+
+    ' 2026/06/18 by Simon/Claude Opus 4.8: NormalizeMailBody 三個 Regex 改預編譯(Shared ReadOnly + Compiled)。
+    '   build pass 每封 3 次 Replace，預編譯省掉靜態快取查找並以 IL 加速。※ 真瓶頸在 COM 讀 mailBody，此為微優化。
+    Private Shared ReadOnly _reHtmlTag As New Regex("<[^>]+>", RegexOptions.Compiled)
+    Private Shared ReadOnly _reHtmlEntity As New Regex("&(nbsp|lt|gt|amp|quot|#39);", RegexOptions.Compiled)
+    Private Shared ReadOnly _reWhitespace As New Regex("[\s\u3000]+", RegexOptions.Compiled)
 #End Region
 
 #Region "■ 10 底層 COM 函數群 (新設計，現役主力) "
@@ -511,7 +508,7 @@ Partial Class Form1
         Next
         Return fList
     End Function
-    Private Async Function GetSubtreeToList(rootFolder As Folder, includeSubF As Boolean, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing, Optional forceRefresh As Boolean = False) As Task(Of List(Of (folder As Folder, fPath As String)))
+    Private Async Function GetSubtreeToList(rootFolder As Folder, includeSubF As Boolean, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional forceRefresh As Boolean = False, Optional cToken As CancellationToken = Nothing) As Task(Of List(Of (folder As Folder, fPath As String)))
         ' ---------------------------------------------------------------
         ' GetSubtreeToList — 整棵子資料夾清單 (Layer2.5 快取代理)
         ' 2026/04/17 by Claude: 從 GetSubtreeToList 拆出快取邏輯
@@ -905,15 +902,15 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' GetMailBody — Layer2.5 快取代理：Body 快取存取點
         ' 2026/04/28 by Simon/Claude: 依照 L2.5 架構抽出快取邏輯，L3 只剩純 COM
-        '   ① 快取命中（_lv4BodyCache）→ 直接回傳，0 COM call
+        '   ① 快取命中（_cacheMailBody）→ 直接回傳，0 COM call
         '   ② 快取未命中 → 呼叫 L3 GetMailBodyL3 讀取並正規化
         '   ③ 無論成功或失敗都存快取（失敗存 ""），避免同一封信重複嘗試 COM
         ' ---------------------------------------------------------------
         Dim cached As String = Nothing
-        If _lv4BodyCache.TryGetValue(entryID, cached) Then Return cached
+        If _cacheMailBody.TryGetValue(entryID, cached) Then Return cached
 
         Dim body As String = GetMailBodyL3(entryID)
-        _lv4BodyCache(entryID) = body   ' 無論成功失敗都存入，避免重複打 COM
+        _cacheMailBody(entryID) = body   ' 無論成功失敗都存入，避免重複打 COM
         Return body
 
     End Function
@@ -1327,7 +1324,7 @@ Partial Class Form1
         Return -1
 
     End Function
-    Private Async Function GetMailCountAllL3(rootFolder As Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing, Optional forceRefresh As Boolean = False) As Task(Of Long)
+    Private Async Function GetMailCountAllL3(rootFolder As Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional forceRefresh As Boolean = False, Optional cToken As CancellationToken = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
         ' GetMailCountAllL3 v3.6: 讀取某資料夾及其整棵子樹的郵件總數
         ' by Gemini, 2026/04/02: 升級為 IProgress(Of ProgressReport) 並加入 100ms 節流回報
@@ -1402,9 +1399,9 @@ Partial Class Form1
         ' ⓪ Redemption: TotalItemCount 直接回傳整棵子樹郵件總數
         '   一次 COM call 結束，不需要任何 BFS 遍歷或平行處理
         '   2026-03-22 新增
-        ' 2026/06/13 by Simon/Claude Opus 4.8: RDO 快速路徑以 _allCountUseRdoFastPath 開關控管 (預設關)。
-        '   原因見 _allCountUseRdoFastPath 宣告處: TotalItemCount 含 OOM 看不到的隱藏夾且無法 is_mail 過濾，會與 OOM 不一致。
-        If _allCountUseRdoFastPath AndAlso _rdo IsNot Nothing Then
+        ' 2026/06/13 by Simon/Claude Opus 4.8: RDO 快速路徑以 _rdoFastPath 開關控管 (預設關)。
+        '   原因見 _rdoFastPath 宣告處: TotalItemCount 含 OOM 看不到的隱藏夾且無法 is_mail 過濾，會與 OOM 不一致。
+        If _rdoFastPath AndAlso _rdo IsNot Nothing Then
             Dim rdoFolder As Redemption.RDOFolder = Nothing
             Try
                 rdoFolder = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
@@ -1422,8 +1419,8 @@ Partial Class Form1
         '   使用 GetSubtreeToListL3_Rdo 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add 快速加總
         '   Redemption (RDO) 是 free-threaded，在背景平行執行安全且極為高效
         ' 2026/04/15 by Claude: 改用 ParallelOptions.CancellationToken 取代 _cancelRequested 旗標
-        ' 2026/06/13 by Simon/Claude: 同 ⓪ — 以 _allCountUseRdoFastPath 開關控管 (預設關，避免 RDO 枚舉多算隱藏夾)
-        If _allCountUseRdoFastPath AndAlso _rdo IsNot Nothing Then
+        ' 2026/06/13 by Simon/Claude: 同 ⓪ — 以 _rdoFastPath 開關控管 (預設關，避免 RDO 枚舉多算隱藏夾)
+        If _rdoFastPath AndAlso _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
             Try
                 rdoRoot = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
@@ -1471,7 +1468,7 @@ Partial Class Form1
         Try
             ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，享有快取加速
             ' 2026/06/13 by Simon/Claude Opus 4.8: 取得完整骨架後依 _showAllFolders 在計數層過濾 (剪枝移到這裡)；forceRefresh 一路 thread
-            Dim skeleton As List(Of (folder As Folder, fPath As String)) = Await GetSubtreeToList(rootFolder, includeSubF:=True, cToken:=cToken, forceRefresh:=forceRefresh)
+            Dim skeleton As List(Of (folder As Folder, fPath As String)) = Await GetSubtreeToList(rootFolder, includeSubF:=True, forceRefresh:=forceRefresh, cToken:=cToken)
             Dim targetFolderList As List(Of (folder As Folder, fPath As String)) = FilterSubtreeByMode(skeleton, SafeGetPath(rootFolder))
             Dim grandTotal As Long = 0
             Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Gemini, 2026/04/02: 100ms 節流閥; refactored by Claude Sonnet 4.6, 2026/06/07
@@ -1528,7 +1525,7 @@ Partial Class Form1
         End Try
 
     End Function
-    Private Async Function GetFolderCountAllL3(rootFolder As Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing, Optional forceRefresh As Boolean = False) As Task(Of Long)
+    Private Async Function GetFolderCountAllL3(rootFolder As Folder, Optional progress As IProgress(Of ProgressReport) = Nothing, Optional forceRefresh As Boolean = False, Optional cToken As CancellationToken = Nothing) As Task(Of Long)
         ' --------------------------------------------------------------
         ' GetFolderCountAllL3 v1.5: 讀取某資料夾整棵子樹的資料夾總數 (不含 rootFolder 自身)
         ' by Gemini, 2026/04/02: 增加 IProgress 支援與 100ms 節流回報
@@ -1569,9 +1566,9 @@ Partial Class Form1
         ' 2026/3/24 by Gemini: ⓪ Redemption + 平行處理 (最快路徑)
         '   使用 GetSubtreeToListL3_Rdo 取得清單，以 Parallel.ForEach 搭配 Interlocked.Add(rdoF.Folders.Count) 快速加總
         ' 2026/04/15 by Claude: 改用 ParallelOptions.CancellationToken 取代 _cancelRequested 旗標
-        ' 2026/06/13 by Simon/Claude Opus 4.8: 以 _allCountUseRdoFastPath 開關控管 (預設關)。RDO 枚舉會多算 OOM 看不到的隱藏/非-IPM 夾
+        ' 2026/06/13 by Simon/Claude Opus 4.8: 以 _rdoFastPath 開關控管 (預設關)。RDO 枚舉會多算 OOM 看不到的隱藏/非-IPM 夾
         '   (實測 27 vs OOM 22)，故暫關，改走 ② OOM 完整骨架 + 模式過濾以保證與 OOM 一致。
-        If _allCountUseRdoFastPath AndAlso _rdo IsNot Nothing Then
+        If _rdoFastPath AndAlso _rdo IsNot Nothing Then
             Dim rdoRoot As Redemption.RDOFolder = Nothing
             Try
                 rdoRoot = _rdo.GetFolderFromID(rootFolder.EntryID, rootFolder.StoreID)
@@ -1618,7 +1615,7 @@ Partial Class Form1
             ' 2026/04/16 by Gemini: GetSubtreeToList 現在回傳 Tuple，解開它以維持後續邏輯
             ' 2026/04/17 by Claude: 改呼叫 GetSubtreeToList (L2.5)，享有快取加速
             ' 2026/06/13 by Simon/Claude Opus 4.8: 取得完整骨架後依 _showAllFolders 在計數層過濾 (剪枝移到這裡)；forceRefresh 一路 thread
-            Dim skeleton = Await GetSubtreeToList(rootFolder, includeSubF:=True, progress:=progress, cToken:=cToken, forceRefresh:=forceRefresh)
+            Dim skeleton = Await GetSubtreeToList(rootFolder, includeSubF:=True, progress:=progress, forceRefresh:=forceRefresh, cToken:=cToken)
             Dim targetTupleList = FilterSubtreeByMode(skeleton, SafeGetPath(rootFolder))
             Dim allFolders = targetTupleList.Select(Function(x) x.folder).ToList()
             ' by Gemini, 2026/04/02: BFS 展開後回傳數量 (扣除 rootFolder 自身)
@@ -2075,7 +2072,6 @@ Partial Class Form1
         Return result
     End Function
     Private Function GetMailBodyL3(entryID As String) As String
-        ' ── L3 COM 資料層 ────────────────────────────────────────────────────────────
         ' ---------------------------------------------------------------
         ' GetMailBodyL3 — Layer3 COM 資料層：讀取郵件 Body 並正規化
         ' 2026/04/28 by Simon/Claude: 以 Simon 的 GetMailBodyByEntryID 為基礎
@@ -2086,29 +2082,29 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         If String.IsNullOrEmpty(entryID) Then Return ""
 
-        Dim ns As Outlook.NameSpace = Nothing
+        ' Dim ns As Outlook.NameSpace = Nothing
         Dim item As Object = Nothing
-        Dim body As String = ""
+        Dim mailBody As String = ""
         Try
-            ns = _olApp.GetNamespace("MAPI")    ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
-            item = ns.GetItemFromID(entryID)
-            'item = _olNS.GetItemFromID(entryID) ' 2026/04/28 by simon, 使用共用的 NameSpace 以減少多建一次namespace的 COM 開銷
+            item = _olNS.GetItemFromID(entryID) ' 2026/04/28 by simon, 使用共用的 NameSpace 以減少多建一次namespace的 COM 開銷
+            ' ns = _olApp.GetNamespace("MAPI")    ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
+            ' item = ns.GetItemFromID(entryID)
 
             If item IsNot Nothing Then
                 If TypeOf item Is Outlook.MailItem Then
-                    body = NormalizeMailBody(DirectCast(item, Outlook.MailItem).Body)
+                    mailBody = NormalizeMailBody(DirectCast(item, Outlook.MailItem).Body)
                 ElseIf TypeOf item Is Outlook.PostItem Then
-                    body = NormalizeMailBody(DirectCast(item, Outlook.PostItem).Body)
+                    mailBody = NormalizeMailBody(DirectCast(item, Outlook.PostItem).Body)
                 End If
             End If
         Catch ex As System.Exception
             _dbg("GetMailBodyL3 失敗", $"{entryID}: {ex.Message}")
         Finally
             TryMarshalRelease(item)
-            TryMarshalRelease(ns)   ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
+            ' TryMarshalRelease(ns)   ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
         End Try
         ' 2026/05/09 by Gemini 3.0 flash: 移除內部的 Yield。改由調用端依批次執行呼吸，減少微切換開銷提升讀取性能
-        Return body
+        Return mailBody
 
     End Function
     Private Async Function GetBasicMailInfoL3(folder As Folder, needTopic As Boolean, cToken As CancellationToken, Optional fPath As String = "") As Task(Of List(Of (Mail As MailItemInfo, Topic As String)))
@@ -2802,21 +2798,17 @@ Partial Class Form1
         '   4. 去除所有空白字元（空格、Tab、換行、全形空白）
         '   5. 轉小寫（大小寫不影響內容相似度）
         ' 效果：兩封內容相同但格式不同的郵件（HTML vs 純文字）相似度會大幅提升
+        ' 2026/06/18 by Simon/Claude Opus 4.8: 改用上方預編譯 Regex；ToLower→ToLowerInvariant(免文化查找、build pass 更快且語意更穩)
         ' ---------------------------------------------------------------
         If String.IsNullOrEmpty(body) Then Return ""
 
-        ' 去除 HTML 標籤
-        Dim result As String = System.Text.RegularExpressions.Regex.Replace(body, "<[^>]+>", "")
-
+        Dim result As String = _reHtmlTag.Replace(body, "")             ' 去除 HTML 標籤
         ' 去除常見 HTML entities
         'result = result.Replace("&nbsp;", "").Replace("&lt;", "").Replace("&gt;", "").
         '                Replace("&amp;", "").Replace("&quot;", "").Replace("&#39;", "")
-        result = System.Text.RegularExpressions.Regex.Replace(result, "&(nbsp|lt|gt|amp|quot|#39);", "")    ' 2026/6/6 by Gemini: 改用 Regex 優化多重 Replace效能
-
-        ' 去除所有空白字元（含全形空白 \u3000、Tab、換行）
-        result = System.Text.RegularExpressions.Regex.Replace(result, "[\s\u3000]+", "")
-        Return result.ToLower()
-
+        result = _reHtmlEntity.Replace(result, "")                       ' 2026/6/6 by Gemini: 改用 Regex 優化多重 Replace效能
+        result = _reWhitespace.Replace(result, "")                       ' 去除所有空白字元(含全形空白 \u3000、Tab、換行)
+        Return result.ToLowerInvariant()
     End Function
     Private Function objFolder2odoFolder(objFolder As Folder) As Redemption.RDOFolder
         If _rdo Is Nothing OrElse objFolder Is Nothing Then Return Nothing

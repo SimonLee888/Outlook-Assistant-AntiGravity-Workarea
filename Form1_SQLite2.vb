@@ -160,8 +160,9 @@ Partial Class Form1
 
             _dbg("", "資料表確認完成")
 
-            ' 2026/06/12 by Simon/Claude Opus 4.8: 載入 senders 表，供 DbGetBasicMailInfo lazy load 時能解析 sender_id
-            LoadSendersInner()
+            LoadSendersInner()  ' 2026/06/12 by Simon/Claude Opus 4.8: 載入 senders 表，供 DbGetBasicMailInfo lazy load 時能解析 sender_id
+            InitSimDatabase()   ' 2026/06/17 by Simon/Claude Opus 4.8: 開啟獨立 SimHash db(OLAsimhash.db)並一次載入記憶體快取(Tab5 Fuzzy 暖快取)
+            LoadSimHashCache()  ' 2026/06/17 by Simon/Claude Opus 4.8: 開啟獨立 SimHash db(OLAsimhash.db)並一次載入記憶體快取(Tab5 Fuzzy 暖快取)
 
             timerSaveCache.Interval = 1 * 60 * 1000 ' 每60sec自動保存一次快取資料到磁碟
             timerSaveCache.Start()                  ' 啟動定時快取保存
@@ -183,6 +184,9 @@ Partial Class Form1
 
         Try
             _db.Close() : _db.Dispose() : _db = Nothing
+
+            ' 2026/06/17 by Simon/Claude Opus 4.8: 一併關閉獨立 SimHash db
+            If _dbSim IsNot Nothing Then _dbSim.Close() : _dbSim.Dispose() : _dbSim = Nothing
 
             ' 清除連線池，強制釋放底層的檔案 Handle，避免稍後備份或刪除時發生 IOException
             SqliteConnection.ClearAllPools()
@@ -2216,6 +2220,78 @@ Partial Class Form1
 
         Catch ex As System.Exception : _dbg(" ├ 錯誤", $"分析 {tableName} 失敗: {ex.Message}") : End Try
     End Function
+#End Region
+
+#Region "■ Fuzzy 模糊比對專用區塊 (SimHash + bigram Jaccard)"
+    ' 2026/06/17 by Simon/Claude Opus 4.8: SimHash 專用獨立 db。body 全文 COM 讀取極貴、simhash 又「內容不變即永久有效」，
+    '   故與「會被清快取/重置 SSD 清掉」的 OLAcache.db 物理隔離。ZipAndRebuildDB 只刪 OLAcache.db，完全不碰本檔 → 結構上保證存活。
+    Private _dbSim As SqliteConnection
+    Private _dbSimPath As String
+    Private _simHashLoaded As Boolean = False
+    Private _cacheSimHash As New Concurrent.ConcurrentDictionary(Of String, (SimHash As Long, BigramCount As Integer))
+    Private Sub InitSimDatabase()
+        ' 開啟/建立 OLAsimhash.db (與 OLAcache.db 同目錄、不同檔)。在 InitDatabase 末段呼叫。
+        Try
+            _dbSimPath = IO.Path.Combine(IO.Path.GetDirectoryName(_dbPath), "OLAsimhash.db")
+            _dbSim = New SqliteConnection($"Data Source={_dbSimPath};Mode=ReadWriteCreate;Cache=Shared")
+            _dbSim.Open()
+            Using cmd As New SqliteCommand("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", _dbSim) : cmd.ExecuteNonQuery() : End Using
+            Using cmd As New SqliteCommand("CREATE TABLE IF NOT EXISTS mail_simhash (" &
+                  "entry_id BLOB PRIMARY KEY, simhash INTEGER NOT NULL, bigram_count INTEGER NOT NULL);", _dbSim)
+                cmd.ExecuteNonQuery()
+            End Using
+            _dbg("", $"已開啟 SimHash db: {_dbSimPath}")
+        Catch ex As System.Exception
+            _dbg("       ├ 錯誤", ex.Message) : _dbSim = Nothing   ' 出錯設 Nothing，後續 sim 讀寫自動跳過 (同主 db 容錯策略)
+        End Try
+    End Sub
+    Private Sub DeleteSimDatabase()
+        ' 供「清快取」對話框那顆 checkbox 勾選時呼叫：關閉連線 → 刪檔。(預設不呼叫；使用者主動勾選才清)
+        Try
+            If _dbSim IsNot Nothing Then _dbSim.Close() : _dbSim.Dispose() : _dbSim = Nothing
+            SqliteConnection.ClearAllPools()
+            If Not String.IsNullOrEmpty(_dbSimPath) AndAlso IO.File.Exists(_dbSimPath) Then IO.File.Delete(_dbSimPath)
+            _cacheSimHash.Clear() : _simHashLoaded = False
+            InitSimDatabase()   ' 重建空表，後續仍可重新累積
+        Catch ex As System.Exception
+            _dbg("       ├ 錯誤", ex.Message)
+        End Try
+    End Sub
+    Private Sub LoadSimHashCache()
+        ' 2026/06/17 by Simon/Claude Opus 4.8: mail_simhash 整表 lazy load 進記憶體 (僅一次)。每列 16B+eid，量小可全載。
+        If _simHashLoaded OrElse _dbSim Is Nothing Then Return
+        Try
+            Using cmd As New SqliteCommand("SELECT entry_id, simhash, bigram_count FROM mail_simhash", _dbSim)
+                Using r = cmd.ExecuteReader()
+                    While r.Read()
+                        _cacheSimHash(ByteArrayToHexString(r.GetFieldValue(Of Byte())(0))) = (r.GetInt64(1), r.GetInt32(2))
+                    End While
+                End Using
+            End Using
+            _simHashLoaded = True : _dbg("", $"SimHash 快取載入 {_cacheSimHash.Count} 筆")
+        Catch ex As System.Exception
+            _dbg("       ├ 錯誤", ex.Message)
+        End Try
+    End Sub
+    Private Sub SaveSimHashBatch(rows As IEnumerable(Of (EntryID As String, SimHash As Long, BigramCount As Integer)))
+        ' 批次 upsert 到獨立 db (交易包覆)；entry_id 沿用 HexStringToByteArray 編碼。呼叫端同時更新 _cacheSimHash。
+        If _dbSim Is Nothing Then Return
+        Try
+            Using txn = _dbSim.BeginTransaction()
+                Using cmd As New SqliteCommand("INSERT OR REPLACE INTO mail_simhash (entry_id,simhash,bigram_count) VALUES (@eid,@sh,@bc)", _dbSim, txn)
+                    cmd.Parameters.Add("@eid", SqliteType.Blob) : cmd.Parameters.Add("@sh", SqliteType.Integer) : cmd.Parameters.Add("@bc", SqliteType.Integer)
+                    For Each row In rows
+                        cmd.Parameters("@eid").Value = HexStringToByteArray(row.EntryID)
+                        cmd.Parameters("@sh").Value = row.SimHash : cmd.Parameters("@bc").Value = row.BigramCount
+                        cmd.ExecuteNonQuery()
+                    Next
+                End Using
+                txn.Commit()
+            End Using
+        Catch ex As System.Exception
+            _dbg("       ├ 錯誤", ex.Message)
+        End Try
+    End Sub
 #End Region
 
 End Class

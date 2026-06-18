@@ -1,6 +1,7 @@
 ﻿Imports System.Numerics
 Imports System.Runtime.InteropServices
 Imports System.Threading
+Imports System.Windows
 Imports System.Windows.Forms.DataVisualization.Charting
 Imports Microsoft.Office.Interop.Outlook
 
@@ -66,24 +67,34 @@ Partial Class Form1
     ' True  = 用 GetCallerName (StackTrace, 較慢, 保留 [Async])
     Private _useStackCaller As Boolean = False
 
-    'Private _isFirstInit As Boolean = True          ' 第一次啟動程式
+    'Private _isFirstInit As Boolean = True            ' 第一次啟動程式
     ' by Gemini, 2026/04/01: 延遲載入 UI 的狀態旗標
     ' Index   0: 取代原 _isFirstInit，標記 Form 與 Tab1 是否處於「首次啟動/首次選定」階段 (True=首次啟動中)
     ' Index 1~5: 對應 Tab1~Tab5 的 UI 是否已完成掛載 (True=已完成)
     Private _isTabInitialized(10) As Boolean            ' 記錄每個 Tab 的 UI 是否已經初始化完成, (0)是FormLoad的第一次啟動, (1)~(5)分別對應 Tab1~Tab5
     Private _isUserBusy As Boolean = False              ' ✅ 2026/04/01 by Gemini: 使用者操作忙碌旗標，用於暫緩背景預載程序
     Private _isClosing As Boolean = False               ' added by Gemini, 2026/04/08: 關閉流程旗標，確保 FormClosing 中的非同步儲存完成後再釋放資源並允許關閉
-    'Private _cancelRequested As Boolean = False        ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
+    ' Private _cancelRequested As Boolean = False        ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
+    ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
     Private _cts As CancellationTokenSource             ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
+
+    ' ── 全域勾選狀態變數 (by Gemini, 2026/04/10: 優化效能，避免頻繁讀取 UI) ──
     '2026/3/10重構時停止使用全域變數來記錄遞迴過程中的資料, 改用傳遞參數以避免多線程或重入呼叫時資料被改寫的問題
-    'Private _intTotalMailCount As Integer          ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
-    'Private _intProcessedCount As Integer          ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
+    'Private _intTotalMailCount As Integer              ' 在遞迴中, 記錄點選資料夾內的所有郵件總數, 不要被遞迴呼叫改變數量
+    'Private _intProcessedCount As Integer              ' 在遞迴中, 加總已處理的郵件總數, 不要被遞迴呼叫改變數量
+    Private _showAllFolders As Boolean = False
+    Private _includeSubTab2 As Boolean = False
+    Private _includeSubTab3 As Boolean = False
     Private _lastTvMousePoint As Point = Point.Empty    ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
     Private _lastLvMousePoint As Point = Point.Empty    ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
+    Private _lastHoveredPointIndex As Integer = -1      ' 記住上一個 hover 的點，-1 表示沒有
+    'Private _lastHoveredTreeNode As TreeNode = Nothing ' 2026/5/14 by simon/Gemini: 將mouse hover作成內建功能
+    Private _lastHoveredLvItem As ListViewItem = Nothing
 
+    Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
     Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
     Private _lvResizePending As ListView = Nothing
-    Private _lvResizeTimer As New System.Windows.Forms.Timer() With {.Interval = 100}
+    Private _lvResizeTimer As New Forms.Timer() With {.Interval = 100}
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
@@ -91,7 +102,6 @@ Partial Class Form1
     Private _historyHoverIndex As Integer = -1
     Private _historyPopup As ToolStripDropDown
     Private _statusHistory As New List(Of StatusHistoryItem)(1024)
-    ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
 
     Private Structure StatusHistoryItem
         Dim Time As DateTime
@@ -108,6 +118,12 @@ Partial Class Form1
         Public Const Low As Integer = 300   ' 低頻慢速：極耗時的附件掃描，不需過度更新
         Private Sub New() : End Sub         ' 防止被實例化
     End Class
+
+    Private _fontDefault As New Font("Microsoft Jhenghei", 10.0F, _fontRegular, GraphicsUnit.Point, 0)
+    Private _fontHeader As New Font("Microsoft Jhenghei", 10.0F, _fontBold, GraphicsUnit.Point, 0)
+    Private _fontRegular = FontStyle.Regular
+    Private _fontBold = FontStyle.Bold
+    Private _fontItalic = FontStyle.Italic
 #End Region
 
 #Region "■ 02 Form 生命週期 & 外觀初始化"
@@ -369,7 +385,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------------------------------------------------
         lv.Font = New Font(_fontDefault, _fontRegular)
         lv.GridLines = False
-        lv.View = System.Windows.Forms.View.Details
+        lv.View = Forms.View.Details
         lv.FullRowSelect = True
         lv.BringToFront()
         lv.Anchor = AnchorStyles.None
@@ -535,27 +551,27 @@ Partial Class Form1
         InitListView(ListView3)
         InitSplitter(SplitContainer3)
         ' 建立頂部面板，將所有原本散落在 Panel2 的搜尋控制項集中
-        'Dim pnlOptions_tab3 As Panel
-        pnlOptions_tab3 = New Panel With {.Dock = DockStyle.Top,
+        'Dim layoutPanel3 As Panel
+        layoutPanel3 = New Panel With {.Dock = DockStyle.Top,
                                           .Height = 115,
                                           .BackColor = ThemeColors.Gray95,
                                           .Font = New Font(_fontDefault, _fontRegular)}
 
-        ' 將原本 Panel2 中的控制項移入新增的 pnlOptions_tab3
+        ' 將原本 Panel2 中的控制項移入新增的 layoutPanel3
         ' 這些控制項原本的 Location 已經適合在 Top Panel 中運作
-        pnlOptions_tab3.SendToBack() ' 2026/3/27 by Gemini: 正確設定 Dock 計算順序
-        pnlOptions_tab3.Controls.Add(GroupBox1)
-        pnlOptions_tab3.Controls.Add(GroupBox2)
-        pnlOptions_tab3.Controls.Add(GroupBox3)
-        pnlOptions_tab3.Controls.Add(Button3)
-        pnlOptions_tab3.Controls.Add(CheckSubFolder3)
-        SplitContainer3.Panel2.Controls.Add(pnlOptions_tab3)
+        layoutPanel3.SendToBack() ' 2026/3/27 by Gemini: 正確設定 Dock 計算順序
+        layoutPanel3.Controls.Add(GroupBox1)
+        layoutPanel3.Controls.Add(GroupBox2)
+        layoutPanel3.Controls.Add(GroupBox3)
+        layoutPanel3.Controls.Add(Button3)
+        layoutPanel3.Controls.Add(CheckSubFolder3)
+        SplitContainer3.Panel2.Controls.Add(layoutPanel3)
 
         ' 2026/04/05 by Gemini: 優化顯示邏輯「純淨版」
         ' 改用面板自身的 Resize 事件與 Lambda 運算，不需類別變數。
         ' 這樣無論是調整視窗還是隱藏側邊欄，GroupBox3 都會依據「右側實際可用空間 (820px)」決定顯現與否。
-        AddHandler pnlOptions_tab3.Resize, Sub() GroupBox3.Visible = pnlOptions_tab3.Width >= 820
-        GroupBox3.Visible = pnlOptions_tab3.Width >= 820
+        AddHandler layoutPanel3.Resize, Sub() GroupBox3.Visible = layoutPanel3.Width >= 820
+        GroupBox3.Visible = layoutPanel3.Width >= 820
 
         ' ── Button3 樣式 ──
         Button3.FlatStyle = FlatStyle.System
@@ -680,23 +696,23 @@ Partial Class Form1
 
         ' 3. 右側：選項面板 + 列表
         ' 建立面板 (還原原始高度 80px)
-        Dim pnlOptions = New Panel With {.Name = "pnlOptions_tab4",
+        Dim layoutPanel4 = New Panel With {.Name = "layoutPanel4",
                                          .Height = 80,
                                          .Dock = DockStyle.Top,
                                          .BackColor = ThemeColors.Gray95}
 
-        ButtonDeleteMail.Parent = pnlOptions
+        ButtonDeleteMail.Parent = layoutPanel4
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.Size = New Size(102, 60)
-        ButtonDeleteMail.Location = New Drawing.Point(pnlOptions.Width - ButtonDeleteMail.Width - 10, 10)
+        ButtonDeleteMail.Location = New Drawing.Point(layoutPanel4.Width - ButtonDeleteMail.Width - 10, 10)
 
-        Button4.Parent = pnlOptions
+        Button4.Parent = layoutPanel4
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Size = New Size(100, 60)
         Button4.Location = New Drawing.Point(ButtonDeleteMail.Left - Button4.Width - 10, 10)
 
-        pnlOptions.Parent = SplitContainer4.Panel2
-        pnlOptions.BringToFront()
+        layoutPanel4.Parent = SplitContainer4.Panel2
+        layoutPanel4.BringToFront()
 
         ' 列表掛載於 Panel2
         Listview4.Parent = SplitContainer4.Panel2
@@ -741,8 +757,8 @@ Partial Class Form1
         InitSplitter(SplitContainer5)
         'TreeView5.Visible = False ' 使用 SimTree5 取代，TreeView5 設為不可見
 
-        ' 2. 準備右側選項面板 (pnlOptions5)
-        Dim pnlOptions5 As New Panel With {.Name = "pnlOptions5",
+        ' 2. 準備右側選項面板 (layoutPanel5)
+        Dim layoutPanel5 As New Panel With {.Name = "layoutPanel5",
                                            .Dock = DockStyle.Top,
                                            .Height = 110, ' 2026/05/05 by Gemini 3 Flash: 增加高度以容納 CheckSubFolder5
                                            .BackColor = ThemeColors.Gray95}
@@ -766,7 +782,7 @@ Partial Class Form1
         Button5.Text = "開始掃描"
         Button5.Size = New Size(100, 60)
         Button5.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        Button5.Location = New Point(pnlOptions5.Width - Button5.Width - 10, 10)
+        Button5.Location = New Point(layoutPanel5.Width - Button5.Width - 10, 10)
         Button5.BringToFront()
 
         ' CheckSubFolder5：暫用程式建立，日後改設計工具放置。2026/05/05 by Claude
@@ -777,8 +793,26 @@ Partial Class Form1
         CheckSubFolder5.Location = New Point(20, 75) ' 2026/05/05 by Gemini 3 Flash: 手動指定位置確保不被裁切
         AddHandler CheckSubFolder5.CheckedChanged, Sub() _includeSubTab5 = CheckSubFolder5.Checked
 
+        ' 2026/06/17 by Simon/Claude Opus 4.8: Fuzzy 相似度檔位即時顯示 Label。
+        '   拿掉 numberSimilarity 後 TrackBar1 只剩 1~5 刻度，使用者看不出「3=高 95%」，
+        '   故綁 ValueChanged 顯示「檔位名 + 門檻%」(資料源 _fuzzyTierName / GetFuzzyTargetT，與掃描實際用值一致)。
+        Dim lblFuzzyTier As New Label With {.Name = "lblFuzzyTier",
+                                            .AutoSize = True,
+                                            .Location = New Point(288, 80), ' TrackBar1(150,73 130x29) 右側、Button5 下方空區
+                                            .Visible = False}
+        AddHandler TrackBar1.ValueChanged, Sub()
+                                               Dim v As Integer = Math.Clamp(TrackBar1.Value, 1, 5)
+                                               lblFuzzyTier.Text = _fuzzyTierName(v) & " " & (GetFuzzyTargetT() * 100).ToString("0.##") & "%"
+                                           End Sub
+        ' 初始顯示一次(預設 TrackBar1.Value=4 → 極高 98%)，否則啟動到第一次拖動前是空的
+        lblFuzzyTier.Text = _fuzzyTierName(Math.Clamp(TrackBar1.Value, 1, 5)) & " " & (GetFuzzyTargetT() * 100).ToString("0.##") & "%"
+
+        AddHandler rbFuzzyMatch.CheckedChanged, Sub() CheckSubFolder5.Checked = Not rbFuzzyMatch.Checked
+        AddHandler rbFuzzyMatch.CheckedChanged, Sub() lblFuzzyTier.Visible = rbFuzzyMatch.Checked
+        AddHandler rbFuzzyMatch.CheckedChanged, Sub() TrackBar1.Visible = rbFuzzyMatch.Checked
+
         ' 3. 組裝右側面板
-        pnlOptions5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, Button5, Label2})
+        layoutPanel5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, TrackBar1, Button5, Label2, lblFuzzyTier})
         CheckSubFolder5.BringToFront() ' ✅ by Gemini 3 Flash, 2026/05/05: 顯式移至最前，防止被遮擋
 
         ' 4. 將控制項掛載到 SplitContainer5 的正確 Panel 中
@@ -789,11 +823,11 @@ Partial Class Form1
 
         ' 右側 Panel2（上方按鈕列）+ ListView5（填滿剩餘空間）
         SplitContainer5.Panel2.Controls.Clear()
-        pnlOptions5.Parent = SplitContainer5.Panel2
+        layoutPanel5.Parent = SplitContainer5.Panel2
         ListView5.Parent = SplitContainer5.Panel2
 
         ' 設定 Dock 順序 (Z-Order)
-        pnlOptions5.SendToBack()  ' 第一個 Dock=Top
+        layoutPanel5.SendToBack()  ' 第一個 Dock=Top
         ListView5.Dock = DockStyle.Fill
         ListView5.BringToFront() ' 填滿剩餘空間
 
@@ -821,7 +855,6 @@ Partial Class Form1
             .Columns("相似").Width = CInt(.Width * 0.08) : .Columns("相似").TextAlign = HorizontalAlignment.Center
             .Columns("EntryID").Width = 0 : .Columns("EntryID").TextAlign = HorizontalAlignment.Right ' 隱藏，僅供 OpenMailByEntryID 使用
         End With
-
         AddHandler ListView5.ColumnClick, AddressOf Lv5_ColumnClick
 
         _dbg("結束")
@@ -1435,16 +1468,16 @@ Partial Class Form1
         Dim currentItem As ListViewItem = If(mouseE IsNot Nothing, listView.GetItemAt(mouseE.X, mouseE.Y), Nothing)
 
         ' 2. 檢查目標是否改變 (優化效能，若相同則不重繪)
-        If currentItem Is _lastHoveredListItem Then Return
+        If currentItem Is _lastHoveredLvItem Then Return
 
         ' 3. 處理狀態轉變: 清除舊背景色並套用新色
         ' 2026/04/14 by Gemini 3.0 flash: 小步優化，OwnerDraw 模式下只 Invalidate 矩形，
         ' 絕對不改 BackColor 屬性，避免 WinForms ListView 在多項目時觸發 O(N) 版面重算拖慢效能。
         ' ⚠️ 注意: 這裡絕對不要加 .Refresh() 或 .BeginUpdate/EndUpdate()，讓 Windows 自然處理重繪，否則會導致嚴重的效能問題和 UI 卡頓。
         If listView.OwnerDraw Then
-            If _lastHoveredListItem IsNot Nothing Then listView.Invalidate(_lastHoveredListItem.Bounds) ' 1. 讓「舊」項目重繪 (清除舊底色)
+            If _lastHoveredLvItem IsNot Nothing Then listView.Invalidate(_lastHoveredLvItem.Bounds) ' 1. 讓「舊」項目重繪 (清除舊底色)
             If currentItem IsNot Nothing Then listView.Invalidate(currentItem.Bounds)                   ' 2. 讓「新」項目重繪 (畫上新底色)
-            _lastHoveredListItem = currentItem                                                          ' 3. 更新全域紀錄
+            _lastHoveredLvItem = currentItem                                                          ' 3. 更新全域紀錄
             Return                                                                                      ' 4. 結束，因為 UI 已經標記要重繪了
         End If
 
@@ -1456,10 +1489,10 @@ Partial Class Form1
         ' 2026/04/14 by Simon/Claude: Tag=Nothing 的行 (群組標題 / 合計列) 有固定 BackColor，
         '   離開時要還原原色而非 Color.Empty；進入時也不套 hover 灰，保持原色不被蓋掉。
         ' 2026/6/5 by Simon/Claude: 再度簡化套用新 hover 色的邏輯，直接在一般列套灰色，標題/合計列保持原色不變
-        If _lastHoveredListItem IsNot Nothing Then _lastHoveredListItem.BackColor = GetHeaderRowBackColor(_lastHoveredListItem) ' 還原標題/合計列原色
+        If _lastHoveredLvItem IsNot Nothing Then _lastHoveredLvItem.BackColor = GetHeaderRowBackColor(_lastHoveredLvItem) ' 還原標題/合計列原色
 
         If currentItem IsNot Nothing Then currentItem.BackColor = ThemeColors.MercuryGray       ' 只對一般列套 hover 色
-        _lastHoveredListItem = currentItem
+        _lastHoveredLvItem = currentItem
 
     End Sub
     Private Sub HistoryListBox_MouseMove(sender As Object, e As MouseEventArgs) Handles HistoryListBox.MouseMove
@@ -1484,7 +1517,7 @@ Partial Class Form1
         End If
 
         ' 當滑鼠真正離開 Popup 範圍時再自動關閉 Popup
-        Dim pt = System.Windows.Forms.Cursor.Position
+        Dim pt = Forms.Cursor.Position
         If _historyPopup IsNot Nothing AndAlso _historyPopup.Visible Then
             If Not _historyPopup.Bounds.Contains(pt) Then _historyPopup.Close()
         End If
@@ -2117,7 +2150,10 @@ Partial Class Form1
         _cacheFolderTree.Clear()
         _cacheSubTreeList.Clear()
         _cacheIsMailFolder.Clear()
-        _cacheFolderIDs.Clear() ' 2026/04/10 新增 ID 快取清理
+        _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理
+
+        _cacheMailBody.Clear()      ' 2026/6/18 by simon, 之前漏掉了現在補上
+        _cacheBasicMailInfo.Clear() ' 2026/6/18 by simon, 之前漏掉了現在補上
 
     End Sub
 #End Region

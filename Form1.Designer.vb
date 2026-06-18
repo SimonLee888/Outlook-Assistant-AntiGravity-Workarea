@@ -89,15 +89,17 @@ Partial Class Form1
         TabPage5 = New TabPage()
         SplitContainer5 = New SplitContainer()
         SimTree5 = New SimTree()
+        TrackBar1 = New TrackBar()
         ListView5 = New ListView()
         ColumnHeader1 = New ColumnHeader()
         ColumnHeader2 = New ColumnHeader()
         TabPage6 = New TabPage()
         ListView6 = New ListView()
         SettingGroup = New GroupBox()
+        chkClearSimHash = New CheckBox()
         SaveCache = New Button()
         RenewAttachFilename = New CheckBox()
-        RenewIncludeSize = New CheckBox()
+        RenewFolderSize = New CheckBox()
         RDO_Parallel2 = New RadioButton()
         RDO_Parallel1 = New RadioButton()
         RenewCache = New Button()
@@ -160,6 +162,7 @@ Partial Class Form1
         SplitContainer5.Panel1.SuspendLayout()
         SplitContainer5.Panel2.SuspendLayout()
         SplitContainer5.SuspendLayout()
+        CType(TrackBar1, ComponentModel.ISupportInitialize).BeginInit()
         TabPage6.SuspendLayout()
         SettingGroup.SuspendLayout()
         DebugGroup.SuspendLayout()
@@ -337,7 +340,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(713, 395)
+        ListView2.Size = New Size(701, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -372,7 +375,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(713, 857)
+        Chart2.Size = New Size(701, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -428,7 +431,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(582, 77)
+        CheckSubFolder3.Location = New Point(570, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -442,7 +445,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(588, 10)
+        Button3.Location = New Point(576, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -525,7 +528,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(713, 1133)
+        ListView3.Size = New Size(701, 1133)
         ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -771,7 +774,7 @@ Partial Class Form1
         Listview4.Location = New Point(0, 111)
         Listview4.Margin = New Padding(4)
         Listview4.Name = "Listview4"
-        Listview4.Size = New Size(713, 1133)
+        Listview4.Size = New Size(701, 1133)
         Listview4.TabIndex = 13
         Listview4.UseCompatibleStateImageBehavior = False
         Listview4.View = View.Details
@@ -792,7 +795,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(601, 15)
+        ButtonDeleteMail.Location = New Point(589, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -804,7 +807,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(497, 15)
+        Button4.Location = New Point(485, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -837,6 +840,7 @@ Partial Class Form1
         ' 
         ' SplitContainer5.Panel2
         ' 
+        SplitContainer5.Panel2.Controls.Add(TrackBar1)
         SplitContainer5.Panel2.Controls.Add(ListView5)
         SplitContainer5.Size = New Size(1046, 1270)
         SplitContainer5.SplitterDistance = 317
@@ -852,6 +856,19 @@ Partial Class Form1
         SimTree5.Name = "SimTree5"
         SimTree5.Size = New Size(317, 1270)
         SimTree5.TabIndex = 8
+        ' 
+        ' TrackBar1
+        ' 
+        TrackBar1.AutoSize = False
+        TrackBar1.Location = New Point(150, 73)
+        TrackBar1.Maximum = 5
+        TrackBar1.Minimum = 1
+        TrackBar1.Name = "TrackBar1"
+        TrackBar1.Size = New Size(130, 29)
+        TrackBar1.TabIndex = 10
+        TrackBar1.TickStyle = TickStyle.Both
+        TrackBar1.Value = 4
+        TrackBar1.Visible = False
         ' 
         ' ListView5
         ' 
@@ -911,9 +928,10 @@ Partial Class Form1
         ' 
         ' SettingGroup
         ' 
+        SettingGroup.Controls.Add(chkClearSimHash)
         SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(RenewAttachFilename)
-        SettingGroup.Controls.Add(RenewIncludeSize)
+        SettingGroup.Controls.Add(RenewFolderSize)
         SettingGroup.Controls.Add(RDO_Parallel2)
         SettingGroup.Controls.Add(RDO_Parallel1)
         SettingGroup.Controls.Add(RenewCache)
@@ -928,6 +946,19 @@ Partial Class Form1
         SettingGroup.TabIndex = 14
         SettingGroup.TabStop = False
         SettingGroup.Text = "設定選項"
+        ' 
+        ' chkClearSimHash
+        ' 
+        chkClearSimHash.AutoSize = True
+        chkClearSimHash.FlatStyle = FlatStyle.System
+        chkClearSimHash.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        chkClearSimHash.Location = New Point(302, 126)
+        chkClearSimHash.Name = "chkClearSimHash"
+        chkClearSimHash.Size = New Size(132, 24)
+        chkClearSimHash.TabIndex = 14
+        chkClearSimHash.TabStop = False
+        chkClearSimHash.Text = "清除SimHash"
+        chkClearSimHash.UseVisualStyleBackColor = True
         ' 
         ' SaveCache
         ' 
@@ -945,28 +976,28 @@ Partial Class Form1
         RenewAttachFilename.AutoSize = True
         RenewAttachFilename.FlatStyle = FlatStyle.System
         RenewAttachFilename.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        RenewAttachFilename.Location = New Point(167, 302)
+        RenewAttachFilename.Location = New Point(302, 226)
         RenewAttachFilename.Name = "RenewAttachFilename"
-        RenewAttachFilename.Size = New Size(202, 24)
+        RenewAttachFilename.Size = New Size(130, 24)
         RenewAttachFilename.TabIndex = 0
         RenewAttachFilename.TabStop = False
-        RenewAttachFilename.Text = "Renew Attach Filename"
+        RenewAttachFilename.Text = "包含附件檔名"
         RenewAttachFilename.UseVisualStyleBackColor = True
         ' 
-        ' RenewIncludeSize
+        ' RenewFolderSize
         ' 
-        RenewIncludeSize.AutoSize = True
-        RenewIncludeSize.Checked = True
-        RenewIncludeSize.CheckState = CheckState.Indeterminate
-        RenewIncludeSize.FlatStyle = FlatStyle.System
-        RenewIncludeSize.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        RenewIncludeSize.Location = New Point(167, 273)
-        RenewIncludeSize.Name = "RenewIncludeSize"
-        RenewIncludeSize.Size = New Size(168, 24)
-        RenewIncludeSize.TabIndex = 0
-        RenewIncludeSize.TabStop = False
-        RenewIncludeSize.Text = "Include FolderSize"
-        RenewIncludeSize.UseVisualStyleBackColor = True
+        RenewFolderSize.AutoSize = True
+        RenewFolderSize.Checked = True
+        RenewFolderSize.CheckState = CheckState.Indeterminate
+        RenewFolderSize.FlatStyle = FlatStyle.System
+        RenewFolderSize.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        RenewFolderSize.Location = New Point(302, 202)
+        RenewFolderSize.Name = "RenewFolderSize"
+        RenewFolderSize.Size = New Size(143, 24)
+        RenewFolderSize.TabIndex = 0
+        RenewFolderSize.TabStop = False
+        RenewFolderSize.Text = "包含FolderSize"
+        RenewFolderSize.UseVisualStyleBackColor = True
         ' 
         ' RDO_Parallel2
         ' 
@@ -999,7 +1030,7 @@ Partial Class Form1
         RenewCache.BackColor = Color.LightCyan
         RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         RenewCache.ForeColor = SystemColors.ActiveCaptionText
-        RenewCache.Location = New Point(167, 203)
+        RenewCache.Location = New Point(167, 194)
         RenewCache.Name = "RenewCache"
         RenewCache.Size = New Size(129, 63)
         RenewCache.TabIndex = 13
@@ -1332,6 +1363,7 @@ Partial Class Form1
         SplitContainer5.Panel2.ResumeLayout(False)
         CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer5.ResumeLayout(False)
+        CType(TrackBar1, ComponentModel.ISupportInitialize).EndInit()
         TabPage6.ResumeLayout(False)
         SettingGroup.ResumeLayout(False)
         SettingGroup.PerformLayout()
@@ -1433,7 +1465,7 @@ Partial Class Form1
     Friend WithEvents RenewCache As Button
     Friend WithEvents RDO_Parallel2 As RadioButton
     Friend WithEvents RDO_Parallel1 As RadioButton
-    Friend WithEvents RenewIncludeSize As CheckBox
+    Friend WithEvents RenewFolderSize As CheckBox
     Friend WithEvents timerSaveCache As Timer
     Friend WithEvents RenewAttachFilename As CheckBox
     Friend WithEvents SimTree2 As SimTree
@@ -1455,5 +1487,7 @@ Partial Class Form1
     Friend WithEvents Lv4Topic As ListView
     Friend WithEvents ColumnHeader41 As ColumnHeader
     Friend WithEvents ColumnHeader42 As ColumnHeader
+    Friend WithEvents chkClearSimHash As CheckBox
+    Friend WithEvents TrackBar1 As TrackBar
 
 End Class

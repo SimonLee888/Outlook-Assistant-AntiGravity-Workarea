@@ -42,10 +42,14 @@
     <Compile Remove="Form1_SQLite2 %28by Gemini%29.vb" />
     <Compile Remove="Form1_SQLite2 %28by Gemini, 處理fn%29.vb" />
     <Compile Remove="Form1_SQLite2 %28原始內容%29.vb" />
+    <Compile Remove="Reference\ComputeSimHash_core.vb" />
+    <Compile Remove="Reference\StringSimilarity %28bigRam + Jaccard%29.vb" />
     <Compile Remove="SelectColorTheme.vb" />
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="SourceCodeLineCounter - 捷徑.lnk" />
+    <None Remove="SQLiteDatabaseBrowserPortable - 捷徑.lnk" />
     <None Remove="sync.ffs_db" />
   </ItemGroup>
 

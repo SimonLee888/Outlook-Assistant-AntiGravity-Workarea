@@ -89,20 +89,18 @@ Partial Class Form1
         TabPage5 = New TabPage()
         SplitContainer5 = New SplitContainer()
         SimTree5 = New SimTree()
-        TrackBar1 = New TrackBar()
+        TrackBar1 = New StepTrackBar()
         ListView5 = New ListView()
         ColumnHeader1 = New ColumnHeader()
         ColumnHeader2 = New ColumnHeader()
         TabPage6 = New TabPage()
         ListView6 = New ListView()
         SettingGroup = New GroupBox()
+        RenewCache = New Button()
         chkClearSimHash = New CheckBox()
         SaveCache = New Button()
         RenewAttachFilename = New CheckBox()
         RenewFolderSize = New CheckBox()
-        RDO_Parallel2 = New RadioButton()
-        RDO_Parallel1 = New RadioButton()
-        RenewCache = New Button()
         ClearCache = New Button()
         checkShowAllFolders = New CheckBox()
         LoadCache = New Button()
@@ -121,10 +119,9 @@ Partial Class Form1
         SimTreeOST = New SimTree()
         CheckSubFolder5 = New CheckBox()
         Button5 = New Button()
-        Label2 = New Label()
         ToolStripStatusLabel1 = New ToolStripStatusLabel()
-        ProgressBar1 = New ToolStripStatusLabel()
-        ProgressBar2 = New ToolStripStatusLabel()
+        PgrsBar1 = New ToolStripStatusLabel()
+        PgrsBar2 = New ToolStripStatusLabel()
         ToolStripProgressBar1 = New ToolStripStatusLabel()
         StatusStrip1 = New StatusStrip()
         timerSaveCache = New Timer(components)
@@ -340,7 +337,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(701, 395)
+        ListView2.Size = New Size(689, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -375,7 +372,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(701, 857)
+        Chart2.Size = New Size(689, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -431,7 +428,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(570, 77)
+        CheckSubFolder3.Location = New Point(558, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -445,7 +442,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(576, 10)
+        Button3.Location = New Point(564, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -528,7 +525,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(701, 1133)
+        ListView3.Size = New Size(689, 1133)
         ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -774,7 +771,7 @@ Partial Class Form1
         Listview4.Location = New Point(0, 111)
         Listview4.Margin = New Padding(4)
         Listview4.Name = "Listview4"
-        Listview4.Size = New Size(701, 1133)
+        Listview4.Size = New Size(689, 1133)
         Listview4.TabIndex = 13
         Listview4.UseCompatibleStateImageBehavior = False
         Listview4.View = View.Details
@@ -795,7 +792,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(589, 15)
+        ButtonDeleteMail.Location = New Point(577, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -807,7 +804,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(485, 15)
+        Button4.Location = New Point(473, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -920,7 +917,7 @@ Partial Class Form1
         ListView6.Name = "ListView6"
         ListView6.Scrollable = False
         ListView6.ShowGroups = False
-        ListView6.Size = New Size(360, 704)
+        ListView6.Size = New Size(360, 860)
         ListView6.TabIndex = 17
         ListView6.TabStop = False
         ListView6.UseCompatibleStateImageBehavior = False
@@ -928,13 +925,11 @@ Partial Class Form1
         ' 
         ' SettingGroup
         ' 
+        SettingGroup.Controls.Add(RenewCache)
         SettingGroup.Controls.Add(chkClearSimHash)
         SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(RenewAttachFilename)
         SettingGroup.Controls.Add(RenewFolderSize)
-        SettingGroup.Controls.Add(RDO_Parallel2)
-        SettingGroup.Controls.Add(RDO_Parallel1)
-        SettingGroup.Controls.Add(RenewCache)
         SettingGroup.Controls.Add(ClearCache)
         SettingGroup.Controls.Add(checkShowAllFolders)
         SettingGroup.Controls.Add(LoadCache)
@@ -947,12 +942,25 @@ Partial Class Form1
         SettingGroup.TabStop = False
         SettingGroup.Text = "設定選項"
         ' 
+        ' RenewCache
+        ' 
+        RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        RenewCache.BackColor = Color.LightCyan
+        RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
+        RenewCache.ForeColor = SystemColors.ActiveCaptionText
+        RenewCache.Location = New Point(172, 169)
+        RenewCache.Name = "RenewCache"
+        RenewCache.Size = New Size(129, 63)
+        RenewCache.TabIndex = 13
+        RenewCache.Text = "更新快取"
+        RenewCache.UseVisualStyleBackColor = False
+        ' 
         ' chkClearSimHash
         ' 
         chkClearSimHash.AutoSize = True
         chkClearSimHash.FlatStyle = FlatStyle.System
         chkClearSimHash.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        chkClearSimHash.Location = New Point(302, 126)
+        chkClearSimHash.Location = New Point(307, 110)
         chkClearSimHash.Name = "chkClearSimHash"
         chkClearSimHash.Size = New Size(132, 24)
         chkClearSimHash.TabIndex = 14
@@ -964,7 +972,7 @@ Partial Class Form1
         ' 
         SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         SaveCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        SaveCache.Location = New Point(167, 29)
+        SaveCache.Location = New Point(172, 29)
         SaveCache.Name = "SaveCache"
         SaveCache.Size = New Size(129, 63)
         SaveCache.TabIndex = 11
@@ -976,7 +984,7 @@ Partial Class Form1
         RenewAttachFilename.AutoSize = True
         RenewAttachFilename.FlatStyle = FlatStyle.System
         RenewAttachFilename.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        RenewAttachFilename.Location = New Point(302, 226)
+        RenewAttachFilename.Location = New Point(307, 201)
         RenewAttachFilename.Name = "RenewAttachFilename"
         RenewAttachFilename.Size = New Size(130, 24)
         RenewAttachFilename.TabIndex = 0
@@ -991,7 +999,7 @@ Partial Class Form1
         RenewFolderSize.CheckState = CheckState.Indeterminate
         RenewFolderSize.FlatStyle = FlatStyle.System
         RenewFolderSize.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        RenewFolderSize.Location = New Point(302, 202)
+        RenewFolderSize.Location = New Point(307, 177)
         RenewFolderSize.Name = "RenewFolderSize"
         RenewFolderSize.Size = New Size(143, 24)
         RenewFolderSize.TabIndex = 0
@@ -999,51 +1007,13 @@ Partial Class Form1
         RenewFolderSize.Text = "包含FolderSize"
         RenewFolderSize.UseVisualStyleBackColor = True
         ' 
-        ' RDO_Parallel2
-        ' 
-        RDO_Parallel2.FlatStyle = FlatStyle.System
-        RDO_Parallel2.Font = New Font("Microsoft JhengHei UI", 9F)
-        RDO_Parallel2.Location = New Point(16, 215)
-        RDO_Parallel2.Name = "RDO_Parallel2"
-        RDO_Parallel2.Size = New Size(135, 26)
-        RDO_Parallel2.TabIndex = 0
-        RDO_Parallel2.TabStop = True
-        RDO_Parallel2.Text = "Task.WhenAll"
-        RDO_Parallel2.UseVisualStyleBackColor = True
-        ' 
-        ' RDO_Parallel1
-        ' 
-        RDO_Parallel1.Checked = True
-        RDO_Parallel1.FlatStyle = FlatStyle.System
-        RDO_Parallel1.Font = New Font("Microsoft JhengHei UI", 9F)
-        RDO_Parallel1.Location = New Point(16, 186)
-        RDO_Parallel1.Name = "RDO_Parallel1"
-        RDO_Parallel1.Size = New Size(135, 26)
-        RDO_Parallel1.TabIndex = 0
-        RDO_Parallel1.TabStop = True
-        RDO_Parallel1.Text = "Parallel.Foreach"
-        RDO_Parallel1.UseVisualStyleBackColor = True
-        ' 
-        ' RenewCache
-        ' 
-        RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        RenewCache.BackColor = Color.LightCyan
-        RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        RenewCache.ForeColor = SystemColors.ActiveCaptionText
-        RenewCache.Location = New Point(167, 194)
-        RenewCache.Name = "RenewCache"
-        RenewCache.Size = New Size(129, 63)
-        RenewCache.TabIndex = 13
-        RenewCache.Text = "更新快取"
-        RenewCache.UseVisualStyleBackColor = False
-        ' 
         ' ClearCache
         ' 
         ClearCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ClearCache.BackColor = Color.MistyRose
         ClearCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         ClearCache.ForeColor = SystemColors.ActiveCaptionText
-        ClearCache.Location = New Point(167, 116)
+        ClearCache.Location = New Point(172, 100)
         ClearCache.Name = "ClearCache"
         ClearCache.Size = New Size(129, 63)
         ClearCache.TabIndex = 6
@@ -1070,7 +1040,7 @@ Partial Class Form1
         ' 
         LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         LoadCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        LoadCache.Location = New Point(173, 34)
+        LoadCache.Location = New Point(178, 34)
         LoadCache.Name = "LoadCache"
         LoadCache.Size = New Size(129, 63)
         LoadCache.TabIndex = 12
@@ -1085,7 +1055,7 @@ Partial Class Form1
         CheckRDO.BackColor = Color.Transparent
         CheckRDO.FlatStyle = FlatStyle.System
         CheckRDO.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        CheckRDO.Location = New Point(16, 116)
+        CheckRDO.Location = New Point(16, 100)
         CheckRDO.Margin = New Padding(4)
         CheckRDO.Name = "CheckRDO"
         CheckRDO.Size = New Size(129, 63)
@@ -1114,7 +1084,7 @@ Partial Class Form1
         OKiLikeNoisy.FlatAppearance.CheckedBackColor = Color.LightCoral
         OKiLikeNoisy.FlatStyle = FlatStyle.System
         OKiLikeNoisy.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        OKiLikeNoisy.Location = New Point(16, 126)
+        OKiLikeNoisy.Location = New Point(16, 111)
         OKiLikeNoisy.Margin = New Padding(4)
         OKiLikeNoisy.Name = "OKiLikeNoisy"
         OKiLikeNoisy.Padding = New Padding(10)
@@ -1144,7 +1114,7 @@ Partial Class Form1
         ' 
         DebugButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         DebugButton.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
-        DebugButton.Location = New Point(167, 40)
+        DebugButton.Location = New Point(172, 40)
         DebugButton.Name = "DebugButton"
         DebugButton.Size = New Size(129, 63)
         DebugButton.TabIndex = 13
@@ -1253,16 +1223,6 @@ Partial Class Form1
         Button5.Text = "Button5"
         Button5.UseVisualStyleBackColor = True
         ' 
-        ' Label2
-        ' 
-        Label2.AutoSize = True
-        Label2.Location = New Point(384, 343)
-        Label2.Margin = New Padding(4, 0, 4, 0)
-        Label2.Name = "Label2"
-        Label2.Size = New Size(63, 22)
-        Label2.TabIndex = 3
-        Label2.Text = "Label2"
-        ' 
         ' ToolStripStatusLabel1
         ' 
         ToolStripStatusLabel1.AutoSize = False
@@ -1270,25 +1230,26 @@ Partial Class Form1
         ToolStripStatusLabel1.Size = New Size(6, 24)
         ToolStripStatusLabel1.Text = "   "
         ' 
-        ' ProgressBar1
+        ' PgrsBar1
         ' 
-        ProgressBar1.AutoSize = False
-        ProgressBar1.DisplayStyle = ToolStripItemDisplayStyle.Text
-        ProgressBar1.ForeColor = Color.DimGray
-        ProgressBar1.Name = "ProgressBar1"
-        ProgressBar1.Size = New Size(300, 24)
-        ProgressBar1.Text = "ProgressBar1"
-        ProgressBar1.TextAlign = ContentAlignment.MiddleLeft
+        PgrsBar1.AutoSize = False
+        PgrsBar1.DisplayStyle = ToolStripItemDisplayStyle.Text
+        PgrsBar1.ForeColor = Color.DimGray
+        PgrsBar1.Name = "PgrsBar1"
+        PgrsBar1.Size = New Size(320, 24)
+        PgrsBar1.Text = "ProgressBar1"
+        PgrsBar1.TextAlign = ContentAlignment.MiddleLeft
         ' 
-        ' ProgressBar2
+        ' PgrsBar2
         ' 
-        ProgressBar2.AutoSize = False
-        ProgressBar2.DisplayStyle = ToolStripItemDisplayStyle.Text
-        ProgressBar2.ForeColor = Color.DimGray
-        ProgressBar2.Name = "ProgressBar2"
-        ProgressBar2.Size = New Size(580, 24)
-        ProgressBar2.Text = "ProgressBar2"
-        ProgressBar2.TextAlign = ContentAlignment.MiddleLeft
+        PgrsBar2.AutoSize = False
+        PgrsBar2.DisplayStyle = ToolStripItemDisplayStyle.Text
+        PgrsBar2.ForeColor = Color.DimGray
+        PgrsBar2.Name = "PgrsBar2"
+        PgrsBar2.Size = New Size(717, 24)
+        PgrsBar2.Spring = True
+        PgrsBar2.Text = "ProgressBar2"
+        PgrsBar2.TextAlign = ContentAlignment.MiddleLeft
         ' 
         ' ToolStripProgressBar1
         ' 
@@ -1297,8 +1258,9 @@ Partial Class Form1
         ' 
         ' StatusStrip1
         ' 
+        StatusStrip1.AutoSize = False
         StatusStrip1.ImageScalingSize = New Size(20, 20)
-        StatusStrip1.Items.AddRange(New ToolStripItem() {ToolStripStatusLabel1, ProgressBar1, ProgressBar2, ToolStripProgressBar1})
+        StatusStrip1.Items.AddRange(New ToolStripItem() {ToolStripStatusLabel1, PgrsBar1, PgrsBar2, ToolStripProgressBar1})
         StatusStrip1.Location = New Point(0, 1289)
         StatusStrip1.Name = "StatusStrip1"
         StatusStrip1.Padding = New Padding(1, 0, 18, 0)
@@ -1372,7 +1334,6 @@ Partial Class Form1
         StatusStrip1.ResumeLayout(False)
         StatusStrip1.PerformLayout()
         ResumeLayout(False)
-        PerformLayout()
 
     End Sub
 
@@ -1383,8 +1344,8 @@ Partial Class Form1
     Friend WithEvents SplitContainer4 As SplitContainer
     Friend WithEvents SplitContainer5 As SplitContainer
     Friend WithEvents ToolStripStatusLabel1 As ToolStripStatusLabel
-    Friend WithEvents ProgressBar1 As ToolStripStatusLabel
-    Friend WithEvents ProgressBar2 As ToolStripStatusLabel
+    Friend WithEvents PgrsBar1 As ToolStripStatusLabel
+    Friend WithEvents PgrsBar2 As ToolStripStatusLabel
     Friend WithEvents ToolStripProgressBar1 As ToolStripStatusLabel
     Friend WithEvents StatusStrip1 As StatusStrip
 
@@ -1409,7 +1370,7 @@ Partial Class Form1
     Friend WithEvents ColumnHeader22 As ColumnHeader
     Friend WithEvents ColumnHeader23 As ColumnHeader
     Friend WithEvents CheckSubFolder2 As CheckBox
-    Friend WithEvents Label2 As Label
+    ' Friend WithEvents Label2 As Label
 
     Friend WithEvents TabPage3 As TabPage
     Friend WithEvents ListView3 As ListView
@@ -1449,7 +1410,7 @@ Partial Class Form1
     Friend WithEvents Button5 As Button
     Friend WithEvents Label1 As Label
     Friend WithEvents ColumnHeader15 As ColumnHeader
-	Friend WithEvents CheckSubFolder5 As CheckBox
+    Friend WithEvents CheckSubFolder5 As CheckBox
 
     Friend WithEvents TabPage6 As TabPage
     Friend WithEvents checkShowAllFolders As CheckBox
@@ -1463,8 +1424,6 @@ Partial Class Form1
     Friend WithEvents OKiLikeNoisy As CheckBox
     Friend WithEvents SettingGroup As GroupBox
     Friend WithEvents RenewCache As Button
-    Friend WithEvents RDO_Parallel2 As RadioButton
-    Friend WithEvents RDO_Parallel1 As RadioButton
     Friend WithEvents RenewFolderSize As CheckBox
     Friend WithEvents timerSaveCache As Timer
     Friend WithEvents RenewAttachFilename As CheckBox
@@ -1488,6 +1447,6 @@ Partial Class Form1
     Friend WithEvents ColumnHeader41 As ColumnHeader
     Friend WithEvents ColumnHeader42 As ColumnHeader
     Friend WithEvents chkClearSimHash As CheckBox
-    Friend WithEvents TrackBar1 As TrackBar
+    Friend WithEvents TrackBar1 As StepTrackBar ' 改為 StepTrackBar，點擊滑軌只移一格。by Claude Sonnet 4.6, 2026/06/18
 
 End Class

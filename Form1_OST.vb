@@ -236,12 +236,12 @@ Partial Class Form1
 
         ' OST 尚未載入（或載入失敗）時只更新狀態列，不讀內容
         If Not _ostLoaded OrElse ost2pst.FM.srcFile Is Nothing Then
-            ProgressBar2.Text = $"OST 資料夾: {ostFolder.path}" : Return
+            PgrsBar2.Text = $"OST 資料夾: {ostFolder.path}" : Return
         End If
 
         _dbg("開始", ostFolder.name)
         LvOST.Items.Clear()
-        ProgressBar1.Text = "正在讀取郵件清單..." : ProgressBar2.Text = ostFolder.path
+        PgrsBar1.Text = "正在讀取郵件清單..." : PgrsBar2.Text = ostFolder.path
         Cursor = Cursors.WaitCursor
 
         Try
@@ -254,11 +254,11 @@ Partial Class Form1
             _dbg("同步讀取結束", $"取得 {items.Count} 筆")
 
             ShowLvOstItems(items)
-            ProgressBar1.Text = $"共 {items.Count:N0} 封 — {ostFolder.name}"
+            PgrsBar1.Text = $"共 {items.Count:N0} 封 — {ostFolder.name}"
 
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
-            ProgressBar1.Text = "讀取失敗: " & ex.Message
+            PgrsBar1.Text = "讀取失敗: " & ex.Message
         Finally
             Cursor = Cursors.Default
             _dbg("結束", ostFolder.name)
@@ -275,7 +275,7 @@ Partial Class Form1
 
         _dbg("開始", folder.Name)
         LvPST.Items.Clear()
-        ProgressBar1.Text = "正在讀取 PST 郵件清單..." : ProgressBar2.Text = SafeGetPath(folder)
+        PgrsBar1.Text = "正在讀取 PST 郵件清單..." : PgrsBar2.Text = SafeGetPath(folder)
         Cursor = Cursors.WaitCursor
 
         Try
@@ -283,12 +283,12 @@ Partial Class Form1
             ' needTopic:=False：Tab7 不需要 Conversation Topic，省去讀 PR_CONVERSATION_TOPIC 開銷
             Dim rows = Await GetBasicMailInfo(folder, needTopic:=False, cToken:=cToken)
             ShowLvPstItems(rows.Select(Function(r) r.Mail).ToList())
-            ProgressBar1.Text = $"共 {rows.Count:N0} 封 — {folder.Name}"
+            PgrsBar1.Text = $"共 {rows.Count:N0} 封 — {folder.Name}"
 
         Catch ex As OperationCanceledException
-            _dbg("中斷", "ESC") : ProgressBar1.Text = "由使用者中斷"
+            _dbg("中斷", "ESC") : PgrsBar1.Text = "由使用者中斷"
         Catch ex As System.Exception
-            _dbg("錯誤", ex.Message) : ProgressBar1.Text = "讀取失敗: " & ex.Message
+            _dbg("錯誤", ex.Message) : PgrsBar1.Text = "讀取失敗: " & ex.Message
         Finally
             Cursor = Cursors.Default
             _dbg("結束", folder.Name)
@@ -394,7 +394,7 @@ Partial Class Form1
                                  "這可能需要一點時間。", "確認複製", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
         If dr <> DialogResult.Yes Then Return
 
-        ProgressBar1.Text = "正在背景匯出 OST 資料夾至暫存 PST..." : ProgressBar2.Text = sourceFolderOST.name
+        PgrsBar1.Text = "正在背景匯出 OST 資料夾至暫存 PST..." : PgrsBar2.Text = sourceFolderOST.name
         Cursor = Cursors.WaitCursor : CopyFolder.Enabled = False
 
         ' by Gemini 3.0 Flash, 2026/04/23: 啟動計時並設定進度增強委派 (Regex 解析核心庫訊息)
@@ -427,7 +427,7 @@ Partial Class Form1
                                            End If
                                            ' 使用 BeginInvoke 確保 UI 安全，避免背景線程與 UI 線程爭奪 Handle 導致鎖死
                                            Dim finalMsg = $"{msg} ({speed:F0} 筆/秒{etaString})"
-                                           Me.BeginInvoke(Sub() ProgressBar2.Text = finalMsg)
+                                           Me.BeginInvoke(Sub() PgrsBar2.Text = finalMsg)
                                            Return
                                        End If
                                    Else
@@ -436,7 +436,7 @@ Partial Class Form1
                                        lastUiUpdateTimeMs = currentMs
                                    End If
                                    Dim statusMsg = msg
-                                   Me.BeginInvoke(Sub() ProgressBar2.Text = statusMsg)
+                                   Me.BeginInvoke(Sub() PgrsBar2.Text = statusMsg)
                                End Sub
 
         ' by Gemini 3.1 Pro, 2026/04/24: 效能極限優化 - 將 Temp PST 建立在與來源 OST 同一個目錄底下。
@@ -519,7 +519,7 @@ Partial Class Form1
             ' 步驟 2: 透過 OOM 掛載 TempPST
             Dim ns As Outlook.NameSpace = _olApp.GetNamespace("MAPI")
             ns.AddStore(tempPstPath)
-            ProgressBar1.Text = "正在掛載並複製資料夾至目標 PST..."
+            PgrsBar1.Text = "正在掛載並複製資料夾至目標 PST..."
             Await Task.Yield() ' 刷新 UI
 
             ' 找到剛掛載的 Temp PST Store
@@ -610,7 +610,7 @@ Partial Class Form1
                     _dbg("刷新目標 PST 失敗", ex.Message)
                 End Try
 
-                ProgressBar1.Text = "複製完成！"
+                PgrsBar1.Text = "複製完成！"
                 MessageBox.Show("複製完成！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information)
             Else
                 MessageBox.Show("在暫存 PST 中找不到剛匯出的資料夾。", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error)
@@ -627,14 +627,14 @@ Partial Class Form1
         Finally
             ' by Gemini 3.0 Flash, 2026/04/23: 還原為簡約版進度委派
             ost2pst.FM.StatusMsg = Sub(msg As String)
-                                       If Not String.IsNullOrEmpty(msg) Then ProgressBar2.Text = msg
+                                       If Not String.IsNullOrEmpty(msg) Then PgrsBar2.Text = msg
                                    End Sub
             _tab7StatusSw.Stop()
 
             Cursor = Cursors.Default
             CopyFolder.Enabled = True
-            If ProgressBar1.Text.StartsWith("正在") Then ProgressBar1.Text = "操作完成"
-            ProgressBar2.Text = ""
+            If PgrsBar1.Text.StartsWith("正在") Then PgrsBar1.Text = "操作完成"
+            PgrsBar2.Text = ""
         End Try
 
     End Sub
@@ -722,13 +722,13 @@ Partial Class Form1
         Cursor = Cursors.WaitCursor
         tv.Nodes.Clear()
         LvOST.Items.Clear()
-        ProgressBar1.Text = "正在解析 OST..." : ProgressBar2.Text = ""
+        PgrsBar1.Text = "正在解析 OST..." : PgrsBar2.Text = ""
         Await Task.Yield()  ' 讓 UI 先刷新再開始耗時操作
 
         Try
             ' FM.StatusMsg delegate 橋接（待 C# DLL 重新編譯後可還原）：
             ost2pst.FM.StatusMsg = Sub(msg As String)
-                                       If Not String.IsNullOrEmpty(msg) Then ProgressBar2.Text = msg
+                                       If Not String.IsNullOrEmpty(msg) Then PgrsBar2.Text = msg
                                    End Sub
 
             ' ① 開啟 OST 檔（C# 端解析 Header + NBT/BBT B-Tree，約 0.5~2 秒）
@@ -774,8 +774,8 @@ Partial Class Form1
             ' Phase 2: 成功後標記 _ostLoaded=True，不在 Finally 關閉
             _ostLoaded = True
             _currentOstFilePath = filePath ' by Gemini 3.1 Pro, 2026/04/24: 記錄當前 OST 檔案路徑
-            ProgressBar1.Text = $"OST 解析完成：共 {folderList.Count} 個資料夾，請點選資料夾查看郵件"
-            ProgressBar2.Text = filePath
+            PgrsBar1.Text = $"OST 解析完成：共 {folderList.Count} 個資料夾，請點選資料夾查看郵件"
+            PgrsBar2.Text = filePath
             _dbg("結束", $"{folderList.Count} 個資料夾")
 
             ' By Gemini 3.0 Flash: 背景非同步更新資料夾內的郵件數量
@@ -955,7 +955,7 @@ Partial Class Form1
         Cursor = Cursors.WaitCursor
         tv.Nodes.Clear()
         LvPST.Items.Clear()
-        ProgressBar1.Text = "載入 PST..." : ProgressBar2.Text = ""
+        PgrsBar1.Text = "載入 PST..." : PgrsBar2.Text = ""
 
         Dim ns As Outlook.NameSpace = Nothing
         Try
@@ -996,8 +996,8 @@ Partial Class Form1
             rootNode.Expand()
 
             Dim totalNodes As Integer = CountAllNodes(tv.Nodes)
-            ProgressBar1.Text = $"PST 載入完成：{rootF.Name}，共 {totalNodes} 個資料夾，請點選資料夾查看郵件"
-            ProgressBar2.Text = filePath
+            PgrsBar1.Text = $"PST 載入完成：{rootF.Name}，共 {totalNodes} 個資料夾，請點選資料夾查看郵件"
+            PgrsBar2.Text = filePath
             _dbg("結束", $"{rootF.Name} | {totalNodes} 個節點")
 
         Catch ex As System.Exception
@@ -1126,7 +1126,7 @@ Partial Class Form1
         OpenMailByEntryID(GetSelectedEntryIDs(LvPST))
     End Sub
     Private Async Sub OpenSelectedOstMailViaTempPST(nids As List(Of UInteger), ostFolderNid As UInteger, folderName As String)
-        ProgressBar1.Text = "正在背景準備開啟 OST 郵件..."
+        PgrsBar1.Text = "正在背景準備開啟 OST 郵件..."
         Cursor = Cursors.WaitCursor
 
         Dim tempPstPath As String = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "temp_open_" & Guid.NewGuid().ToString("N") & ".pst")
@@ -1167,7 +1167,7 @@ Partial Class Form1
                 Return
             End If
 
-            ProgressBar1.Text = "正在掛載並開啟郵件..."
+            PgrsBar1.Text = "正在掛載並開啟郵件..."
             Await Task.Yield()
 
             Dim ns As Outlook.NameSpace = _olApp.GetNamespace("MAPI")
@@ -1246,7 +1246,7 @@ Partial Class Form1
                 Finally
                     TryMarshalRelease(mailItems)
                 End Try
-                ProgressBar1.Text = $"成功開啟 {itemCount} 封郵件。"
+                PgrsBar1.Text = $"成功開啟 {itemCount} 封郵件。"
             Else
                 MessageBox.Show("在暫存 PST 中找不到剛匯出的郵件。", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error)
             End If
@@ -1267,7 +1267,7 @@ Partial Class Form1
             MessageBox.Show("開啟過程中發生錯誤: " & ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error)
         Finally
             Cursor = Cursors.Default
-            ProgressBar2.Text = ""
+            PgrsBar2.Text = ""
         End Try
     End Sub
 #End Region

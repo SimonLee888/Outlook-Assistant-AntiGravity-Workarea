@@ -50,46 +50,34 @@ Partial Class Form1
     '
     ' ── 版本演進摘要 ──────────────────────────────────────────────
     '
-    '   原始版  循序 Await GetInfoForListview × N，各自等遞迴完成後才輪下一個
-    '           A. 用 Task.Run 包 COM (STA 違規) + B. s4Task.Result 潛在 deadlock
-    '           cache: 0.10~0.19s
+    '   原始版 循序 Await GetInfoForListview × N，各自等遞迴完成後才輪下一個
+    '               A. 用 Task.Run 包 COM (STA 違規) + B. s4Task.Result 潛在 deadlock (cache: 0.10~0.19s)
     '
-    '   v1      BFS 一次展開整棵子樹，GetMailCountL3 循序讀 PR_CONTENT_COUNT
-    '           底部向上彙總後一次寫快取，之後點選子資料夾直接命中，架構最乾淨，
-    '           但有 bug: root 快取命中時不展開子資料夾 → 第二次點選 ListView 只顯示 root 自身
+    '   v1  BFS 一次展開整棵子樹：
+    '           GetMailCountL3 循序讀 PR_CONTENT_COUNT，底部向上彙總後一次寫快取，
+    '           之後點選子資料夾直接命中，架構最乾淨，但有 bug: root 快取命中時不展開子資料夾 → 第二次點選 ListView 只顯示 root 自身
     '           cache: 0.01s (最快，因為完全不碰 thread pool)
     '
-    '   v2      Task.WhenAll 同時發起 N 個子資料夾的計算 (並行的並行)
-    '           修掉 s4Task.Result deadlock, 1st read 明顯變快；
-    '           但 cache 仍有 40 次 Task.Run dispatch overhead
-    '           cache: 0.04~0.09s (因 Task.Run overhead 限制)
+    '   v2  Task.WhenAll 同時發起 N 個子資料夾的計算 (並行的並行)：
+    '           修掉 s4Task.Result deadlock, 1st read 明顯變快；但 cache 仍有 40 次 Task.Run dispatch overhead (cache: 0.04~0.09s, 因 Task.Run overhead 限制)
     '
-    '   v3      BFS + Task.WhenAll 試圖合併 v1 + v2 優點
+    '   v3  BFS + Task.WhenAll 試圖合併 v1 + v2 優點：
     '           但 ComputeFolderDisplayList 在 UI 執行緒循序走整棵子樹 → 更慢
-    '   v3fix   修正 v3 過深遍歷問題，ComputeFolderDisplayList 只收 depth=0/1
-    '           效能介於 v1 和 v2 之間，但仍有 Task.Run overhead
-    '           cache: 0.05~0.08s
+    '   v3fix修正 v3 過深遍歷問題，ComputeFolderDisplayList 只收 depth=0/1：
+    '           效能介於 v1 和 v2 之間，但仍有 Task.Run overhead (cache: 0.05~0.08s)
     '
-    '   v4      v1 的 BFS 架構 + 一行 bug fix: root 永遠展開直屬子資料夾
+    '   v4  v1 的 BFS 架構 + 一行 bug fix: root 永遠展開直屬子資料夾：
     '           保留 v1 的所有效能優勢，同時修正第二次點選只顯示 root 的問題
-    '           不引入 Task.WhenAll (實測 sequential BFS 比 parallel of parallel 快)
-    '           cache: 0.01s (應當與 v1 相同)
+    '           不引入 Task.WhenAll (實測 sequential BFS 比 parallel of parallel 快) (cache: 0.01s，應當與 v1 相同)
     '
-    '   v5 (本版)
-    '           2026/04/04 by Gemini: 大幅重構 CollectFolderStatsByBFS，
-    '           依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。
+    '   v5  大幅重構 CollectFolderStatsByBFS，依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。(2026/04/04 by Gemini)
     '
     ' ── 為什麼 v4 不用 Task.WhenAll？─────────────────────────────
-    '
     '   v2/v3fix 的「並行的並行」看起來應該更快，但實測反而輸給 v1，
     '   原因: PST 的 PR_CONTENT_COUNT 讀取是 COM overhead 主導 (不是 I/O bottleneck)
     '   v1 的 BFS sequential: N 個資料夾 × 1 PR_CONTENT_COUNT call = O(N)，無其他 overhead
-    '   v2/v3fix 的 Task.WhenAll: 20 子資料夾 × 2 Task.Run = 40 次 thread pool dispatch
-    '            每次 dispatch ~1~2ms，40 次 = 40~80ms → 這就是 cache 0.05s 的來源
-    '
-    '   PST 是單一檔案，並行讀取可能造成 I/O 競爭，在慢速 HDD 上優勢也有限
-    '   → v1 的 sequential BFS 在此場景下已是最優，不需要 Task.WhenAll  
-    '   todo: 但我還是想要再嚐試看看, 我覺得上次測試結果應該不是這個原因
+    '   v2/v3fix 的 Task.WhenAll: 20 子資料夾 × 2 Task.Run = 40 次 thread pool dispatch，每次 dispatch ~1~2ms，40 次 = 40~80ms → 這就是 cache 0.05s 的來源
+    '   PST 是單一檔案，並行讀取可能造成 I/O 競爭，在慢速 HDD 上優勢也有限 → v1 的 sequential BFS 在此場景下已是最優，不需要 Task.WhenAll  
     '
     ' ── 分層架構 ──────────────────────────────────────────────────
     '   Layer1  TreeView1_AfterSelect   UI 事件層
@@ -109,13 +97,13 @@ Partial Class Form1
     '       不遞迴，不展開子資料夾，最小化 COM 呼叫量
     '
     ' ── 快取策略 ──────────────────────────────────────────────────
-    '   mailCountCache   → TotalMailCount (含子孫郵件總數)   Layer2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
-    '   folderCountCache → TotalSubCount (含子孫資料夾總數)  Layer2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
-    '   folderSizeCache  → 資料夾大小 (Lazy，由 ColumnClick / 右鍵觸發計算)
-    '   folderTreeCache  → 子資料夾排序清單 (GetSortedSubFolders 負責維護)
+    '   mailCountCache      → TotalMailCount (含子孫郵件總數)   Layer2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
+    '   folderCountCache    → TotalSubCount (含子孫資料夾總數)  Layer2 底部向上彙總後寫入，TryAdd 不覆蓋既有值
+    '   folderSizeCache     → 資料夾大小 (Lazy，由 ColumnClick / 右鍵觸發計算)
+    '   folderTreeCache     → 子資料夾排序清單 (GetSortedSubFolders 負責維護)
     ' ─────────────────────────────────────────────────────────────
-    ' FolderBfsEntry: BFS 過程中每個資料夾節點的容器
-    ' 貫穿 Layer2 的所有步驟 (BFS 展開 → Layer3 讀取 → 底部向上彙總 → 快取寫入 → 回傳清單)
+    '   FolderBfsEntry: BFS 過程中每個資料夾節點的容器
+    '   貫穿 Layer2 的所有步驟 (BFS 展開 → Layer3 讀取 → 底部向上彙總 → 快取寫入 → 回傳清單)
     ' ─────────────────────────────────────────────────────────────
     '   快取命中剪枝規則:
     '     root (BFS 起點)   → 永遠展開直屬子資料夾 (v4 bug fix 的核心)
@@ -178,7 +166,7 @@ Partial Class Form1
         Dim cToken As CancellationToken = OkayNowYouHaveToken()
 
         _isUserBusy = True : Cursor = Cursors.WaitCursor
-        ProgressBar1.Text = "" : ProgressBar2.Text = ""
+        PgrsBar1.Text = "" : PgrsBar2.Text = ""
 
         Try
             ' ── 執行運算 (Layer 1.5) ──
@@ -189,13 +177,13 @@ Partial Class Form1
             RenderLv1(allItems)            ' ── 執行渲染 (UI 呈現) ──
 
         Catch ex As OperationCanceledException
-            _dbg("結束", "ESC 中斷") : ProgressBar1.Text = "由使用者中斷。" : Return
+            _dbg("結束", "ESC 中斷") : PgrsBar1.Text = "由使用者中斷。" : Return
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
         End Try
 
         sw.Stop()
-        ProgressBar1.Text = "統計花費 " & sw.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+        PgrsBar1.Text = "統計花費 " & sw.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
         Cursor = Cursors.Default : _isUserBusy = False : If Me.ActiveControl Is SimTree1 Then SimTree1.Focus()
         _dbg("結束")
     End Sub
@@ -203,10 +191,10 @@ Partial Class Form1
         ''' <summary>
         ''' ListView1: 資料夾導覽 (2026/04/16 by Gemini 3.1 Pro: 從 HandleListViewKeyPress 拆分回歸)
         ''' </summary>
-        _dbg("開始", $"鍵值: {e.KeyCode}")
         Dim cToken As CancellationToken = OkayNowYouHaveToken()
         Dim lv As ListView = DirectCast(sender, ListView)
 
+        _dbg("開始", $"鍵值: {e.KeyCode}")
         If e.KeyCode = Keys.Enter Then
             If lv.SelectedItems.Count = 0 Then Return
 
@@ -232,7 +220,7 @@ Partial Class Form1
             If selectedItem IsNot Nothing Then EnterSelectedFolder(selectedItem)
             e.Handled = True : e.SuppressKeyPress = True
 
-        ElseIf e.KeyCode = Keys.Escape Then
+        ElseIf e.KeyCode = Keys.Back Or e.KeyCode = Keys.Escape Then
             ' 2026/05/26 by Simon/Claude: ESC 先退回上一層資料夾，退無可退才把焦點移回左側樹
             '   原始意圖：Lv1 → ESC → 退回上層 → Lv1（游標落在剛才那個資料夾）
             '   原因：Gemini 3.1 Pro 2026/04/22 把退層邏輯整段 comment 掉，改成無條件 SimTree1.Focus()，行為不符預期。
@@ -257,8 +245,8 @@ Partial Class Form1
                 ' by Gemini 3.5 Flash, 2026/05/27: 將此巢狀尋找高亮邏輯重構抽離至獨立的輔助子程序，簡化事件代碼並強化型別轉型保護
                 SelectFolderInListView(lv, currentFolder)
                 lv.Focus()
-            Else
-                SimTree1.Focus()  ' ← 2026/05/30 新增：已在最頂層，退回左側資料夾樹
+            ElseIf e.KeyCode = Keys.Escape Then             ' 2026/06/27 新增 by simon：Backspace 只會退到最頂層，要ESC才會退回左側資料夾樹
+                SimTree1.Focus()                            ' 2026/05/30 新增：若已在最頂層，則退回左側資料夾樹
             End If
             e.Handled = True : e.SuppressKeyPress = True
 
@@ -294,16 +282,16 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function ComputeTab1FolderStats(dedupedNodes As List(Of TreeNode), cToken As CancellationToken, Optional forceRefresh As Boolean = False) As Task(Of List(Of ListViewItem))
+    Private Async Function ComputeTab1FolderStats(dedupedNodes As List(Of TreeNode), cToken As CancellationToken, Optional skipCache As Boolean = False) As Task(Of List(Of ListViewItem))
         ''' <summary>
         ''' [Layer 1.5 業務邏輯層] 針對去重後的節點進行非同步統計運算。
         ''' 支援一般 BFS 運算與 F5 強制刷新模式。
-        ''' forceRefresh=True   時委派給 CollectFolderStatsByL3ForceRefresh (直打 L3)；
-        ''' forceRefresh=False  走 CollectFolderStatsByBFS (BFS + 快取剪枝)。
+        ''' skipCache=True   時委派給 CollectFolderStatsByL3ForceRefresh (直打 L3)；
+        ''' skipCache=False  走 CollectFolderStatsByBFS (BFS + 快取剪枝)。
         ''' </summary>
         ''' <param name="dedupedNodes">已去重過的選中節點清單</param>
         ''' <param name="cToken">取消標記</param>
-        ''' <param name="forceRefresh">是否繞過快取強制重新讀取 L3 資料</param>
+        ''' <param name="skipCache">是否繞過快取強制重新讀取 L3 資料</param>
         ''' <returns>組裝完畢的 ListViewItem 清單</returns>
 
         ' 預分配容量為 128，優化 UI 項目渲染效能 (by Gemini 3 Flash, 2026/05/04)
@@ -317,9 +305,9 @@ Partial Class Form1
             If folder Is Nothing Then Continue For
 
             Dim rows As List(Of FolderBfsEntry)
-            If forceRefresh = False Then
+            If skipCache = False Then
                 ' === 標準模式：呼叫 Layer2 BFS 展開，含快取剪枝機制 ===
-                rows = Await CollectFolderStatsByBFS(folder, New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message), cToken:=cToken)
+                rows = Await CollectFolderStatsByBFS(folder, New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message), cToken:=cToken)
             Else
                 ' === F5 強制刷新策略：直接呼叫 L3 接口，不走 BFS 隊列 ===
                 rows = Await CollectFolderStatsByL3ForceRefresh(folder, cToken)
@@ -342,7 +330,7 @@ Partial Class Form1
         ' 多選模式：在清單最底部追加合計列
         If multiMode AndAlso allItems.Count > 0 Then
             allItems.Add(BuildLv1SumRow(dedupedNodes.Count, subTotalFolders, subTotalMail))
-            ProgressBar2.Text = $"統計完成: 共選取 {dedupedNodes.Count:N0} 個資料夾，合計 {subTotalMail:N0} 封郵件。"
+            PgrsBar2.Text = $"統計完成: 共選取 {dedupedNodes.Count:N0} 個資料夾，合計 {subTotalMail:N0} 封郵件。"
         End If
 
         Return allItems
@@ -389,36 +377,42 @@ Partial Class Form1
 
     End Function
     Private Async Function CollectFolderStatsByL3ForceRefresh(folder As Folder, cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
-        ' 2026/05/27 by Simon/Claude: 從 ComputeTab1FolderStats forceRefresh 分支抽出
+        ' 2026/05/27 by Simon/Claude: 從 ComputeTab1FolderStats skipCache 分支抽出
         ' F5 強制刷新策略：直打 L3，只計算 root + 直屬子資料夾，不走 BFS 整棵子樹
         Dim rootPath As String = SafeGetPath(folder)
-        ProgressBar2.Text = $"F5: 讀取 {ExtractFolderName(rootPath)}..."
+        PgrsBar2.Text = $"F5: 讀取 {ExtractFolderName(rootPath)}..."
 
-        Dim rootMc As Long = GetMailCountL3(folder, rootPath)
-        ' 2026/06/13 by Simon/Claude Opus 4.8: forceRefresh:=True 一路 thread 到 L2.5/L3，F5 跳過記憶體+DB 快取直打 L3 完整重掃
-        Dim rootMca As Long = Await GetMailCountAllL3(folder, forceRefresh:=True, cToken:=cToken)
-        Dim rootFca As Long = Await GetFolderCountAllL3(folder, forceRefresh:=True, cToken:=cToken)
-        Dim rootFc As Long = GetFolderCountL3(folder, rootPath)
+        ' 2026/06/13 by Simon/Claude Opus 4.8: skipCache:=True 一路穿透到 L2.5/L3，F5 跳過記憶體+DB 快取直打 L3 完整重掃
+        ' 2026/06/23 by Simon/Claude: F5 改走 proxy skipCache(RDO 派工),仍繞過快取讀寫
+        Dim rootMc As Long = GetMailCount(folder, rootPath, skipCache:=True)
+        Dim rootFc As Long = GetFolderCount(folder, rootPath, skipCache:=True)
+        Dim rootMca As Long = Await GetMailCountAllL3(folder, skipCache:=True, cToken:=cToken)
+        Dim rootFca As Long = Await GetFolderCountAllL3(folder, skipCache:=True, cToken:=cToken)
 
         ' 更新快取
-        _cacheMailCount(rootPath) = rootMc : _cacheFolderCount(rootPath) = rootFc
-        _cacheMailCountAll(rootPath) = rootMca : _cacheFolderCountAll(rootPath) = rootFca
+        _cacheMailCount(rootPath) = rootMc : _cacheMailCountAll(rootPath) = rootMca
+        _cacheFolderCount(rootPath) = rootFc : _cacheFolderCountAll(rootPath) = rootFca
 
-        Dim rows As New List(Of FolderBfsEntry) From {
-            New FolderBfsEntry With {.Folder = folder, .FolderPath = rootPath,
-                                     .DirectMailCount = rootMc, .TotalMailCount = rootMca, .TotalSubCount = rootFca}}
+        Dim rows As New List(Of FolderBfsEntry) From {New FolderBfsEntry With {.Folder = folder, .FolderPath = rootPath,
+                                                                               .DirectMailCount = rootMc, .TotalMailCount = rootMca, .TotalSubCount = rootFca}}
 
-        ' 處理直屬子資料夾 
-        ' todo: 這裡是不是多餘重複了?? 不是已經用CountAll, 為何還要再讀一次直屬子資料夾?? 這裡的邏輯是什麼??
-        ' ✅ 2026/5/31 by Gemini/Simon: 加入 forceRefresh 引數判斷是否要強制讀取COM
-        For Each child As Folder In GetSortedSubFolders(folder, rootPath, forceRefresh:=True)
+        ' 處理直屬子資料夾 (ps. 這裡是不是多餘重複了?? 上面不是已經用CountAll也都更新cache了, 為何還要再逐一讀一次直屬子資料夾?? 這裡的邏輯是什麼??)
+        ' 解答：這並非多餘。by Gemini 3.5 Flash, 2026/06/27
+        '   (1) 根資料夾呼叫的 GetMailCountAllL3(root) 只會回傳整棵子樹的總郵件數，在計算過程中「完全不會」寫入或更新任何直屬子資料夾的個別快取字典。
+        '   (2) F5 強制重刷的 UI 畫面需要同時呈現 Root 與其所有「直屬子資料夾」的獨立統計數據。
+        '       為了取得各直屬子資料夾個別的 DirectMailCount 與 TotalMailCount/TotalSubCount 數據，必須逐一尋訪直屬子資料夾 (child)，
+        '       對其單獨呼叫 GetMailCountAllL3(child) 以取得其子樹總數，寫入其 childPath 對應的快取字典中，並將個別的 FolderBfsEntry 包入 rows 回傳。
+
+        ' ✅ 2026/5/31 by Gemini/Simon: 加入 skipCache 引數判斷是否要強制讀取COM
+        For Each child As Folder In GetSortedSubFolders(folder, rootPath, skipCache:=True)
             cToken.ThrowIfCancellationRequested()
             Dim childPath As String = rootPath & "\" & child.Name
-            _cacheMailCount(childPath) = GetMailCountL3(child, childPath)
-            ' 2026/06/13 by Simon/Claude Opus 4.8: 同上，子資料夾亦以 forceRefresh:=True 強制重掃
-            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, forceRefresh:=True, cToken:=cToken)
-            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, forceRefresh:=True, cToken:=cToken)
-            _cacheFolderCount(childPath) = GetFolderCountL3(child, childPath)
+            ' 2026/06/13 by Simon/Claude Opus 4.8: 同上，子資料夾亦以 skipCache:=True 強制重掃
+            ' 2026/06/23 by Simon/Claude: 同上,F5 子夾改 proxy skipCache
+            _cacheMailCount(childPath) = GetMailCount(child, childPath, skipCache:=True)
+            _cacheFolderCount(childPath) = GetFolderCount(child, childPath, skipCache:=True)
+            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, skipCache:=True, cToken:=cToken)
+            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, skipCache:=True, cToken:=cToken)
 
             rows.Add(New FolderBfsEntry With {.Folder = child, .FolderPath = childPath,
                                               .DirectMailCount = _cacheMailCount(childPath),
@@ -481,7 +475,7 @@ Partial Class Form1
                 ' 未命中，或是 root (不論有無快取) → 展開直屬子資料夾
                 ' 傳入 fPath 給 GetSortedSubFolders 省去內部重爬 COM，並用字串組裝下一層路徑 (by Gemini 3.1 Pro)
                 ' 優化第七點：將 GetSortedSubFolders 提取至變數，提升代碼可讀性並利於 Debug (by Gemini 3 Flash, 2026/05/05)
-                Dim sortedSubs = GetSortedSubFolders(curr.folderObj, fPath, forceRefresh:=False)
+                Dim sortedSubs = GetSortedSubFolders(curr.folderObj, fPath, skipCache:=False)
                 For Each subFolder As Folder In sortedSubs
                     queue.Enqueue((subFolder, myIdx, fPath & "\" & subFolder.Name))
                 Next
@@ -616,7 +610,7 @@ Partial Class Form1
         _dbg("開始")
         ListView1.BeginUpdate()         ' BeginUpdate 可防止大規模更新時的畫面閃爍
         ListView1.Items.Clear()
-        _lastHoveredLvItem = Nothing  ' 2026/04/14 fix: 重建清單前清掉 stale 參照，避免第一次 hover 閃動
+        _lastHoveredLvItem = Nothing    ' 2026/04/14 fix: 重建清單前清掉 stale 參照，避免第一次 hover 閃動
 
         If items IsNot Nothing AndAlso items.Count > 0 Then ListView1.Items.AddRange(items.ToArray())
         ListView1.EndUpdate()
@@ -717,7 +711,7 @@ Partial Class Form1
         If selectedNodes.Count = 0 Then Return
 
         _isUserBusy = True : Cursor = Cursors.WaitCursor
-        ProgressBar1.Text = "F5 強制更新中..." : ProgressBar2.Text = ""
+        PgrsBar1.Text = "F5 強制更新中..." : PgrsBar2.Text = ""
 
         ' ① 去重
         Dim dedupedNodes As List(Of TreeNode) = GetDeDupedNodes(selectedNodes)
@@ -740,13 +734,13 @@ Partial Class Form1
                 If Not String.IsNullOrEmpty(targetPath) Then InvalidateFolderTreeCache(targetPath) ' ✅ 一行解決，隱藏實作細節 (by Gemini/Simon, 2026/5/31)
             Next
 
-            ' ③ 核心統計 (forceRefresh:=True)
-            Dim items As List(Of ListViewItem) = Await ComputeTab1FolderStats(dedupedNodes, cToken, forceRefresh:=True)
+            ' ③ 核心統計 (skipCache:=True)
+            Dim items As List(Of ListViewItem) = Await ComputeTab1FolderStats(dedupedNodes, cToken, skipCache:=True)
             RenderLv1(items)
 
             ' ④ Size 重算
             If sizeItemPaths.Count > 0 Then
-                ProgressBar2.Text = "正在重算資料夾大小..."
+                PgrsBar2.Text = "正在重算資料夾大小..."
                 For Each lvi As ListViewItem In ListView1.Items
                     If lvi.Tag Is Nothing Then Continue For
 
@@ -757,17 +751,19 @@ Partial Class Form1
                     lvi.SubItems(4).Text = "計算中..."
                     Dim dl As Long : _cacheFolderSize.TryRemove(fp, dl) : _cacheFolderSizeAll.TryRemove(fp, dl)
                     Dim sz As Long = Await GetFolderSizeAllAsync(t.SubFolder, fp, cToken)
-                    lvi.SubItems(4).Text = If(sz >= 0, (sz / 1024 / 1024).ToString("N2") & " MB", "計算失敗")
+                    If sz < 0 Then : lvi.SubItems(4).Text = "計算失敗"
+                    Else : lvi.SubItems(4).Text = (sz / 1024 ^ 2).ToString(If(sz >= 1024 ^ 2, "N0", "N2")) & " MB" ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
+                    End If
                     If sz >= 0 Then _cacheFolderSizeAll(fp) = sz
                 Next
             End If
 
             ' ⑤ 持久化
             Await SaveCachesToDB()
-            ProgressBar1.Text = "F5 強制更新完成"
+            PgrsBar1.Text = "F5 強制更新完成"
 
         Catch ex As OperationCanceledException
-            ProgressBar1.Text = "由使用者中斷。"
+            PgrsBar1.Text = "由使用者中斷。"
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
         Finally
@@ -886,7 +882,7 @@ Partial Class Form1
         ' 2026/05/27 by Simon/Claude: 抽出 BuildLv1GroupHeader / BuildLv1Item 重複的大小字串格式化
         Dim sizeVal As Long
         If _cacheFolderSizeAll.TryGetValue(fPath, sizeVal) AndAlso sizeVal > 0 Then
-            Return (sizeVal / 1024 / 1024).ToString("N2") & " MB"
+            Return (sizeVal / 1024 ^ 2).ToString(If(sizeVal >= 1024 ^ 2, "N0", "N2")) & " MB" ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
         End If
         Return "- "
     End Function
@@ -960,6 +956,9 @@ Partial Class Form1
         Dim items As List(Of ListViewItem) = Await ComputeTab1FolderStats(deduped, OkayNowYouHaveToken())
         RenderLv1(items)
 
+        ' by Gemini 3.5 Flash, 2026/06/27: 進入資料夾後，自動呼叫 ComputeFolderSize 計算該層各個子資料夾的大小
+        ComputeFolderSize(Nothing, Nothing)
+
         ListView1.Focus()
         If ListView1.Items.Count > 0 Then
             ListView1.Items(1).Selected = True : ListView1.Items(1).Focused = True
@@ -969,24 +968,36 @@ Partial Class Form1
     End Sub
     Private Async Sub ComputeFolderSize(sender As Object, e As EventArgs)
         _isUserBusy = True
-        _dbg(" ├ 開始", $"選取項目數: {ListView1.SelectedItems.Count}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
+        _dbg(" ├ 開始", $"選取項目數: {ListView1.SelectedItems.Count}")
 
         Try
-            Dim stopwatch As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
-            Dim selectedItems As ListView.SelectedListViewItemCollection = ListView1.SelectedItems  ' 如果有選中項目, 獲取所選中的項目
-            If selectedItems.Count > 0 Then
-                Dim cToken As CancellationToken = OkayNowYouHaveToken() ' ✅ 取得新 Token
-                For Each s As ListViewItem In selectedItems
-                    'If s.Index = 0 Then Continue For ' 若選中本體目錄則跳過 (之前統計速度很慢的時候, 怕計算量太大跑太久)
+            Dim stopwatch As Stopwatch = Stopwatch.StartNew()
+
+            ' by Gemini 3.5 Flash, 2026/06/27: 若有選取項目則僅計算選取者；若無選取項目，則預設計算 ListView1 內的所有項目
+            Dim targetItems As New List(Of ListViewItem)()
+            If ListView1.SelectedItems.Count > 0 Then
+                For Each item As ListViewItem In ListView1.SelectedItems : targetItems.Add(item) : Next
+            Else
+                For Each item As ListViewItem In ListView1.Items : targetItems.Add(item) : Next
+            End If
+
+            If targetItems.Count > 0 Then
+                Dim cToken As CancellationToken = OkayNowYouHaveToken()
+                For Each s As ListViewItem In targetItems
+                    If s.Tag Is Nothing Then Continue For ' 排除標題列或合計列
                     If s.SubItems.Count > 4 Then s.SubItems(4).Text = "計算中..." Else s.SubItems.Add("計算中...")
                     ' 提高反應速度, 先占位 (如果已經有FolderSize的子項目就先把它改成「計算中...」, 如果還沒有就先加一個占位用的子項目)
                 Next
 
-                Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Gemini, 2026/04/11; refactored by Claude Sonnet 4.6, 2026/06/07
-                Dim totalCount As Integer = selectedItems.Count
+                Dim swThrottle As Stopwatch = Stopwatch.StartNew()
+                ' 僅統計有 Tag（有效資料夾）的項目數量
+                Dim totalCount As Integer = 0
+                For Each s As ListViewItem In targetItems
+                    If s.Tag IsNot Nothing Then totalCount += 1
+                Next
                 Dim processedCount As Integer = 0
 
-                For Each s As ListViewItem In selectedItems
+                For Each s As ListViewItem In targetItems
                     'If s.Index = 0 Then Continue For ' 一樣, 若選中本體目錄則跳過 (之前統計速度還很慢的時候, 怕計算量太大跑太久)
                     ' 2026/04/13 by Simon/Claude: Tag 升級為 ValueTuple (SubFolder, ParentNode)；群組標題行 / 合計列 Tag=Nothing，直接跳過
                     If s.Tag Is Nothing Then Continue For
@@ -995,31 +1006,28 @@ Partial Class Form1
                     Dim folder As Folder = t.SubFolder
                     If folder Is Nothing Then Continue For
 
-                    Dim folderSize As Long = Await GetFolderSizeAllAsync(folder, cToken:=cToken)  ' 2026/3/29 by Gemini: 改為存取 Layer2.5 快取代理，第二次點擊同一資料夾直接命中快取; 2026/04/15 by Claude: 加入 cToken
+                    Dim folderSize As Long = Await GetFolderSizeAllAsync(folder, cToken:=cToken)
 
                     Dim strFolderSize As String
                     ' by Gemini 3 Flash, 2026/04/20: 資料大小單位統一改為 MB (保留兩位小數)，更能直觀反映 Outlook 佔用情況
-                    If folderSize < 0 Then
-                        strFolderSize = "計算失敗"
-                    Else
-                        strFolderSize = (folderSize / 1024 / 1024).ToString("N2") & " MB"
+                    ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
+                    If folderSize < 0 Then : strFolderSize = "計算失敗"
+                    Else : strFolderSize = (folderSize / 1024 ^ 2).ToString(If(folderSize >= 1024 ^ 2, "N0", "N2")) & " MB"
                     End If
                     If s.SubItems.Count > 4 Then s.SubItems(4).Text = strFolderSize Else s.SubItems.Add(strFolderSize)
 
                     processedCount += 1
-                    ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
                     Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                              Sub() ProgressBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({folder.Name})")
+                                              Sub() PgrsBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({folder.Name})")
                 Next
             End If
 
-            ProgressBar2.Text = "統計資料夾大小花費了 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+            PgrsBar2.Text = "統計資料夾大小花費了 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
         Catch ex As OperationCanceledException
-            ' by Gemini, 2026/04/11: 捕捉 ESC 中斷異常，優雅顯示訊息而不拋出錯誤視窗
-            ProgressBar2.Text = "計算已由使用者中斷。"
+            PgrsBar2.Text = "計算已由使用者中斷。"
             _dbg(" ├ 中斷", "ComputeFolderSize 已中斷")
         Catch ex As System.Exception
-            ProgressBar2.Text = "發生錯誤: " & ex.Message
+            PgrsBar2.Text = "發生錯誤: " & ex.Message
             _dbg(" ├ 錯誤", ex.Message)
         Finally
             _isUserBusy = False
@@ -1116,7 +1124,7 @@ Partial Class Form1
         ' by Gemini, 2026/03/29: 移除 TreeView2_AfterSelect，由 SimTree2 完全取代。
         ' ---------------------------------------------------------------
         _dbg("開始") : Dim stopwatch As Stopwatch = Stopwatch.StartNew()    ' 開始計時，初始化畫面狀態; by Claude Sonnet 4.6, 2026/06/07
-        Cursor = Cursors.WaitCursor : ProgressBar1.Text = "" : ProgressBar2.Text = ""
+        Cursor = Cursors.WaitCursor : PgrsBar1.Text = "" : PgrsBar2.Text = ""
 
         ' 序號機制: 每次點選遞增；計算完成後若序號已變，代表有更新的點選，丟棄本次結果
         Dim mySeq As Integer = System.Threading.Interlocked.Increment(_tab2SelectSeq)
@@ -1137,7 +1145,7 @@ Partial Class Form1
         End If
 
         Try ' by Claude Opus, 2026/04/11: Try 上移，包住 GetSubtreeToList 的 Await，否則 ESC 時拋出的 OperationCanceledException 沒有被捕捉
-            Dim progressTree = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+            Dim progressTree = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             Dim folderList = Await GetUniqueFolderList(selectedNodes, _includeSubTab2, progress:=progressTree, cToken:=cToken)
             _lv2IsMonthView = False        ' 切換選取時，重置視圖狀態為年度視圖
             _tv2FolderList = folderList    ' ✅ 記住本次統計的資料夾清單，供 GoToLv2MonthView (CollectMonthCounts) 使用
@@ -1166,12 +1174,12 @@ Partial Class Form1
                 processedCountLocal += 1
                 ' 2026/04/16 by Gemini: 每 100 毫秒更新一次預計計數進度
                 Await SmartThrottle(swThrottleCount, cToken:=cToken, ThrottleFreq.Hii,
-                                          Sub() ProgressBar2.Text = $"正在計算郵件分母: {processedCountLocal:N0}/{totalFoldersLocal:N0} 個資料夾 (累計 {totalMailCount:N0} 封)...")
+                                          Sub() PgrsBar2.Text = $"正在計算郵件分母: {processedCountLocal:N0}/{totalFoldersLocal:N0} 個資料夾 (累計 {totalMailCount:N0} 封)...")
             Next
 
             ' 呼叫 Layer2 流程協調層執行統計；結果存入 _lv2DataYear session 快取，GoToLv2MonthView/GoToLv2YearView 直接 render 不重算
             ListView2.Tag = totalMailCount    ' ★ 把總計數量快取起來，供 CollectMonthCounts 回報進度分母使用 (by Gemini 3.1 Pro, 2026/04/15)
-            Dim progressYear = New Progress(Of ProgressReport)(Sub(p) ProgressBar2.Text = p.Message)
+            Dim progressYear = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             _lv2DataYear = Await CollectYearCounts(folderList, totalMailCount, progressYear, cToken:=cToken, _tv2FolderPaths)
 
             ' --- 序號校驗點 2 (核心運算完成後) ---
@@ -1184,13 +1192,13 @@ Partial Class Form1
 
             Dim _yTotal As Integer = _lv2DataYear.Values.Sum   ' Values.Sum 是最可靠的實際計數 (含/不含子資料夾皆正確) 
             Dim _ySpd As Double = If(stopwatch.Elapsed.TotalSeconds > 0, _yTotal / stopwatch.Elapsed.TotalSeconds, 0)
-            ProgressBar1.Text = $"共 {_yTotal:N0} 封 / {stopwatch.Elapsed.TotalSeconds:0.00} 秒"
-            ProgressBar2.Text = $"(年度統計完成 - 處理速度為 {_ySpd:N0}/sec)"
+            PgrsBar1.Text = $"共 {_yTotal:N0} 封 / {stopwatch.Elapsed.TotalSeconds:0.00} 秒"
+            PgrsBar2.Text = $"(年度統計完成 - 處理速度為 {_ySpd:N0}/sec)"
             sender.Enabled = True : sender.Focus() : Cursor = Cursors.Default
             _dbg("結束")
         Catch ex As OperationCanceledException
             _dbg("結束", "ESC 中斷")
-            ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
+            PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = "" : Cursor = Cursors.Default
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message) : Cursor = Cursors.Default
         End Try
@@ -1241,14 +1249,14 @@ Partial Class Form1
                         Await GoToLv2MonthView(selectedYear, cToken:=cToken)
                     Catch ex As OperationCanceledException
                         _dbg("結束", "ESC 中斷")
-                        ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
+                        PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = "" : Cursor = Cursors.Default
                     End Try
                 End If
             End If
             e.Handled = True
             e.SuppressKeyPress = True
 
-        ElseIf e.KeyCode = Keys.Escape Then                 ' 2026/04/22 by Gemini 3.1 Pro: 補上 ESC 退出邏輯
+        ElseIf e.KeyCode = Keys.Escape Or e.KeyCode = Keys.Back Then    ' 2026/04/22 by Gemini 3.1 Pro: 補上 ESC 退出邏輯 ' 2026/6/27 by simon: 加上Backspace
             If _lv2IsMonthView Then
                 ' 從月份視圖退回年度視圖
                 Try
@@ -1262,10 +1270,10 @@ Partial Class Form1
             End If
             e.Handled = True
             e.SuppressKeyPress = True
-        ElseIf e.Control AndAlso e.KeyCode = Keys.A Then    ' Ctrl-A 全選 listview2 所有項目
+        ElseIf e.Control AndAlso e.KeyCode = Keys.A Then                ' Ctrl-A 全選 listview2 所有項目
             LviSelectAll(lv, e)
 
-        ElseIf e.Control AndAlso e.KeyCode = Keys.C Then    ' Ctrl-C 複製選取列到剪貼簿 (by Claude Sonnet 4.6, 2026/04/27)
+        ElseIf e.Control AndAlso e.KeyCode = Keys.C Then                ' Ctrl-C 複製選取列到剪貼簿 (by Claude Sonnet 4.6, 2026/04/27)
             LviCopyToClipboard(lv, e)
 
         End If
@@ -1294,7 +1302,7 @@ Partial Class Form1
             _dbg("結束", $"{selectedYear} 年")
         Catch ex As OperationCanceledException
             _dbg("結束", "ESC 中斷")
-            ProgressBar1.Text = "由使用者中斷。" : ProgressBar2.Text = "" : Cursor = Cursors.Default
+            PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = "" : Cursor = Cursors.Default
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
         End Try
@@ -1499,8 +1507,8 @@ Partial Class Form1
             ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判
             Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                       Sub()
-                                          ProgressBar1.Text = "正在讀取..."
-                                          ProgressBar2.Text = $"正在統計 {selectedYear} 年月份分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (相依包含共計 {totalMailCount:N0} 封信)。"
+                                          PgrsBar1.Text = "正在讀取..."
+                                          PgrsBar2.Text = $"正在統計 {selectedYear} 年月份分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (相依包含共計 {totalMailCount:N0} 封信)。"
                                       End Sub)
         Next
         _dbg(" ├ 結束", $"{selectedYear} 年 | 月份數: {monthCounts.Count:N0}")
@@ -1524,8 +1532,8 @@ Partial Class Form1
             RenderCt2YearView(_lv2DataYear)
 
             Dim _rTotal As Integer = _lv2DataYear.Values.Sum
-            ProgressBar1.Text = $"共 {_rTotal:N0} 封"
-            ProgressBar2.Text = "(返回年度統計)"
+            PgrsBar1.Text = $"共 {_rTotal:N0} 封"
+            PgrsBar2.Text = "(返回年度統計)"
             Cursor = Cursors.Default
         End If
 
@@ -1550,7 +1558,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始", selectedYear.ToString())
         Dim swM As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
-        ProgressBar1.Text = "" : ProgressBar2.Text = "" : Cursor = Cursors.WaitCursor
+        PgrsBar1.Text = "" : PgrsBar2.Text = "" : Cursor = Cursors.WaitCursor
 
         If _lv2DataMonth IsNot Nothing AndAlso _lv2MonthViewYear = selectedYear Then
             ' ★ 快取命中：直接 render，完全不碰計算層 (方案A：同一年份才命中) 
@@ -1560,8 +1568,8 @@ Partial Class Form1
             RenderCt2MonthView(_lv2DataMonth, selectedYear)
 
             Dim _mHit As Integer = _lv2DataMonth.Values.Sum
-            ProgressBar1.Text = $"共 {_mHit:N0} 封"
-            ProgressBar2.Text = $"({selectedYear} 年月份分佈 - 按 ESC 或雙擊標題橫列可返回視圖) "
+            PgrsBar1.Text = $"共 {_mHit:N0} 封"
+            PgrsBar2.Text = $"({selectedYear} 年月份分佈 - 按 ESC 或雙擊標題橫列可返回視圖) "
         Else
             ' ★ 快取未命中：CollectMonthCounts → _cacheMonthCounts 一定命中 → merge → render
             _dbg(" ├ _lv2DataMonth 快取未命中，開始計算", selectedYear.ToString())
@@ -1573,8 +1581,8 @@ Partial Class Form1
 
             Dim _mMiss As Integer = mc.Values.Sum
             Dim _mSpd As Double = If(swM.Elapsed.TotalSeconds > 0, _mMiss / swM.Elapsed.TotalSeconds, 0)
-            ProgressBar1.Text = $"共 {_mMiss:N0} 封 / {swM.Elapsed.TotalSeconds:0.00} 秒"
-            ProgressBar2.Text = $"({selectedYear} 年月份分佈讀取完成 - 按 ESC 或雙擊標題橫列可返回視圖) "
+            PgrsBar1.Text = $"共 {_mMiss:N0} 封 / {swM.Elapsed.TotalSeconds:0.00} 秒"
+            PgrsBar2.Text = $"({selectedYear} 年月份分佈讀取完成 - 按 ESC 或雙擊標題橫列可返回視圖) "
         End If
 
         Cursor = Cursors.Default

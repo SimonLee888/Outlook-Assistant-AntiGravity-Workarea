@@ -29,6 +29,10 @@ Partial Class Form1
         '       導致部分項目或欄位未被正確重繪而產生殘影。
         ' 解法：在 SIZE_MAXIMIZED / SIZE_RESTORED 完成後，對所有 ListView 強制 Invalidate。
         MyBase.WndProc(m)
+        ' 2026/06/19 by Simon/Claude: 追蹤是否在拖曳 size/move modal loop。拖曳邊緣會 ENTER/EXIT；
+        ' 而 double-click 邊緣垂直頂天 / Shift+Win+↑↓ / 最大化還原不進此 loop，旗標維持 False。
+        If m.Msg = WM_ENTERSIZEMOVE Then _inSizeMove = True
+        If m.Msg = WM_EXITSIZEMOVE Then _inSizeMove = False
         If m.Msg = WM_SIZE Then
             Dim sizeType As Integer = m.WParam.ToInt32()
             If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then
@@ -57,7 +61,12 @@ Partial Class Form1
         ' (CallerMemberName 回傳純方法名不含前綴，此行對它為 no-op；僅 GetCallerName 路徑會 strip)
         If realCaller.StartsWith("Form1.") Then realCaller = realCaller.Substring(6)
 
-        DebugForm.AddMessage3(msg, detail, realCaller)
+        ' by Gemini 3.5 Flash, 2026/06/19: 優先使用 ActiveInstance 以避免背景執行緒對 VB 預設實例的 Thread-Local 存取問題
+        If DebugForm.ActiveInstance IsNot Nothing Then
+            DebugForm.ActiveInstance.AddMessage3(msg, detail, realCaller)
+        Else
+            DebugForm.AddMessage3(msg, detail, realCaller)   ' fallback: ActiveInstance 未設(Load 前/已關閉), 退回原行為
+        End If
     End Sub
 
     Private _isDebugMode As Boolean                     ' 是否為 Debug 模式，根據 VS 的編譯組態自動設定，是否顯示 DebugForm 以及是否啟用內部調試訊息
@@ -91,6 +100,7 @@ Partial Class Form1
     'Private _lastHoveredTreeNode As TreeNode = Nothing ' 2026/5/14 by simon/Gemini: 將mouse hover作成內建功能
     Private _lastHoveredLvItem As ListViewItem = Nothing
 
+    Private _inSizeMove As Boolean = False              ' 2026/06/19 by Simon/Claude: 是否處於拖曳 size/move modal loop；供 Form1_Resize 區分「拖曳縮放」與「瞬間頂天/最大化」
     Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
     Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
     Private _lvResizePending As ListView = Nothing
@@ -132,13 +142,13 @@ Partial Class Form1
 #If DEBUG Then
         _isDebugMode = True ' by Gemini, 2026/04/01: 自動依據 VS 的編譯組態判斷是否為 Debug 模式
 #Else
-        _isDebugMode = False 
+        _isDebugMode = False
 #End If
         _dbg("開始") ' debugForm 開始計時
         Dim stopwatch As Stopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
 
         InitLookAndFeel()       ' 設計程式外觀
-        InitProgressBarEvents() ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
+        InitPgrsBarEvents()      ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
 
         ' 2026/04/18 by Claude: Form 自身背景繪製的雙緩衝
         ' WS_EX_COMPOSITED (CreateParams, ■00) 管子控制項合成層；DoubleBuffered 管 Form 自身的 WM_PAINT。
@@ -149,8 +159,8 @@ Partial Class Form1
         Me.Show()
 
         stopwatch.Stop() : Cursor = Cursors.Default ' 啟動完成, 停止計時, 顯示總共花費的時間
-        ProgressBar1.Text = "啟動花費 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
-        ProgressBar2.Text = ""
+        PgrsBar1.Text = "啟動花費 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+        PgrsBar2.Text = ""
         _dbg("結束")
 
     End Sub
@@ -163,24 +173,34 @@ Partial Class Form1
             If activeLv IsNot Nothing Then HandleLvResize(activeLv, EventArgs.Empty)
             lastState = Me.WindowState
         End If
-        SyncDebugFormPosition()
+
+        ' 2026/06/19 by Simon/Claude Opus 4.8: 改以「是否在拖曳 size/move modal loop」(_inSizeMove) 判定同步策略 —
+        '   拖曳中只搬位置(平滑)，完整貼齊由 ResizeEnd 收尾；
+        '   非拖曳的尺寸變化(邊緣 double-click 垂直頂天 / Shift+Win+↑↓ / 最大化還原)瞬間完成、不進 loop 也無 ResizeEnd，
+        '   故 _inSizeMove=False 時在此立即完整貼齊。
+        If _inSizeMove Then SyncDebugFormMoveOnly() Else SyncDebugFormResize()
+
     End Sub
     Private Sub Form1_ResizeEnd(sender As Object, e As EventArgs) Handles Me.ResizeEnd
-        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
         ' 原本的 ListView1 寬度調整邏輯已移至 HandleLvResize 中，由 ListView 自行處理 Resize 事件
         ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
+
+        If Me.Left < 0 Then Me.Left = 0 ' 2026/6/23 by simon: 防止 Form1 被拖到螢幕左邊界外
+
+        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
+        SyncDebugFormResize()          ' 2026/06/19 by Simon/Claude: 拖曳(移動/縮放)結束後，一次完整貼齊右緣(含寬度/高度)
         _dbg("結束", sender.Width & "x" & sender.Height)
     End Sub
     Private Sub Form1_KeyDown(sender As Object, e As KeyEventArgs) Handles MyBase.KeyDown
         ' ── ESC 全域中斷 ──────────────────────────────────────────────
         ' KeyPreview=True 讓 Form 優先攔截 KeyDown，子控制項不會先吃掉 ESC
         If e.KeyCode = Keys.Escape Then
-            ' 只有正在運算中才觸發中斷 (透過 WaitCursor 判定) 
-            If Cursor = Cursors.WaitCursor OrElse ProgressBar1.Text.StartsWith("正在") Then
+            ' 只有正在運算中才觸發中斷 (透過 WaitCursor 判定)
+            If Cursor = Cursors.WaitCursor OrElse PgrsBar1.Text.StartsWith("正在") Then
                 '_cancelRequested = True    ' 2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標
                 ' ✅ 發送標準取消信號
                 If _cts IsNot Nothing AndAlso Not _cts.IsCancellationRequested Then _cts.Cancel()
-                Cursor = Cursors.Default : ProgressBar1.Text = "由使用者中斷。"
+                Cursor = Cursors.Default : PgrsBar1.Text = "由使用者中斷。"
                 e.Handled = True
                 e.SuppressKeyPress = True ' ✅ 防止事件繼續傳遞觸發 Lv2_KeyPress 等回上一頁邏輯
             End If
@@ -205,7 +225,7 @@ Partial Class Form1
 
         ' by Gemini, 2026/04/01: 利用背景躲藏時間，預先載入其他 Tab 的 UI 與目錄樹，實現「切換瞬間無感」的流暢體驗
         ' 讓第一頁先穩穩地顯示出來，不要與使用者剛啟動後的第一波對 TreeView1 的操作搶資源
-        InitOutlookNamespace()
+        InitMapiNamespace()
         'InitRdoSession()
         InitDatabase()          ' by Gemini, 2026/04/06: 初始化 SQLite 快取資料庫
 
@@ -216,8 +236,8 @@ Partial Class Form1
         End If
 
         ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
-        'AddHandler Me.Resize, Sub() SyncDebugFormPosition()    ' 改善最大化時的lv column resize 效能, 移回到自己的 Resize 事件裡處理, 2026/5/9 by simon
-        AddHandler Me.Move, Sub() SyncDebugFormPosition()
+        'AddHandler Me.Resize, Sub() SyncDebugFormResize()    ' 改善最大化時的lv column resize 效能, 移回到自己的 Resize 事件裡處理, 2026/5/9 by simon
+        AddHandler Me.Move, Sub() SyncDebugFormMoveOnly()       ' 2026/06/19 by Simon/Claude: 拖曳移動只搬位置，完整貼齊延到 ResizeEnd
         Await Task.Yield()
 
         ' 2026/5/7 by Claude, 在HandleLvResize 加節流, 拖動過程中完全不重算欄寬，停手後才算一次
@@ -271,8 +291,10 @@ Partial Class Form1
 
         ' added by Gemini 3.1 Pro, 2026/04/12: 在所有的背景預載跟 Tab 初始化完成後，把一開始被蓋掉的啟動時間訊息重新顯示到 ProgressBar 上
         Dim firstMsgItem = _statusHistory.FirstOrDefault(Function(x) x.Source = "PB1")
-        If Not String.IsNullOrEmpty(firstMsgItem.Message) Then ProgressBar1.Text = firstMsgItem.Message
+        If Not String.IsNullOrEmpty(firstMsgItem.Message) Then PgrsBar1.Text = firstMsgItem.Message
 
+        ' added by simon 2026/6/25, to init RDO by default
+        CheckRDO.Checked = True
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
 
@@ -296,6 +318,7 @@ Partial Class Form1
             If _olApp IsNot Nothing Then Marshal.FinalReleaseComObject(_olApp)
             If _olNS IsNot Nothing Then Marshal.FinalReleaseComObject(_olNS)
             If _rdo IsNot Nothing Then Marshal.FinalReleaseComObject(_rdo)
+            ReleaseRdoSession()     ' 2026/06/23 by Simon/Claude: 對稱釋放 _rdo2 獨立 session + store 快取
             _dbg("結束")
             Return
         End If
@@ -305,7 +328,7 @@ Partial Class Form1
         _isClosing = True
         timerSaveCache.Enabled = False
 
-        ProgressBar1.Text = "正在儲存快取，準備關閉程式..."
+        PgrsBar1.Text = "正在儲存快取，準備關閉程式..."
         Await SaveCachesToDB()
         ClearMemoryCachesCore() ' by Gemini, 2026/04/10: 關閉前顯式呼叫記憶體清理，確保資源釋放
         Me.Close()                  ' 觸發第二次進入此函式，執行上方釋放資源的區塊
@@ -321,13 +344,12 @@ Partial Class Form1
         '   InitTreeview()  ← TreeView / SimTree 字型、顏色、雙緩衝
         '   InitListview()  ← ListView 字型、基本樣式、雙緩衝、欄位定義
 
-        ' 設定程式標題
+        ' 設定程式標題 (如何設置版本號自動遞增 'myApp.MinorRevision += 1?? --> 在專案目錄維護一個ver.log 檔案裡面寫版本號, 每次編譯前就自動讀取, 加一再寫回)
         Dim strApp As String = My.Application.Info.DirectoryPath & "\" & My.Application.Info.ProductName & ".EXE"
         If My.Computer.FileSystem.FileExists(strApp) Then
             Dim infoReader As System.IO.FileInfo = My.Computer.FileSystem.GetFileInfo(strApp)
             Dim modeStr As String = If(_isDebugMode, "(Debug)", "(Release)")
             Me.Text = $"Outlook Assistant - by Simon Lee Studio (build {infoReader.LastWriteTime:yyyy/MM/dd HH:mm:ss}) {modeStr}"
-            ' todo: 如何設置版本號自動遞增 'myApp.MinorRevision += 1
         End If
 
         ' ── 視窗位置與背景色 ──
@@ -406,7 +428,7 @@ Partial Class Form1
             AddHandler lv.DrawItem, AddressOf HandleLv3Lv4Lv5_DrawItem          ' 統一項目背景繪製, 2026/05/05 by Gemini 3 Flash
             AddHandler lv.DrawSubItem, AddressOf HandleLv3Lv4Lv5_DrawSubItem    ' 統一 SubItem 繪製 (處理 Hover 變色與對齊), 2026/4/26 by Gemini
 
-            AddHandler lv.SelectedIndexChanged, AddressOf ShowLv3Lv4Lv5PathToProgressBar
+            AddHandler lv.SelectedIndexChanged, AddressOf ShowLv3Lv4Lv5PathToPgrsBar    ' 路徑更新邏輯統一由 ShowLv3Lv4Lv5PathToPgrsBar 接管
 
             ' AddHandler lv.KeyPress, AddressOf HandleLv3Lv4Lv5_KeyPress        ' 2026/4/22 by Gemini, 整合到KeyDown事件裡了
             AddHandler lv.KeyDown, AddressOf HandleLv3Lv4Lv5_KeyDown            ' 整合：共通快捷鍵 (ESC 回歸聚焦, Ctrl+A)
@@ -415,8 +437,8 @@ Partial Class Form1
             AddHandler lv.MouseDown, AddressOf HandleLv3Lv4Lv5_MouseDown        ' 2026/06/14 by Simon/Claude Opus 4.8: 右鍵先選取
 
             ' 2026/06/14 by Simon/Claude Opus 4.8: 建立 Lv3/4/5 共用刷新右鍵選單 (須在 InitListView(ListView3/4/5) 之前)
-            InitLv3Lv4Lv5RefreshMenu()
-            lv.ContextMenuStrip = ctxMenuRefresh
+            InitLv3Lv4Lv5ContextMenu()
+            lv.ContextMenuStrip = ctxMenuLv3Lv4Lv5
         End If
 
         AddHandler lv.GotFocus, AddressOf HandleLvGotFocus
@@ -433,7 +455,7 @@ Partial Class Form1
         AddHandler scnr.MouseLeave, Sub(s, ev) DirectCast(s, SplitContainer).Cursor = Cursors.Default
         AddHandler scnr.MouseDown, AddressOf HandleSplitterMouseDown
     End Sub
-    Private Sub InitProgressBarEvents()
+    Private Sub InitPgrsBarEvents()
         ' ── ProgressBar 歷史紀錄 (by Gemini, 2026/04/02) ──
         ''' <summary>
         ''' 集中初始化 ProgressBar1 與 ProgressBar2 的互動事件 (TextChanged, Click, Hover)
@@ -442,12 +464,12 @@ Partial Class Form1
         _dbg("開始")
 
         ' 1. 文字變更紀錄
-        AddHandler ProgressBar1.TextChanged, Sub() AppendStatusHistory(ProgressBar1.Text, "PB1")
-        AddHandler ProgressBar2.TextChanged, Sub() AppendStatusHistory(ProgressBar2.Text, "PB2")
+        AddHandler PgrsBar1.TextChanged, Sub() AppendStatusHistory(PgrsBar1.Text, "PB1")
+        AddHandler PgrsBar2.TextChanged, Sub() AppendStatusHistory(PgrsBar2.Text, "PB2")
 
         ' 2. 點擊彈出歷史選單
-        AddHandler ProgressBar1.Click, Sub() ShowHistoryPopup("PB1", ProgressBar1)
-        AddHandler ProgressBar2.Click, Sub() ShowHistoryPopup("PB2", ProgressBar2)
+        AddHandler PgrsBar1.Click, Sub() ShowHistoryPopup("PB1", PgrsBar1)
+        AddHandler PgrsBar2.Click, Sub() ShowHistoryPopup("PB2", PgrsBar2)
 
         ' 3. 滑鼠進入/離開視覺效果 (使用共用處理邏輯)
         Dim hoverIn = Sub(s, ev)
@@ -460,10 +482,10 @@ Partial Class Form1
                        End Sub
 
         ' 註：ProgressBar1/2 實際上是 ToolStripStatusLabel
-        AddHandler ProgressBar1.MouseEnter, hoverIn
-        AddHandler ProgressBar2.MouseEnter, hoverIn
-        AddHandler ProgressBar1.MouseLeave, hoverOut
-        AddHandler ProgressBar2.MouseLeave, hoverOut
+        AddHandler PgrsBar1.MouseEnter, hoverIn
+        AddHandler PgrsBar2.MouseEnter, hoverIn
+        AddHandler PgrsBar1.MouseLeave, hoverOut
+        AddHandler PgrsBar2.MouseLeave, hoverOut
         _dbg("結束")
 
     End Sub
@@ -477,7 +499,7 @@ Partial Class Form1
         InitListView(ListView1)
         InitSplitter(SplitContainer1)
 
-        ' 2026/04/13 v2: 移除「所屬父資料夾」欄，回歸 5 欄 (該欄內容永遠等於群組標題行，元余) 
+        ' 2026/04/13 v2: 移除「所屬父資料夾」欄，回歸 5 欄 (該欄內容永遠等於群組標題行，元余)
         ' 欄位順序: 資料夾名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 資料夾大小
         ListView1.Columns.Clear()
         Dim headerNames As String() = {"資料夾名稱", "郵件數量", "資料夾數量", "郵件總計", "資料夾大小"}
@@ -498,7 +520,7 @@ Partial Class Form1
         If ListView3.Columns.Count > 2 Then ListView3.Columns(2).TextAlign = HorizontalAlignment.Center
 
         ' 2026/04/13 by Simon/Claude: OwnerDraw=True 讓群組標題行 / 合計列的 BackColor
-        ' 在 hover / select 狀態下不被 OS 覆蓋 (DrawSubItem handler 在 Form1_MainTabs.vb) 
+        ' 在 hover / select 狀態下不被 OS 覆蓋 (DrawSubItem handler 在 Form1_MainTabs.vb)
         ListView1.OwnerDraw = True
 
         ctxMenuLv1 = New ContextMenuStrip()
@@ -679,7 +701,7 @@ Partial Class Form1
         AddHandler Lv4Topic.MouseLeave, AddressOf HandleLvMouseHover
         SplitContainer4.Panel1.Controls.Add(Lv4Topic)
 
-        ' 2. 建立中間/右側的二階分欄 (Nested SplitContainer) 
+        ' 2. 建立中間/右側的二階分欄 (Nested SplitContainer)
         ' ✅ 2026/04/20 by Gemini 2.0 Flash: 大手術！恢復為二欄佈局，徹底移除 TreeView4 與嵌套分欄
         Dim tp4 = TabControl1.TabPages(3)
         tp4.Controls.Clear()
@@ -763,20 +785,20 @@ Partial Class Form1
                                            .Height = 110, ' 2026/05/05 by Gemini 3 Flash: 增加高度以容納 CheckSubFolder5
                                            .BackColor = ThemeColors.Gray95}
         ' 設定 RadioButtons 樣式與位置
-        rbExactMatch.Text = "完全相同 (主旨+大小+時間+寄件者)"
+        rbExactMatch.Text = "精確模式比對 (主旨+大小+時間+寄件者篩選)"
         rbExactMatch.Location = New Point(20, 15)
         rbExactMatch.Checked = True
         rbExactMatch.AutoSize = True
 
-        rbFuzzyMatch.Text = "相似重複 (Jaccard 字元集相似度)"
+        rbFuzzyMatch.Text = "內文模糊比對 (SimHash + Jaccard 找相似重複)"
         rbFuzzyMatch.Location = New Point(20, 45)
         rbFuzzyMatch.AutoSize = True
 
-        ' 設定 Label2 (搜尋模式顯示)
-        Label2.Text = "搜尋模式:"
-        Label2.Location = New Point(20, 0) ' 根據需求排好位置
-        Label2.AutoSize = True
-        Label2.Visible = True
+        '' 設定 Label2 (搜尋模式顯示)
+        'Label2.Text = "搜尋模式:"
+        'Label2.Location = New Point(20, 0) ' 根據需求排好位置
+        'Label2.AutoSize = True
+        'Label2.Visible = True
 
         ' 設定 Button5 (開始掃描)
         Button5.Text = "開始掃描"
@@ -812,7 +834,7 @@ Partial Class Form1
         AddHandler rbFuzzyMatch.CheckedChanged, Sub() TrackBar1.Visible = rbFuzzyMatch.Checked
 
         ' 3. 組裝右側面板
-        layoutPanel5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, TrackBar1, Button5, Label2, lblFuzzyTier})
+        layoutPanel5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, TrackBar1, Button5, lblFuzzyTier})
         CheckSubFolder5.BringToFront() ' ✅ by Gemini 3 Flash, 2026/05/05: 顯式移至最前，防止被遮擋
 
         ' 4. 將控制項掛載到 SplitContainer5 的正確 Panel 中
@@ -948,7 +970,7 @@ Partial Class Form1
         ''' 彈射座椅 --> 開門下車 --> 開門帶行李走
         '''     Await Task.Yield() : cToken.ThrowIfCancellationRequested() (這個實測幾乎無效!!)
         '''     Await Task.Delay(1, cToken:=cToken) ' 這裡一定要保留至少 .delay(1) 才能讓 ESC 中斷生效 (simon, 2026/04/05)
-        '''     If cToken.IsCancellationRequested Then Return New List(Of FolderBfsEntry) 
+        '''     If cToken.IsCancellationRequested Then Return New List(Of FolderBfsEntry)
         ''' </summary>
         If _cts IsNot Nothing Then
             Try : _cts.Cancel() : _cts.Dispose() : Catch : End Try
@@ -963,7 +985,7 @@ Partial Class Form1
         ' '' <summary>
         ''' 統一的節流讓出點，適用於所有需要在長時間迴圈中偶爾讓出 UI 執行權的情境
         ' '' </summary>
-        ''' 
+        '''
         ' ====================================================================================
         ' 2026/04/15 by Claude: 統一節流讓出點，取代各處散落的 swThrottle + Task.Delay(1) 組合
         ' 2026/04/19 by Gemini 3.0 flash: 加入 TimeBeginPeriod(1) 局部提速，縮短 Delay 偏差
@@ -1038,7 +1060,7 @@ Partial Class Form1
         _dbg("開始")
 
         Try ' by Gemini, 2026/04/01: 根據選定的分頁動態載入 UI 與資料 (Lazy Load UI)
-            ProgressBar1.Text = "" : ProgressBar2.Text = ""
+            PgrsBar1.Text = "" : PgrsBar2.Text = ""
             Dim selectedTab As TabPage = CType(sender, TabControl).SelectedTab
             Dim tabIndex As Integer = TabControl1.SelectedIndex + 1 ' 產生 1, 2, 3, 4, 5 (Tab1~5)
 
@@ -1133,7 +1155,7 @@ Partial Class Form1
         Next
 
         ' C. 重新載入 Tab1 的樹 (其餘 Tab 採 Lazy Load，切換時才重載)
-        ' todo: 若這裡強制重載會不會又有副作用?
+        ' todo: 若這裡強制重載全部Lv會不會又有副作用?
         LoadStoreToTreeView(_pstStoreList, SimTree1)
 
         ' D. 還原所有展開路徑 + 選取，並觸發統計 (RestoreTreeState 對已消失資料夾天然容錯)
@@ -1143,16 +1165,16 @@ Partial Class Form1
         SimTree1.RestoreTreeState(st1State, selectAndFire:=True)
         If SimTree1.SelectedNode Is Nothing Then GotoDefaultInbox(SimTree1)
 
-        ProgressBar2.Text = "全域資料夾過濾已變更，各頁面焦點已嘗試恢復。"
+        PgrsBar2.Text = "全域資料夾過濾已變更，各頁面焦點已嘗試恢復。"
 
     End Sub
     Private Sub CheckRDO_CheckedChanged(sender As Object, e As EventArgs) Handles CheckRDO.CheckedChanged
         ' 用一個checkbox 動態決定是否載入Redemption
         If CheckRDO.Checked Then
             ' 已知限制: 卸載後就無法再重新載入第二次, 不會成功
-            If _rdo Is Nothing Then Dim unused = InitRedemptionSessionWithoutDeclaration()
+            If _rdo Is Nothing Then Dim unused = InitRdoSessionWithoutEULA()
         Else
-            TryMarshalRelease(_rdo)
+            ReleaseRdoSession()   ' 2026/06/23 by Simon/Claude Opus 4.8: 取消 RDO 時連 _rdo2 主讀取來源一起拆,避免 dispatcher 仍走 _rdo2
         End If
 
     End Sub
@@ -1678,7 +1700,7 @@ Partial Class Form1
         ''' 流程：清空節點 → 重新加載根節點 → 釋放 UI 執行緒。
         ''' </summary>
         _dbg("開始", "準備刷新所有 TreeView...")
-        'ProgressBar1.Text = "正在刷新 UI 樹狀結構..."
+        'PgrsBar1.Text = "正在刷新 UI 樹狀結構..."
 
         ' 讓出 UI 執行緒，確保進度文字能顯示
         Await Task.Yield()
@@ -1708,7 +1730,7 @@ Partial Class Form1
         Next
 
         _dbg("結束", $"已刷新 {processedCount} 個 TreeView")
-        'ProgressBar1.Text = "UI 刷新完成 ✔"
+        'PgrsBar1.Text = "UI 刷新完成 ✔"
     End Function
     Private Async Function ForceTvRefresh(tv As SimTree) As Task
         ' ── F5 強制刷新整棵 SimTree ──────────────────────────────────────────────
@@ -1735,7 +1757,7 @@ Partial Class Form1
         _dbg("開始", tv.Name)
         If _pstStoreList Is Nothing OrElse _pstStoreList.Count = 0 Then Return
 
-        ProgressBar1.Text = $"F5: 重整 {tv.Name}..." : ProgressBar2.Text = ""
+        PgrsBar1.Text = $"F5: 重整 {tv.Name}..." : PgrsBar2.Text = ""
         _isUserBusy = True : Cursor = Cursors.WaitCursor
 
         Dim currentTvState = tv.SaveTreeStateByPath()   ' ① 快照狀態收集（展開路徑 + 選取路徑，Nodes.Clear 後仍有效）
@@ -1750,12 +1772,12 @@ Partial Class Form1
             tv.RestoreTreeState(currentTvState)         ' ④ 重展開 + 還原選取 + 觸發 AfterSelect
             If tv.SelectedNodes.Count = 0 Then GotoDefaultInbox(tv) ' ⑤ Fallback: 找不到舊選取時退回預設 Inbox
 
-            ProgressBar1.Text = $"F5: {tv.Name} 重整完成" : ProgressBar2.Text = ""
+            PgrsBar1.Text = $"F5: {tv.Name} 重整完成" : PgrsBar2.Text = ""
 
             'Await Task.Run(Sub() SaveCachesToDB())      ' 掃描完成後，再安全地存入資料庫
 
         Catch ex As System.Exception
-            _dbg("錯誤", ex.Message) : ProgressBar1.Text = $"F5 {tv.Name} 失敗: " & ex.Message
+            _dbg("錯誤", ex.Message) : PgrsBar1.Text = $"F5 {tv.Name} 失敗: " & ex.Message
         Finally
             Cursor = Cursors.Default : _isUserBusy = False : _dbg("結束", tv.Name)
             _isForceRefreshing = False                  ' 關閉強制更新旗標, 2026/6/1 by Simon/Gemini 3.1 Pro
@@ -1892,7 +1914,7 @@ Partial Class Form1
                     newWidths(3) = CInt(w * 0.18)    ' 寄件者
                     newWidths(5) = CInt(w * 0.01)    ' EntryID 極小保留
 
-                    ' by Gemini 3 Flash, 2026/05/06: 實作連動邏輯 —— 
+                    ' by Gemini 3 Flash, 2026/05/06: 實作連動邏輯 ——
                     ' 當使用者勾選「附件個數」或左側側邊欄收攏時，自動展開此欄位（寬度 60px 即可，顯示數字用）
                     Dim isLeftCollapsed As Boolean = (SplitContainer3.SplitterDistance < 50)
                     newWidths(4) = If(CheckAttCount.Checked OrElse isLeftCollapsed, 60, 0)
@@ -1919,7 +1941,7 @@ Partial Class Form1
                     newWidths(1) = CInt(w * 0.12)    ' 郵件大小
                     newWidths(2) = CInt(w * 0.17)    ' 收到日期
                     newWidths(3) = CInt(w * 0.15)    ' 寄件者
-                    newWidths(4) = CInt(w * 0.06)    ' 群組
+                    newWidths(4) = CInt(w * 0.065)   ' 群組
                     newWidths(5) = CInt(w * 0.08)    ' 相似
                     newWidths(6) = CInt(w * 0.01)    ' EntryID 極小保留
                     newWidths(0) = w - (newWidths(1) + newWidths(2) + newWidths(3) + newWidths(4) + newWidths(5) + newWidths(6)) - 5
@@ -1998,7 +2020,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' 抽離共用的 ListView 複製到剪貼簿邏輯
         ' 格式: Tab 分隔欄位，換行分隔列，直接貼入 Excel 即可對齊欄位。
-        ' 
+        '
         ' [修改歷程]
         ' - 2026/04/27 by Claude Sonnet 4.6: 建立 Ctrl-C 複製選取列初始功能 (Sub為VB保留字，變數改用si)
         ' - 2026/04/27 by Gemini 3.1 Pro: 新增先加入標題列 (Header) 功能
@@ -2045,7 +2067,7 @@ Partial Class Form1
 
         Try
             Clipboard.SetText(sb.ToString())
-            ProgressBar2.Text = $"已複製標題與 {copiedCount:N0} 列到剪貼簿。"   ' 將顯示數量改為實際複製的總列數計數 (by Gemini 3 Flash, 2026/05/19)
+            PgrsBar2.Text = $"已複製標題與 {copiedCount:N0} 列到剪貼簿。"   ' 將顯示數量改為實際複製的總列數計數 (by Gemini 3 Flash, 2026/05/19)
 
             ' 如果有傳入 KeyEventArgs，直接在這裡將按鍵事件標記為已處理
             If e IsNot Nothing Then
@@ -2087,8 +2109,8 @@ Partial Class Form1
     End Function
     Private Function GetHeaderRowBackColor(item As ListViewItem) As Color
         ' 2026/04/14 by Simon/Claude: 根據 Tag=Nothing 列的文字前綴還原正確的 BackColor
-        '   ▸ 開頭 = 群組標題行 → SystemColors.GradientInactiveCaption (淡藍) 
-        '   ▶ 開頭 = 合計列     → Color.FromArgb(220, 235, 252) (稍深藍) 
+        '   ▸ 開頭 = 群組標題行 → SystemColors.GradientInactiveCaption (淡藍)
+        '   ▶ 開頭 = 合計列     → Color.FromArgb(220, 235, 252) (稍深藍)
         '   其他    = fallback   → Color.Empty
         If item.Text.StartsWith("▸") Then Return SystemColors.GradientInactiveCaption
         If item.Text.StartsWith("▶") Then Return Color.FromArgb(220, 235, 252)
@@ -2103,17 +2125,24 @@ Partial Class Form1
     End Function
 #End Region
 #Region "  └ 其他輔助函數"
-    Private Sub SyncDebugFormPosition()
+    Private Sub SyncDebugFormMoveOnly()
+        ''' <summary>
+        ''' 拖曳期間的輕量跟隨 — 只搬位置，不改尺寸 (SWP_NOSIZE)。
+        ''' 原 SyncDebugFormResize 每 tick 都用 screenRight-newLeft 重算寬度 = 對 debugForm 做完整 resize
+        ''' (WM_SIZE→重佈局→重繪)，同執行緒同步執行卡住 Form1 拖動迴圈，造成抖動/殘影。
+        ''' 此處只 blit 搬位置 (近乎零成本)，完整貼齊右緣(含寬高)延到 Form1_ResizeEnd 一次處理。
+        ''' 2026/06/19 by Simon/Claude Opus 4.8
+        ''' </summary>
+        If DebugForm IsNot Nothing AndAlso
+            (DebugForm.Visible OrElse CheckDebug.Checked) Then SetWindowPos(DebugForm.Handle, IntPtr.Zero,
+                                                                            Me.Left + Me.Width - 12, Me.Top, 0, 0, SWP_NOZORDER Or SWP_NOACTIVATE Or SWP_NOSIZE)
+    End Sub
+    Private Sub SyncDebugFormResize()
         ''' <summary>
         ''' 同步 Debug 視窗與主視窗的位置與大小，並將其右側貼齊螢幕邊緣
         ''' 使用 SetWindowPos 避免多個屬性分別設定導致的閃爍
         ''' 2026/3/26 by Gemini
         ''' </summary>
-
-        Static isSyncing As Boolean = False
-        If isSyncing AndAlso DebugForm.Visible = False Then
-            isSyncing = True : Return
-        End If
 
         If DebugForm IsNot Nothing AndAlso (DebugForm.Visible OrElse CheckDebug.Checked) Then
             Dim newLeft As Integer = Me.Left + Me.Width - 12
@@ -2127,7 +2156,8 @@ Partial Class Form1
 
             ' 2026/3/28 by Gemini: 簡化重繪策略 — 不干預 Windows 的原生重繪機制，
             ' 讓 SetWindowPos 自然觸發 WM_PAINT，確保佈局即時生效 (供 DebugForm_Load 的 Delay 計時用)
-            SetWindowPos(DebugForm.Handle, IntPtr.Zero, newLeft, newTop, newWidth, newHeight, SWP_NOZORDER Or SWP_NOACTIVATE)
+            SetWindowPos(DebugForm.Handle, IntPtr.Zero,
+                         newLeft, newTop, newWidth, newHeight, SWP_NOZORDER Or SWP_NOACTIVATE)
         End If
 
     End Sub

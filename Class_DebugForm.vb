@@ -1,5 +1,4 @@
-﻿Imports System.Diagnostics
-Imports System.Reflection
+﻿Imports System.Reflection
 Imports System.Text.RegularExpressions
 
 ' ==============================================================
@@ -27,16 +26,16 @@ Imports System.Text.RegularExpressions
 Public Class DebugForm
 
 #Region "■ 00 Form 雙緩衝"
-    ' 2026/04/18 by Claude: 與 Form1 相同的雙緩衝設定
-    ' DebugForm 開啟時主要卡頓來源是 Timer_Tick 高頻觸發 BeginUpdate/EndUpdate + EnsureVisible，
-    ' 這兩項設定可改善切換焦點與 Resize 時的撕裂感，但無法根治高頻更新本身的開銷。
-    Protected Overrides ReadOnly Property CreateParams As CreateParams
-        Get
-            Dim cp As CreateParams = MyBase.CreateParams
-            cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED：子控制項合成層雙緩衝
-            Return cp
-        End Get
-    End Property
+    '' 2026/04/18 by Claude: 與 Form1 相同的雙緩衝設定
+    '' DebugForm 開啟時主要卡頓來源是 Timer_Tick 高頻觸發 BeginUpdate/EndUpdate + EnsureVisible，
+    '' 這兩項設定可改善切換焦點與 Resize 時的撕裂感，但無法根治高頻更新本身的開銷。
+    'Protected Overrides ReadOnly Property CreateParams As CreateParams
+    '    Get
+    '        Dim cp As CreateParams = MyBase.CreateParams
+    '        cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED：子控制項合成層雙緩衝
+    '        Return cp
+    '    End Get
+    'End Property
     Protected Overrides Sub OnLoad(e As EventArgs)
         Me.DoubleBuffered = True    ' Form 自身 WM_PAINT 雙緩衝，與 WS_EX_COMPOSITED 互補無衝突
         MyBase.OnLoad(e)
@@ -46,42 +45,54 @@ Public Class DebugForm
 #Region "■ 01 Win32 API & 常數"
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function SendMessage(
-        hWnd As IntPtr,
-        msg As Integer,
-        wParam As IntPtr,
-        lParam As IntPtr) As IntPtr
-    End Function
+                                       hWnd As IntPtr, msg As Integer,
+                                       wParam As IntPtr, lParam As IntPtr) As IntPtr : End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function CreateRectRgn(x1 As Integer, y1 As Integer, x2 As Integer, y2 As Integer) As IntPtr : End Function
+    Private Shared Function CreateRectRgn(
+                                         x1 As Integer, y1 As Integer,
+                                         x2 As Integer, y2 As Integer) As IntPtr : End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function SelectClipRgn(hDC As IntPtr, hRgn As IntPtr) As Integer : End Function
+    Private Shared Function SelectClipRgn(
+                                         hDC As IntPtr, hRgn As IntPtr) As Integer : End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function DeleteObject(hObject As IntPtr) As Boolean : End Function
+    Private Shared Function DeleteObject(
+                                        hObject As IntPtr) As Boolean : End Function
 
-    Private Const WM_SETREDRAW As Integer = &HB  ' 2026/3/26 by Gemini
+    ' 2026/06/19 by Simon/Claude Opus 4.8: 改 OS 層 class background brush，消除撐高瞬間新區域的黑塊 (受控層 BackColor 太晚、壓不到這一幀)
+    <Runtime.InteropServices.DllImport("user32.dll", EntryPoint:="SetClassLongPtrW")>
+    Private Shared Function SetClassLongPtr(
+                                           hWnd As IntPtr, nIndex As Integer,
+                                           dwNewLong As IntPtr) As IntPtr : End Function
+    <Runtime.InteropServices.DllImport("gdi32.dll")>
+    Private Shared Function CreateSolidBrush(
+                                            crColor As Integer) As IntPtr : End Function
+
     Private Const WM_SETFONT As Integer = &H30
-    Private Const WM_SIZE As Integer = &H5       ' by Claude Opus 4.6, 2026/04/11: 攔截視窗尺寸變更
+    Private Const WM_SETREDRAW As Integer = &HB         ' 2026/3/26 by Gemini
+    Private Const WM_SIZE As Integer = &H5              ' by Claude Opus 4.6, 2026/04/11: 攔截視窗尺寸變更
     Private Const SIZE_MAXIMIZED As Integer = 2
     Private Const SIZE_RESTORED As Integer = 0
     Private Const LVM_FIRST As Integer = &H1000
     Private Const LVM_GETHEADER As Integer = LVM_FIRST + 31
     Private Const LVM_SETEXTENDEDLISTVIEWSTYLE As Integer = LVM_FIRST + 54
     Private Const LVM_GETEXTENDEDLISTVIEWSTYLE As Integer = LVM_FIRST + 55
-    Private Const LVM_SETTOOLTIPS As Integer = LVM_FIRST + 74            ' by Gemini 3 Flash, 2026/04/13: 用於切斷 ToolTip 控制項關聯
-    Private Const LVS_EX_LABELTIP As Integer = &H4000       ' by Claude Opus 4.6, 2026/04/11: 移除此樣式以修復 OwnerDraw 下的文字重疊殘影
-    Private Const LVS_EX_DOUBLEBUFFER As Integer = &H10000  ' by Claude, 2026/04/12: Native ListView 真正的雙緩衝 flag，解決 ScrollBar 消失時 OwnerDraw dirty region 只有右側條帶導致項目消失的 Bug
+    Private Const LVM_SETTOOLTIPS As Integer = LVM_FIRST + 74   ' by Gemini 3 Flash, 2026/04/13: 用於切斷 ToolTip 控制項關聯
+    Private Const LVS_EX_LABELTIP As Integer = &H4000           ' by Claude Opus 4.6, 2026/04/11: 移除此樣式以修復 OwnerDraw 下的文字重疊殘影
+    Private Const LVS_EX_DOUBLEBUFFER As Integer = &H10000      ' by Claude, 2026/04/12: Native ListView 真正的雙緩衝 flag，解決 ScrollBar 消失時 OwnerDraw dirty region 只有右側條帶導致項目消失的 Bug
+    Private Const GCLP_HBRBACKGROUND As Integer = -10
 #End Region
 
 #Region "■ 02 成員變數"
-    Private sw0, sw1, sw2, sw3, sw4, sw5, sw6 As New Stopwatch
-    Private _previousTimestamp As Date
-    Private _msgQueue As New System.Collections.Concurrent.ConcurrentQueue(Of ListViewItem)
-    Private WithEvents QueueTimer As New System.Windows.Forms.Timer() With {.Interval = 100} ' 每 100ms 清空一次message queue
+    Private _msgQueue As New Concurrent.ConcurrentQueue(Of ListViewItem)
+    Private WithEvents QueueTimer As New Timer() With {.Interval = 16}     ' 啟動時先預設每 16ms 清空一次message queue
     Private _lastRecalcWidth As Integer = 0
+    Public Shared ActiveInstance As DebugForm = Nothing ' by Gemini 3.5 Flash, 2026/06/19: 儲存作用中的 DebugForm 實例以供背景執行緒存取，解決 VB 預設實例在非 UI 執行緒的 Thread-Local 陷阱。
+    Private _previousTimestamp As Date
 
     Private _searchPattern As String = ""
     Private _searchRegex As Regex = Nothing             ' Tier 3, 2026/06/15 by Simon/Claude: 由 _searchPattern 預編譯, DrawSubItem 直接套用, 省去每格字串多載重複解析
     Private _fillBrush As New SolidBrush(Color.White)   ' Tier 3, 2026/06/15 by Simon/Claude: 背景填色重用同一支 brush (改 .Color 即可), 取代每格 New SolidBrush/Dispose
+    Private _classBgBrush As IntPtr = IntPtr.Zero       ' 2026/06/19: OS 層白底 brush，存欄位避免被回收
 
     Private _lastHighlightedPair As ListViewItem        ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
     Private _historyDebug As New List(Of String)(256)   ' by AntiGravity, 2026/04/07: 搜尋歷史紀錄
@@ -104,6 +115,8 @@ Public Class DebugForm
         If m.Msg = WM_SIZE Then
             Dim sizeType As Integer = m.WParam.ToInt32()
             If sizeType = SIZE_MAXIMIZED OrElse sizeType = SIZE_RESTORED Then lvwDebug.Invalidate()
+            ' 2026/06/19 by Simon/Claude: 加 lvwDebug.Update() 強制重繪或改 Me.Refresh() 同步重繪都無效，
+            ' 無法消除一次性撐高時底部新區域的黑塊空窗
         End If
     End Sub
     Private Sub ApplyListViewFixes()
@@ -113,8 +126,7 @@ Public Class DebugForm
         Try
             ' 1. 移除 LVS_EX_LABELTIP (防止 OwnerDraw 時出現鬼影文字標籤)
             '       💡 2026/04/11 by Claude Opus 4.6 移除 LVS_EX_LABELTIP 擴充樣式
-            '       在 OwnerDraw 模式下， ListView 內建的「文字超寬時浮出全文標籤」會跟自訂繪製衝突，
-            '       產生滑鼠移過時的文字重疊殘影。移除此樣式即可根治。
+            '       在 OwnerDraw 模式下， ListView 內建的「文字超寬時浮出全文標籤」會跟自訂繪製衝突，產生滑鼠移過時的文字重疊殘影。移除此樣式即可根治。
             '       wParam = mask(指定要修改哪些位元), lParam = 0 (關閉這些位元)
             ' by Gemini, 2026/04/13: 全部整合到 ApplyListViewFixes，確保 Handle 重建後依然生效
             SendMessage(lvwDebug.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_LABELTIP), IntPtr.Zero)
@@ -125,11 +137,10 @@ Public Class DebugForm
             ' 3. 啟用 LVS_EX_DOUBLEBUFFER (強化滾動與 Resize 時的渲染穩定性)
             '       💡 2026/04/12 by Claude 啟用 LVS_EX_DOUBLEBUFFER
             '       這是 Native Win32 ListView 的真正雙緩衝， 與.NET DoubleBuffered 屬性完全不同
-            '       啟用後 ListView 每次 WM_PAINT 都對整個 client area 做 offscreen buffer blit，
-            '       不再做 partial dirty-region paint， 從根本解決 ScrollBar 消失時 DrawSubItem 不被呼叫的問題
+            '       啟用後 ListView 每次 WM_PAINT 都對整個 client area 做 offscreen buffer blit，不再做 partial dirty-region paint， 從根本解決 ScrollBar 消失時 DrawSubItem 不被呼叫的問題
             ' by Gemini, 2026/04/13: 全部整合到 ApplyListViewFixes，確保 Handle 重建後依然生效
-            SendMessage(lvwDebug.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE,
-                        New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+            SendMessage(lvwDebug.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+
         Catch ex As Exception
             ' 僅為 UI 修正，不應中斷程式
         End Try
@@ -142,17 +153,21 @@ Public Class DebugForm
         ApplyListViewFixes()
     End Sub
     Private Sub DebugForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        ' 2026/04/01 by Gemini: 恢復 ListView 內建雙緩衝設置
-        ' 先前為了排查 2000px 高度 Bug 暫時移除，現已確認該 Bug 兇手為 ClientSizeChanged 內的 BeginUpdate。
-        ' 恢復此設定可徹底避免 AddMessage3 (Timer 批次新增) 時產生的背景擦除閃爍。
-        Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
-        If pi IsNot Nothing Then pi.SetValue(lvwDebug, True, Nothing)
 
-        _previousTimestamp = Now
-        QueueTimer.Start()          ' .Interval = 100
+        ActiveInstance = Me        ' by Gemini 3.5 Flash, 2026/06/19: 在 Load 時設定 ActiveInstance 為目前實例
 
-        ' 💡 2026/04/13 by Gemini 3 Flash: 註冊 HandleCreated，確保 ListView 重建時修復依然生效
-        AddHandler lvwDebug.HandleCreated, AddressOf OnLvwHandleCreated
+        '' 2026/04/01 by Gemini: 恢復 ListView 內建雙緩衝設置
+        ''   此設定可避免 AddMessage3 (Timer 批次新增) 時產生的背景擦除閃爍。
+        '' 2026/6/19 關閉此設定，因為已經在 ApplyListViewFixes() 中啟用 LVS_EX_DOUBLEBUFFER, 二者重疊是多餘的。
+        'Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
+        'If pi IsNot Nothing Then pi.SetValue(lvwDebug, True, Nothing)
+
+        _previousTimestamp = Now : QueueTimer.Start()   ' 啟動時先預設每 16ms 清空一次message queue
+        AddHandler lvwDebug.HandleCreated, AddressOf OnLvwHandleCreated ' 💡 2026/04/13 by Gemini 3 Flash: 註冊 HandleCreated，確保 ListView 重建時修復依然生效
+
+        ' 2026/06/19 by Simon/Claude: 把 debugForm 的 class 背景 brush 換成白色，讓 OS 在 SetWindowPos 撐高瞬間用白色填新區域，取代預設 NULL→黑。
+        _classBgBrush = CreateSolidBrush(&HFFFFFF)
+        SetClassLongPtr(Me.Handle, GCLP_HBRBACKGROUND, _classBgBrush)
 
     End Sub
     Private Sub DebugForm_Shown(sender As Object, e As EventArgs) Handles Me.Shown
@@ -160,7 +175,6 @@ Public Class DebugForm
         ' by Gemini, 2026/04/01: 將重型 UI 佈局校算移到 Shown 事件
         ' 目的: 讓 Form1 觸發開啟除錯視窗後能立即返回，不等待 UI 佈局渲染，優化啟動延遲感
         ' ==============================================================
-        ' todo: 重構簡化formload? InitSearchPanel() : InitListView() : InitLayout()
 
         ' 1. 將搜尋列移至頂部 (比照 Tab5)，並設定固定高度
         ' 2026/3/27 by Gemini: ── 佈局一致化優化 (穩定 Dock 佈局) ──
@@ -205,10 +219,8 @@ Public Class DebugForm
             .Add("Timestamp", 115, HorizontalAlignment.Center)
             .Add("Step (ms)", 85, HorizontalAlignment.Right)        ' by Gemini 1.5 Pro, 2026/04/11: 原 Time Span，顯示物理步進間隔
             .Add("Elapsed (ms)", 85, HorizontalAlignment.Right)     ' by Gemini 1.5 Pro, 2026/04/11: 新增，顯示函數從開始到結束的總耗時
-            '.Insert(0, New ColumnHeader() With {.Text = "Debug Message", .Width = -2,    ' 2026/3/28 by Gemini: Width=-2 讓第一欄自動填滿剩餘空間，避免寫死寬度在 Load 時擠掉右側欄位
-            '                                    .TextAlign = HorizontalAlignment.Left})
+            '.Insert(0, New ColumnHeader() With {.Text = "Debug Message", .Width = -2, .TextAlign = HorizontalAlignment.Left})   ' 2026/3/28 by Gemini: Width=-2 讓第一欄自動填滿剩餘空間，避免寫死寬度在 Load 時擠掉右側欄位
         End With
-
         RecalcColumnWidths(Nothing, Nothing)    ' 2026/3/30 by Gemini: 在 Load 時手動觸發強制調整一次，確保初始顯示正確 (特別是第一欄填滿剩餘空間)
 
         AddHandler lvwDebug.ItemSelectionChanged, AddressOf lvwDebug_ItemSelectionChanged
@@ -216,7 +228,7 @@ Public Class DebugForm
         AddHandler txtDebug.KeyDown, AddressOf txtDebug_KeyDown ' by AntiGravity, 2026/04/07: 支持搜尋歷史回溯
 
         ' 2026/3/28 by Gemini: 監聽 lvwDebug 本身的 ClientSizeChanged 事件，
-        ' 無論何時 ListView 可用空間改變 (Dock 佈局結算、表單 Resize、SyncDebugFormPosition)，都自動重算欄寬, 不再需要猜延遲值或一次性 Timer
+        ' 無論何時 ListView 可用空間改變 (Dock 佈局結算、表單 Resize、SyncDebugFormResize)，都自動重算欄寬, 不再需要猜延遲值或一次性 Timer
         ' by Gemini, 2026/03/29: 右鍵管理選單 (只建立一次，不重複 AddHandler)
         Dim ctx As New ContextMenuStrip()
         ctx.Items.Add("計算選取耗時", Nothing, AddressOf CalculateSelectedTimeSpan)
@@ -239,17 +251,21 @@ Public Class DebugForm
         ' 💡 2026/04/13 by Gemini 3 Flash: 執行 ListView 樣式修復 (原放在 Shown 的邏輯現已整合進 ApplyListViewFixes)
         ApplyListViewFixes()
 
+        QueueTimer.Interval = 100   ' 2026/6/19 by simon: 啟動完成後把更新間隔減慢為每 100ms 清空一次message queue
+
     End Sub
     Private Sub DebugForm_FormClosed(sender As Object, e As FormClosedEventArgs) Handles Me.FormClosed
+
         Form1.CheckDebug.Checked = False
+        ActiveInstance = Nothing        ' by Gemini 3.5 Flash, 2026/06/19: 表單關閉後清除 ActiveInstance
+
     End Sub
     Private Sub RecalcColumnWidths(sender As Object, e As EventArgs)
-        ' 2026/04/01 by Gemini: 修正 ListView 項目在卷軸消失時跟著消失的致命 Bug
 
+        ' 2026/04/01 by Gemini: 修正 ListView 項目在卷軸消失時跟著消失的致命 Bug
         ' 1. 加入門檻判定 (Threshold): 寬度變動極小時不觸發重設，避免拖動尺寸時的頻繁重發 (Throttle)
         If lvwDebug.Columns.Count < 3 Then Return
         If Math.Abs(lvwDebug.ClientSize.Width - _lastRecalcWidth) < 2 Then Return
-
         _lastRecalcWidth = lvwDebug.ClientSize.Width
 
         ' 讓第一欄 (Debug Message) 填滿剩餘空間，其餘欄位維持既有寬度
@@ -263,44 +279,51 @@ Public Class DebugForm
         Dim newWidth As Integer = lvwDebug.ClientSize.Width - reservedWidth - 4
 
         '' by Claude Opus 4.6, 2026/04/11: 修復卷軸消失時所有 ListView 項目消失的致命 Bug
-        '' ── 為什麼 Invalidate() 無效 ──
-        '' 在 ClientSizeChanged resize 訊息鏈進行中，Windows 會抑制 WM_PAINT 派發。
-        '' Invalidate() 只是排入 WM_PAINT 到佇列，等 resize 結束時 item bounds 快取早已壞掉。
-        '' ── 為什麼 BeginInvoke + Refresh() 有效 ──
-        '' BeginInvoke 將 delegate 排入訊息泵，保證在 resize 訊息鏈**完全結束後**才執行。
-        '' Refresh() = Invalidate() + Update()，Update() 同步處理 WM_PAINT，不會被延遲。
+        '' 💡為什麼 Invalidate() 無效: 在 ClientSizeChanged resize 訊息鏈進行中，Windows 會抑制 WM_PAINT 派發。Invalidate() 只是排入 WM_PAINT 到佇列，等 resize 結束時 item bounds 快取早已壞掉。
+        '' 💡為什麼 BeginInvoke + Refresh() 有效: BeginInvoke 將 delegate 排入訊息泵，保證在 resize 訊息鏈**完全結束後**才執行。Refresh() = Invalidate() + Update()，Update() 同步處理 WM_PAINT，不會被延遲。
         'If newWidth > 100 AndAlso lvwDebug.Columns(0).Width <> newWidth Then
         '    lvwDebug.Columns(0).Width = newWidth
         '    BeginInvoke(Sub() If lvwDebug IsNot Nothing AndAlso Not lvwDebug.IsDisposed AndAlso lvwDebug.Items.Count > 0 Then lvwDebug.Refresh())
         'End If
 
         '' 2026/04/12 by Claude: 修復 ScrollBar 消失時 ListView 項目消失的 Bug
-        '' 根本原因：Columns(0).Width 賦值會觸發 ListView 內部同步 repaint，
-        '' 此時 DoubleBuffer backbuffer 被清空，但 GDI 系統 clip 只有右側17px條帶，
-        '' 導致 TextRenderer.DrawText (GDI) 被 clip 住畫不出文字。
-        '' 解法：用 WM_SETREDRAW 壓住 column 改變觸發的內部 paint，
-        '' 改成寬度設定完後呼叫一次完整 Refresh()，此時 dirty region 是全區域。
+        '' 根本原因：Columns(0).Width 賦值會觸發 ListView 內部同步 repaint，此時 DoubleBuffer backbuffer 被清空，但 GDI 系統 clip 只有右側17px條帶，導致 TextRenderer.DrawText (GDI) 被 clip 住畫不出文字。
+        '' 解法：用 WM_SETREDRAW 壓住 column 改變觸發的內部 paint，改成寬度設定完後呼叫一次完整 Refresh()，此時 dirty region 是全區域。
         'If newWidth > 100 AndAlso lvwDebug.Columns(0).Width <> newWidth Then
         '    SendMessage(lvwDebug.Handle, WM_SETREDRAW, New IntPtr(0), IntPtr.Zero)
         '    lvwDebug.Columns(0).Width = newWidth
-
         '    SendMessage(lvwDebug.Handle, WM_SETREDRAW, New IntPtr(1), IntPtr.Zero)
         '    lvwDebug.Refresh()  ' Invalidate() + Update()，同步執行，此時 clip = 完整區域
         '    ' 移除原本的 BeginInvoke(Refresh()) — 由上面的同步 Refresh() 取代
         'End If
 
         ' 2026/04/12 by Claude: ScrollBar 消失後 EnsureVisible 殘留的 scroll offset 未歸零
-        ' 導致 item(0).Bounds.Y 為負數，所有項目偏移至底部，Refresh 在錯誤座標執行也無效
-        ' 檢查 item(0).Bounds.Y：不等於 0 代表 scroll offset 殘留，強制設 TopItem 歸零
+        '   導致 item(0).Bounds.Y 為負數，所有項目偏移至底部，Refresh 在錯誤座標執行也無效
+        '   檢查 item(0).Bounds.Y：不等於 0 代表 scroll offset 殘留，強制設 TopItem 歸零
+
+        ' ── 失敗修補史精簡 (2026/06/19 by Simon/Claude Opus 4.8 整理；原始多段嘗試碼已濃縮) ──
+        ' 「卷軸消失瞬間 listviewitem 全數消失」為長期未解 bug，已嘗試 10+ 次。
+        ' 2026/06/15 探針定論：vscroll=True 時 Refresh()/Invalidate() 觸發 200~440 次 DrawSubItem；
+        '   vscroll 一變 False，Invalidate / Refresh / RedrawItems+Update 全部 = 0 次 DrawSubItem (空白緩衝)，且卡死狀態延續到卷軸回來之後，直到 item 層級事件(hover) 或足夠的重新佈局才解除。
+        ' 已否證/作廢的修法 (全屬「視窗層級」重繪，無卷軸狀態下皆 0 draw)：
+        '   ① BeginInvoke+Refresh()  ② WM_SETREDRAW 包夾+Refresh()  ③ RedrawItems(LVM_REDRAWITEMS) 2026/06/15 實測仍 0 draw、item 仍消失
+        '   ④ 檢查 Items(0).Bounds.Y<>0 後重設 TopItem — 探針證實 bounds 無殘留，此修法在修不存在的病因，且會在 resize 時把使用者捲動位置硬拉回頂端 → 2026/06/19 移除。
+        ' 真因方向 (待驗證)：疑似多層雙緩衝 (WS_EX_COMPOSITED + native LVS_EX_DOUBLEBUFFER + managed DoubleBuffered) 在 client 寬度 ±17px(卷軸增減) 時後備緩衝失同步。
+        ' 2026/06/19 by Simon/Claude Opus 4.8: 實測否證、真因確認 -->（多層雙緩衝經四格矩陣否證 + 真因是轉換週期設欄寬）
+
+        ' 2026/06/19 by Simon/Claude Opus 4.8: 兩個月老 bug 根因確認 ——
+        ' 在「垂直卷軸顯隱轉換」的同一個 ClientSizeChanged 訊息週期內【同步】設定 Columns(0).Width，會把 native ListView 推進壞掉的繪製狀態 (DrawSubItem 歸零 → 所有 item 消失)。
+        ' 旁證：純改寬度拖曳不觸發卷軸顯隱，從來正常；只有改高度跨越「塞得下/塞不下」門檻、卷軸±17px 那刻會壞。
+        ' 修法：把欄寬賦值「延後」到訊息鏈結束之後 (BeginInvoke) 才設，此時卷軸已穩定，不再與轉換同週期。
+
         If newWidth > 100 AndAlso lvwDebug.Columns(0).Width <> newWidth Then
-            lvwDebug.Columns(0).Width = newWidth
             BeginInvoke(Sub()
-                            If lvwDebug Is Nothing OrElse lvwDebug.IsDisposed OrElse lvwDebug.Items.Count = 0 Then Return
-                            Try
-                                If lvwDebug.Items(0).Bounds.Y <> 0 Then lvwDebug.TopItem = lvwDebug.Items(0)
-                            Catch : End Try
-                            lvwDebug.RedrawItems(0, lvwDebug.Items.Count - 1, False)
-                            lvwDebug.Update()
+                            If lvwDebug Is Nothing OrElse lvwDebug.IsDisposed Then Return
+                            lvwDebug.Columns(0).Width = newWidth
+                            If lvwDebug.Items.Count > 0 Then
+                                lvwDebug.RedrawItems(0, lvwDebug.Items.Count - 1, False)
+                                lvwDebug.Update()
+                            End If
                         End Sub)
         End If
 
@@ -316,12 +339,17 @@ Public Class DebugForm
         '          strB: 可傳入函數中的碼表計時, 或是函數內某物件的計數
         '   forceCaller: 若傳入的函數名數無法顯示, 可在第3個字串強制指定
         ' ============================================================
+        ' ⚠️ 【安全性關鍵警語 - 跨執行緒風險】 by Gemini 3.5 Flash, 2026/06/19
+        ' 這份安全性 100% 建立在「AddMessage3 是 enqueue-only」（僅將訊息寫入 Queue，不直接觸發 UI 更新）。
+        ' 哪天若有人在此方法內部（或 enqueue 之後的呼叫鏈中）直接更動 ListView、Label 等 UI 控制項，
+        ' 背景路徑 (如 Task.Run) 就會立刻發生跨執行緒存取崩潰 (Cross-thread violation)。修補此方法時請務必守住這條紅線！
+        ' ============================================================
 
         ' 2026/3/22 by Grok.ai:
         ' forcedCaller: Form1.WhoCallsMe() 預先解析好的呼叫者字串 (避免 stack trace 在 DebugForm 裡走不回去)
         Dim callingMethod As String = If(forcedCaller <> "", forcedCaller, WhoCallsMe(1))
 
-        ' 計算時間差 (todo: 要不要改成與上一行的時間差? 現在是與上次 AddMessage3 的時間差)
+        ' 計算時間差
         Dim timeNow As Date = Now
         Dim timeSpan As TimeSpan = timeNow - _previousTimestamp
         _previousTimestamp = timeNow

@@ -14,7 +14,7 @@ Imports Microsoft.Office.Interop.Outlook
 ' Phase 1 (2026/04/19): OST/PST 目錄樹顯示 (SimTreeOST / SimTreePST)
 ' Phase 2 (2026/04/22): 點選資料夾 → ListView 顯示郵件清單
 '   - OST: LTP. → TC row data → OstMailRow
-'   - PST: GetBasicMailInfoL3 (OOM，Form1_Outlook.vb)
+'   - PST: GetBasicMailInfoOOM (OOM，Form1_Outlook.vb)
 ' Phase 3 (待實作): CopyFolder / MoveFolder → OOM 寫入目標 PST
 '
 ' 注意:
@@ -323,7 +323,7 @@ Partial Class Form1
 
     End Sub
     Private Sub ShowLvPstItems(mails As List(Of MailItemInfo))
-        ' 把 MailItemInfo 清單（來自 GetBasicMailInfoL3）渲染到 _newLvPST
+        ' 把 MailItemInfo 清單（來自 GetBasicMailInfoOOM）渲染到 _newLvPST
 
         ' by Gemini 3 Flash, 2026/04/23: 改用 AddRange 並對齊 Tab4 欄位順序與格式
         LvPST.BeginUpdate()

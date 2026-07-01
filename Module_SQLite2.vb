@@ -85,7 +85,7 @@ Partial Class Form1
         Public fs As Long = -1          ' folder_size
         Public fsa As Long = -1         ' folder_size_all
         Public snap As Long = -1        ' pr_count_snap (= PR_CONTENT_COUNT at save time)
-        Public path As String = ""      ' folder_path        ' by Gemini 3.0 flash, 2026/04/16: 新增路徑標識，供 GetSubtreeToList Tuple 重建使用
+        Public path As String = ""      ' folder_path        ' by Gemini 3.0 flash, 2026/04/16: 新增路徑標識，供 GetSubtree Tuple 重建使用
 
         ' by Gemini, 2026/04/10: 新增身分標識與排序標籤，供 TreeView/BFS 持久化優化使用
         Public eid As String = ""       ' entry_id  ' 2026/06/10 by Gemini/Simon: 優化SQLite儲存空間把Entry_id改成BLOB二進位儲存
@@ -650,7 +650,7 @@ Partial Class Form1
         End Try
 
     End Function
-    Private Async Function RenewCacheToDB(includeSize As Boolean) As Task
+    Private Async Function RenewCacheToDB() As Task
         ' ---------------------------------------------------------------
         ' RenewCacheToDB — 完整更新 DB 快取 (對應 Setting 頁 RenewCache 按鈕) 
         '
@@ -660,7 +660,7 @@ Partial Class Form1
         '
         ' 流程：
         '   Phase 1. BFS 掃出所有 live folders (COM，~1ms/資料夾) 
-        '   Phase 2. 每個 folder 讀 GetLiveFolderSnapL3 vs DB snapshot → 找 dirty folders
+        '   Phase 2. 每個 folder 讀 GetLiveFolderSnapOOM vs DB snapshot → 找 dirty folders
         '   Phase 3. 對每個 dirty folder 重新計算：
         '              mc/fc (快，~1ms) 
         '              year_counts (GetTable + GetArray，~10-50ms/資料夾) 
@@ -682,7 +682,7 @@ Partial Class Form1
         '   Phase1 改用 Dictionary(Of String, Outlook.Folder) liveDict，每個資料夾只讀一次 FolderPath COM 屬性，
         '   Phase2/3/4 迭代 dict 的 Key/Value，完全省去重複的 folder.FolderPath COM 呼叫（~500 資料夾省 ~250ms）
         '   Phase2/3 節流改用 SmartThrottle(sw, cToken, ThrottleFreq.Low)，取代 Mod N + Task.Delay(1)
-        '   GetYearCountsForFolderL3 / GetFolderSizeL3 補入 cToken:=cToken
+        '   GetYearCountsForFolderL3 / GetFolderSizeOOM 補入 cToken:=cToken
         ' ---------------------------------------------------------------
         ' 2026/05/17 by simon/Gemini: RenewCacheToDB 大幅重構，改為「精確打擊」模式，
         '   不再 BFS 展開每個資料夾的子樹來找對應的 DB row，而是直接從 DB 撈出全部資料夾清單，然後用 GetFolderFromID 精確抓出 COM 物件，比對 snapshot 決定是否 dirty
@@ -738,20 +738,19 @@ Partial Class Form1
                 liveFolderPaths.Add(fPath)
 
                 ' 5. 【Rule 4 & 2】比對 Snap 與更新邏輯
-                Dim liveSnap = GetLiveFolderSnapL3(folder, fPath)
+                Dim liveSnap = GetLiveFolderSnapOOM(folder, fPath)
                 If liveSnap <> row.snap Then
                     ' 狀況 A：Snap 不一致！代表 Outlook 有變動，進行 Layer 3 COM 讀取更新記憶體
                     _cacheMailCount(fPath) = GetMailCount(folder, fPath, skipCache:=True)       ' 2026/06/23 by Simon/Claude: 狀況A snap 重讀改走 proxy skipCache(RDO 派工)
                     _cacheFolderCount(fPath) = GetFolderCount(folder, fPath, skipCache:=True)   ' 2026/06/23 by Simon/Claude: 同上
-
-                    If includeSize Then _cacheFolderSize(fPath) = Await GetFolderSizeL3(folder, fPath:=fPath, cToken:=cToken)
+                    _cacheFolderSize(fPath) = Await GetFolderSize(folder, fPath:=fPath, skipCache:=True, cToken:=cToken)    ' 2026/6/27 by simon/Claude Opus 4.8: 整合GetFolderSize單一入口再分派RDO/OOM, 加skipCache參數讓DB 重建的強制重讀也吃得到 GetFolderSizeRdo的提速
 
                     ' 2026/06/22 by Simon/Claude: 缺口1+2 ② Surgical 嚴格清除 —
                     '   (a) 取 live 全郵件 entryID，算「DB 有、live 沒有」的已刪集合 → surgical 清兩張昂貴快取
                     '       (attach_filenames/mail_simhash 之 DB 列 + 記憶體)，存活郵件的昂貴快取保留免重讀。
                     '   (b) 便宜逐封表(basic/attach_maillist/month_counts)整夾 nuke DB 死列；對應記憶體一併清/重建，
                     '       否則尾端 SaveCachesToDB 會把舊鬼魂列寫回，使 nuke 失效。
-                    Dim liveAll = Await GetBasicMailInfoL3(folder, needTopic:=False, cToken:=cToken, fPath:=fPath)
+                    Dim liveAll = Await GetBasicMailInfoOOM(folder, needTopic:=False, cToken:=cToken, fPath:=fPath)
                     Dim liveSet As New HashSet(Of String)(liveAll.Select(Function(m) m.Mail.EntryID))
                     Dim absent = DbGetFolderEntryIds(fPath).Where(Function(e) Not liveSet.Contains(e)).ToList()
                     If absent.Count > 0 Then SimDbDeleteMailRowsByEntryIds(absent, includeAttachFilenames:=True)
@@ -816,7 +815,7 @@ Partial Class Form1
         ' CleanupOrphanPath — 刪除已不存在於 Outlook 的資料夾孤兒行 (改為非同步 by Gemini 3.1 Pro, 2026/05/05)
         ' liveFolderPaths = 目前仍有效的資料夾路徑集合
         '   呼叫來源 A: SaveCachesToDB 開頭 (用記憶體快取 key 聯集) 
-        '   呼叫來源 B: RenewCache_Click (用 GetSubtreeToList BFS 掃 COM 取得完整清單) 
+        '   呼叫來源 B: RenewCache_Click (用 GetSubtree BFS 掃 COM 取得完整清單) 
         ' ---------------------------------------------------------------
         _dbg("    ├ 開始", $"live 資料夾數: {liveFolderPaths.Count}") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
         If _dbCache Is Nothing Then Return

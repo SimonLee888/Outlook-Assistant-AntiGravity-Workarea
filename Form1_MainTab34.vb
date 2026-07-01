@@ -47,11 +47,11 @@ Partial Class Form1
     '        ├─ Layer1   (UI/流程層) : Bt3_Click, ShowLv3Result
     '        ├─ Layer2   (商務過濾層): FilterBySize, FilterByAttachDetailsAsync
     '        ├─ Layer2.5 (快取層)    : GetAttachMailList (_cacheAttachMailList / _cacheAttachFilename)
-    '        └─ Layer3   (MAPI操作層): GetAttachMailListL3
+    '        └─ Layer3   (MAPI操作層): GetAttachMailListOOM
     '
     ' Bt3_Click 管線 (Pipeline) 步驟分解:
     '   Step 1. 前置驗證      → 檢查參數合法性 (UI)
-    '   Step 2. BFS 遍歷      → GetSubtreeToList，取得目標資料夾樹 (COM)
+    '   Step 2. BFS 遍歷      → GetSubtree，取得目標資料夾樹 (COM)
     '   Step 3. 匯集資料全集  → 向 Layer2.5 索取候選郵件全集 (GetAttachMailList) → ① 記憶體 → ② DB (mail_basic) → ③ L3
     '   Step 4. 管線過濾 1    → 記憶體 LINQ 瞬間過濾大小限制 (FilterBySize)
     '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 Layer2.5 快取判定 (FilterByAttachDetailsAsync)
@@ -105,7 +105,7 @@ Partial Class Form1
             _dbg("開始step2迴圈")
             For i As Integer = 0 To folderList.Count - 1
                 ' 2026/04/16 by Gemini: 指定使用 Tuple 內的 .Folder 與 .fPath
-                Dim c As Integer = GetMailCount(folderList(i).folder, fPaths(i))    ' 從 400ms 降至近乎 0ms!
+                Dim c As Integer = GetMailCount(fPaths(i), folderList(i).eid, folderList(i).sid)    ' 從 400ms 降至近乎 0ms! (2026/06/28 Stage2: 免-folder 多載)
                 If c > 0 Then totalMailCount += c
                 Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle
             Next
@@ -124,7 +124,8 @@ Partial Class Form1
                 For i As Integer = 0 To folderList.Count - 1
                     Dim processed As Integer = i + 1
                     ' 2026/04/16 by Gemini: 使用 Tuple 中的 .Folder 與預錄好的 fPaths(i)
-                    Dim folderResult = Await GetAttachMailList(folderList(i).folder, progressPhase1, fPaths(i), cToken:=cToken)
+                    ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple，眼物化移除——folder 由免-folder 多載延後到 ③ 才建
+                    Dim folderResult = Await GetAttachMailList(fPaths(i), folderList(i).eid, folderList(i).sid, progressPhase1, cToken:=cToken)
                     targetMails.AddRange(folderResult)
                     Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii,
                                         Sub()
@@ -567,11 +568,11 @@ Partial Class Form1
             Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, progress:=progress4, cToken:=cToken)
             Await PreLoadBasicMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 basic_maillist 一次拉入記憶體
 
-            Dim targetFolderList = targetTupleList.Select(Function(x) x.folder).ToList()
+            ' 2026/06/29 by Simon/Claude [Stage2]: 移除整批眼物化，直接走 id-tuple；folder 由免-folder 多載延後到 ③ 才建
             Dim processed As Integer = 0
-            For Each folder In targetFolderList
+            For Each t In targetTupleList
                 ' by Gemini 3.0 Flash, 2026/04/19: 替換為統一的底層讀取方法 (升級 L2.5)
-                Dim infoList = Await GetBasicMailInfo(folder, needTopic:=True, cToken:=cToken)
+                Dim infoList = Await GetBasicMailInfo(t.fPath, t.eid, t.sid, needTopic:=True, cToken:=cToken)
                 For Each item In infoList
                     If item.Topic = "" Then Continue For ' 沒有 Conversation Topic 的信件略過
                     If Not topicDict.ContainsKey(item.Topic) Then topicDict(item.Topic) = New List(Of MailItemInfo)()
@@ -583,9 +584,9 @@ Partial Class Form1
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                     Sub()
                                         ' 新版 (2026/05/10 by Simon/Claude: 加入 ETA 顯示，對齊 Tab3 做法)
-                                        Dim eta = CalculateSpeedAndETA(targetFolderList.Count, processed, sw.Elapsed.TotalSeconds)
-                                        progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetFolderList.Count,
-                                                                                   .Message = $"正在掃描系列郵件: {processed} / {targetFolderList.Count} 個資料夾 ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                                        Dim eta = CalculateSpeedAndETA(targetTupleList.Count, processed, sw.Elapsed.TotalSeconds)
+                                        progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetTupleList.Count,
+                                                                                   .Message = $"正在掃描系列郵件: {processed} / {targetTupleList.Count} 個資料夾 ({eta.Speed:F0} 個/秒{eta.EtaString})"})
                                     End Sub)
             Next
 

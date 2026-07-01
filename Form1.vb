@@ -976,7 +976,7 @@ Partial Class Form1
             Try : _cts.Cancel() : _cts.Dispose() : Catch : End Try
         End If
         ' 2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
-        '_cancelRequested = False  ' by Claude Opus, 2026/04/11: 重置舊旗標，否則 Layer3 的 GetMailCountAllL3 / GetFolderCountAllL3 等仍在檢查它，ESC 後就永遠回傳 0 (全換token之後就可以不檢查這個旗標了，但為了保險起見還是重置它)
+        '_cancelRequested = False  ' by Claude Opus, 2026/04/11: 重置舊旗標，否則 Layer3 的 GetMailCountAllOOM / GetFolderCountAllOOM 等仍在檢查它，ESC 後就永遠回傳 0 (全換token之後就可以不檢查這個旗標了，但為了保險起見還是重置它)
         _cts = New CancellationTokenSource()
         Return _cts.Token
     End Function

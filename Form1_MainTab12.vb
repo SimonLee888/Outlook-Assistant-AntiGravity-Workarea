@@ -16,7 +16,7 @@ Partial Class Form1
     Private _lv2IsMonthView As Boolean = False                  ' 目前 ListView2 顯示的是月份視圖還是年度視圖
     Private _lv2MonthViewYear As Integer = 0                    ' 目前月份視圖顯示的是哪一年
 
-    Private _tv2FolderList As List(Of (Folder As Folder, fPath As String)) = Nothing    ' 記住目前 Tab2 的資料夾清單，供月份展開使用
+    Private _tv2FolderList As List(Of (eid As String, sid As String, fPath As String)) = Nothing    ' 記住目前 Tab2 的資料夾清單，供月份展開使用 (2026/06/28 Stage2: 改帶 eid/sid 不帶 COM)
     Private _lv2DataYear As ConcurrentDictionary(Of Integer, Integer) = Nothing         ' Tab2 年度視圖 session 快取 (已合併多資料夾)，月份進出時直接 render 不重算
     Private _lv2DataMonth As ConcurrentDictionary(Of Integer, Integer) = Nothing        ' Tab2 月份視圖 session 快取 (已合併多資料夾)；_lv2MonthViewYear 記錄對應年份 (方案A：單一變數) 
 
@@ -27,7 +27,9 @@ Partial Class Form1
         Dim IsIndeterminate As Boolean          ' 是否為不確定的進度 (跑馬燈模式)
     End Structure
     Private Class FolderBfsEntry                ' 候選待掃瞄剪枝的資料夾結構
-        Public Folder As Outlook.Folder
+        Public Folder As Outlook.Folder         ' 2026/06/29 by Simon/Claude [Option A1]: 走樹階段保持 Nothing(零物化)，GetBfsResult 才對 root+直屬子夾物化
+        Public Eid As String                    ' 2026/06/29 by Simon/Claude [Option A1]: 身分證 — id-tuple BFS 走 DB 不物化 COM
+        Public Sid As String                    ' 2026/06/29 by Simon/Claude [Option A1]: 身分證
         Public ParentIndex As Integer           ' -1 = rootFolder；>= 0 = 父節點在 allEntries 的索引
         Public DirectMailCount As Long          ' 本層郵件數 (不含子孫)，由 Layer3 填入
         Public TotalMailCount As Long           ' 含子孫郵件總數，Layer2 底部向上彙總後填入
@@ -46,7 +48,7 @@ Partial Class Form1
     '             - SummarizeSubTreeBottomUp  純記憶體底部向上加總
     '             - UpdateFolderStatsCache    寫入 L2.5 快取字典
     '             - GetBfsResult              提取 root + 直屬子資料夾
-    '   Layer3  GetMailCountL3 / GetFolderCountL3 等 COM 底層
+    '   Layer3  GetMailCountOOM / GetFolderCountOOM 等 COM 底層
     '
     ' ── 版本演進摘要 ──────────────────────────────────────────────
     '
@@ -54,7 +56,7 @@ Partial Class Form1
     '               A. 用 Task.Run 包 COM (STA 違規) + B. s4Task.Result 潛在 deadlock (cache: 0.10~0.19s)
     '
     '   v1  BFS 一次展開整棵子樹：
-    '           GetMailCountL3 循序讀 PR_CONTENT_COUNT，底部向上彙總後一次寫快取，
+    '           GetMailCountOOM 循序讀 PR_CONTENT_COUNT，底部向上彙總後一次寫快取，
     '           之後點選子資料夾直接命中，架構最乾淨，但有 bug: root 快取命中時不展開子資料夾 → 第二次點選 ListView 只顯示 root 自身
     '           cache: 0.01s (最快，因為完全不碰 thread pool)
     '
@@ -92,7 +94,7 @@ Partial Class Form1
     '       → 回傳 root + 直屬子資料夾清單供 Layer1 顯示
     '       回呼 onProgress 讓 Layer1 更新進度，Layer2 自身不碰任何 UI 控制項
     '
-    '   Layer3  GetMailCountL3            COM 資料層
+    '   Layer3  GetMailCountOOM            COM 資料層
     '       只讀單一資料夾的 PR_CONTENT_COUNT (本層郵件數，不含子孫)
     '       不遞迴，不展開子資料夾，最小化 COM 呼叫量
     '
@@ -361,19 +363,26 @@ Partial Class Form1
 
         ' ── Step 1: 負責展開樹狀結構與初步快取剪枝 (by Gemini, 2026/04/05 改為非同步以提升響應)
         ' pending B: 目前第二耗時, 占30~35%
+        Dim swP As Stopwatch = Stopwatch.StartNew()   ' PROBE_TIMING
         Dim allEntries As List(Of FolderBfsEntry) = Await BuildBfsFolderTree(rootFolder, cToken:=cToken)
+        Dim t1 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()    ' PROBE_TIMING
 
         ' ── Step 2: 負責與 COM 溝通，取得基本數據 
         ' pending A. 目前第一耗時, 占55~65%
         Await FetchDirectMailCountsAsync(allEntries, progress, cToken:=cToken)
+        Dim t2 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()    ' PROBE_TIMING
 
         ' ── Step 3 & 4: 純記憶體運算與快取更新
         SummarizeSubTreeBottomUp(allEntries)
         UpdateFolderStatsCache(allEntries)
+        Dim t34 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()   ' PROBE_TIMING
 
         ' ── Step 5: 提取 UI 所需的結果並回報最終進度
+        Dim res = GetBfsResult(allEntries, progress)        ' PROBE_TIMING
+        Dim t5 As Double = swP.Elapsed.TotalMilliseconds    ' PROBE_TIMING
+        _dbg("PROBE_TIMING " & rName, $"夾數={allEntries.Count} | S1={t1:F0} S2={t2:F0} S34={t34:F0} S5={t5:F0} ms")   ' PROBE_TIMING
         _dbg(" ├ 結束", rName)
-        Return GetBfsResult(allEntries, progress)
+        Return res
 
     End Function
     Private Async Function CollectFolderStatsByL3ForceRefresh(folder As Folder, cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
@@ -386,8 +395,8 @@ Partial Class Form1
         ' 2026/06/23 by Simon/Claude: F5 改走 proxy skipCache(RDO 派工),仍繞過快取讀寫
         Dim rootMc As Long = GetMailCount(folder, rootPath, skipCache:=True)
         Dim rootFc As Long = GetFolderCount(folder, rootPath, skipCache:=True)
-        Dim rootMca As Long = Await GetMailCountAllL3(folder, skipCache:=True, cToken:=cToken)
-        Dim rootFca As Long = Await GetFolderCountAllL3(folder, skipCache:=True, cToken:=cToken)
+        Dim rootMca As Long = Await GetMailCountAllOOM(folder, skipCache:=True, cToken:=cToken)
+        Dim rootFca As Long = Await GetFolderCountAllOOM(folder, skipCache:=True, cToken:=cToken)
 
         ' 更新快取
         _cacheMailCount(rootPath) = rootMc : _cacheMailCountAll(rootPath) = rootMca
@@ -398,10 +407,10 @@ Partial Class Form1
 
         ' 處理直屬子資料夾 (ps. 這裡是不是多餘重複了?? 上面不是已經用CountAll也都更新cache了, 為何還要再逐一讀一次直屬子資料夾?? 這裡的邏輯是什麼??)
         ' 解答：這並非多餘。by Gemini 3.5 Flash, 2026/06/27
-        '   (1) 根資料夾呼叫的 GetMailCountAllL3(root) 只會回傳整棵子樹的總郵件數，在計算過程中「完全不會」寫入或更新任何直屬子資料夾的個別快取字典。
+        '   (1) 根資料夾呼叫的 GetMailCountAllOOM(root) 只會回傳整棵子樹的總郵件數，在計算過程中「完全不會」寫入或更新任何直屬子資料夾的個別快取字典。
         '   (2) F5 強制重刷的 UI 畫面需要同時呈現 Root 與其所有「直屬子資料夾」的獨立統計數據。
         '       為了取得各直屬子資料夾個別的 DirectMailCount 與 TotalMailCount/TotalSubCount 數據，必須逐一尋訪直屬子資料夾 (child)，
-        '       對其單獨呼叫 GetMailCountAllL3(child) 以取得其子樹總數，寫入其 childPath 對應的快取字典中，並將個別的 FolderBfsEntry 包入 rows 回傳。
+        '       對其單獨呼叫 GetMailCountAllOOM(child) 以取得其子樹總數，寫入其 childPath 對應的快取字典中，並將個別的 FolderBfsEntry 包入 rows 回傳。
 
         ' ✅ 2026/5/31 by Gemini/Simon: 加入 skipCache 引數判斷是否要強制讀取COM
         For Each child As Folder In GetSortedSubFolders(folder, rootPath, skipCache:=True)
@@ -411,8 +420,8 @@ Partial Class Form1
             ' 2026/06/23 by Simon/Claude: 同上,F5 子夾改 proxy skipCache
             _cacheMailCount(childPath) = GetMailCount(child, childPath, skipCache:=True)
             _cacheFolderCount(childPath) = GetFolderCount(child, childPath, skipCache:=True)
-            _cacheMailCountAll(childPath) = Await GetMailCountAllL3(child, skipCache:=True, cToken:=cToken)
-            _cacheFolderCountAll(childPath) = Await GetFolderCountAllL3(child, skipCache:=True, cToken:=cToken)
+            _cacheMailCountAll(childPath) = Await GetMailCountAllOOM(child, skipCache:=True, cToken:=cToken)
+            _cacheFolderCountAll(childPath) = Await GetFolderCountAllOOM(child, skipCache:=True, cToken:=cToken)
 
             rows.Add(New FolderBfsEntry With {.Folder = child, .FolderPath = childPath,
                                               .DirectMailCount = _cacheMailCount(childPath),
@@ -430,8 +439,9 @@ Partial Class Form1
 
         ' 預分配容量為 512，足以涵蓋 90% 以上用戶的資料夾數量，避免 BFS 過程中的陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
         Dim allEntries As New List(Of FolderBfsEntry)(512)
-        Dim queue As New Queue(Of (folderObj As Folder, parentIdx As Integer, path As String))(512)
-        queue.Enqueue((rootFolder, -1, SafeGetPath(rootFolder)))
+        ' 2026/06/29 by Simon/Claude [Option A1]: queue 改持純 id tuple(eid/sid/path/parentIdx)，走樹零 COM 物化
+        Dim queue As New Queue(Of (eid As String, sid As String, path As String, parentIdx As Integer))(512)
+        queue.Enqueue((rootFolder.EntryID, rootFolder.StoreID, SafeGetPath(rootFolder), -1))
 
         ' by Gemini, 2026/04/05: 每 100ms 主動讓出執行緒並檢查中斷，兼顧效能與靈敏度
         Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
@@ -439,7 +449,8 @@ Partial Class Form1
             Do While queue.Count > 0
                 Dim curr = queue.Dequeue()
                 Dim fPath As String = curr.path
-                Dim entry As New FolderBfsEntry With {.Folder = curr.folderObj, .ParentIndex = curr.parentIdx, .IsFromCache = False, .FolderPath = fPath}
+                ' 2026/06/29 by Simon/Claude [Option A1]: .Folder 走樹保持 Nothing，UI 階段(GetBfsResult)才物化；.Eid/.Sid 帶身分證
+                Dim entry As New FolderBfsEntry With {.Folder = Nothing, .Eid = curr.eid, .Sid = curr.sid, .ParentIndex = curr.parentIdx, .IsFromCache = False, .FolderPath = fPath}
                 Dim myIdx As Integer = allEntries.Count
                 allEntries.Add(entry)
 
@@ -475,9 +486,11 @@ Partial Class Form1
                 ' 未命中，或是 root (不論有無快取) → 展開直屬子資料夾
                 ' 傳入 fPath 給 GetSortedSubFolders 省去內部重爬 COM，並用字串組裝下一層路徑 (by Gemini 3.1 Pro)
                 ' 優化第七點：將 GetSortedSubFolders 提取至變數，提升代碼可讀性並利於 Debug (by Gemini 3 Flash, 2026/05/05)
-                Dim sortedSubs = GetSortedSubFolders(curr.folderObj, fPath, skipCache:=False)
-                For Each subFolder As Folder In sortedSubs
-                    queue.Enqueue((subFolder, myIdx, fPath & "\" & subFolder.Name))
+                ' 2026/06/29 by Simon/Claude [Option A1]: 改走免物化的 GetSortedSubFolderIDs(回 path/eid/sid 純資料)，
+                '   path 直接用 DB 回傳(同源於冷快取時 COM 組裝)，不再 subFolder.Name 重爬 COM；DB 無此節點才退 ③ 列舉
+                Dim sortedSubs = GetSortedSubFolderIDs(fPath, curr.eid, curr.sid)
+                For Each subRow In sortedSubs
+                    queue.Enqueue((subRow.eid, subRow.sid, subRow.path, myIdx))
                 Next
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii)  ' 2026/04/16 by Simon/Claude: 改用 SmartThrottle，省去 If/Restart/Task.Delay 三行套路
             Loop
@@ -510,7 +523,8 @@ Partial Class Form1
             For fd As Integer = 0 To total - 1
                 Dim entry As FolderBfsEntry = allEntries(fd)
                 If Not entry.IsFromCache Then
-                    entry.DirectMailCount = GetMailCount(entry.Folder, entry.FolderPath) ' 加入 folderPath 避免 COM 重新爬文
+                    ' 2026/06/29 by Simon/Claude [Option A1]: 改走 folder-free GetMailCount(fPath,eid,sid)，走樹階段 .Folder 仍 Nothing
+                    entry.DirectMailCount = GetMailCount(entry.FolderPath, entry.Eid, entry.Sid)
                     entry.TotalMailCount = entry.DirectMailCount             ' 初始值 = 本層，後面底部向上累加子孫
                     entry.TotalSubCount = 0                                  ' 初始為 0，後面累加子孫資料夾數
                 End If
@@ -570,9 +584,14 @@ Partial Class Form1
         Dim result As New List(Of FolderBfsEntry)(512)
         result.Add(allEntries(0))   ' index 0 = rootFolder 本身
 
+        ' 2026/06/29 by Simon/Claude [Option A1]: UI 物化交界 — 只對 root + 直屬子夾物化 COM Folder(供 .Name/IsMailFolder/Tag)，
+        '   走樹的全樹其餘節點維持零物化。root 物化僅 1 次 COM(可忽略)。
+        If allEntries(0).Folder Is Nothing Then allEntries(0).Folder = GetFolderById(allEntries(0).Eid, allEntries(0).Sid)
+
         For i As Integer = 1 To allEntries.Count - 1
             Dim entry As FolderBfsEntry = allEntries(i)
             If entry.ParentIndex = 0 Then
+                If entry.Folder Is Nothing Then entry.Folder = GetFolderById(entry.Eid, entry.Sid)   ' 直屬子夾物化
                 ' 若直屬子資料夾快取命中，補讀一下其本層郵件 (DirectMailCount)
                 If entry.IsFromCache Then entry.DirectMailCount = GetMailCount(entry.Folder)
                 result.Add(entry)
@@ -696,11 +715,11 @@ Partial Class Form1
     End Function
     Private Async Function ForceLv1Refresh() As Task
         ' ── F5 強制刷新 ListView1 ──────────────────────────────────────────────
-        ' 職責: 完全繞過記憶體快取與 DB，直接呼叫 GetMailCountAllL3 / GetFolderCountAllL3 取得真實值
+        ' 職責: 完全繞過記憶體快取與 DB，直接呼叫 GetMailCountAllOOM / GetFolderCountAllOOM 取得真實值
         '       讀完後同時寫入記憶體快取（_cacheXXX）並更新 DB。
         '       Size 重算僅針對目前 column 4 != "- " 的 ListViewItem。
         '
-        ' 效能原理：有 RDO → GetMailCountAllL3 內部呼叫 _rdo.TotalItemCount（單次 MAPI 屬性讀取）
+        ' 效能原理：有 RDO → GetMailCountAllOOM 內部呼叫 _rdo.TotalItemCount（單次 MAPI 屬性讀取）
         '           整體複雜度 O(M)，M = 直屬子資料夾數；相較 BFS O(N) 大幅節省
         '           無 RDO → 內部 BFS，與原架構同等 O(N)
         '
@@ -750,9 +769,9 @@ Partial Class Form1
 
                     lvi.SubItems(4).Text = "計算中..."
                     Dim dl As Long : _cacheFolderSize.TryRemove(fp, dl) : _cacheFolderSizeAll.TryRemove(fp, dl)
-                    Dim sz As Long = Await GetFolderSizeAllAsync(t.SubFolder, fp, cToken)
+                    Dim sz As Long = Await GetFolderSizeAll(t.SubFolder, fp, skipCache:=True, cToken:=cToken)       ' 2026/06/27 by Simon/Claude: 改走 skipCache 跳過 ①記憶體+②DB,保證強制重算(原 TryRemove 只清記憶體擋不住 DB lazy)
                     If sz < 0 Then : lvi.SubItems(4).Text = "計算失敗"
-                    Else : lvi.SubItems(4).Text = (sz / 1024 ^ 2).ToString(If(sz >= 1024 ^ 2, "N0", "N2")) & " MB" ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
+                    Else : lvi.SubItems(4).Text = (sz / 1024 ^ 2).ToString(If(sz >= 1024 ^ 2, "N0", "N2")) & " MB"  ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
                     End If
                     If sz >= 0 Then _cacheFolderSizeAll(fp) = sz
                 Next
@@ -1006,7 +1025,7 @@ Partial Class Form1
                     Dim folder As Folder = t.SubFolder
                     If folder Is Nothing Then Continue For
 
-                    Dim folderSize As Long = Await GetFolderSizeAllAsync(folder, cToken:=cToken)
+                    Dim folderSize As Long = Await GetFolderSizeAll(folder, cToken:=cToken)
 
                     Dim strFolderSize As String
                     ' by Gemini 3 Flash, 2026/04/20: 資料大小單位統一改為 MB (保留兩位小數)，更能直觀反映 Outlook 佔用情況
@@ -1144,7 +1163,7 @@ Partial Class Form1
             Cursor = Cursors.Default : Return           ' 如果沒有任何有效的資料夾 (List.Count=0) 就直接結束
         End If
 
-        Try ' by Claude Opus, 2026/04/11: Try 上移，包住 GetSubtreeToList 的 Await，否則 ESC 時拋出的 OperationCanceledException 沒有被捕捉
+        Try ' by Claude Opus, 2026/04/11: Try 上移，包住 GetSubtree 的 Await，否則 ESC 時拋出的 OperationCanceledException 沒有被捕捉
             Dim progressTree = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             Dim folderList = Await GetUniqueFolderList(selectedNodes, _includeSubTab2, progress:=progressTree, cToken:=cToken)
             _lv2IsMonthView = False        ' 切換選取時，重置視圖狀態為年度視圖
@@ -1154,11 +1173,11 @@ Partial Class Form1
 
             ''Dim totalMailCount As Integer =                                                   ' 計算所有選定根資料夾的郵件總數作為進度分母
             ''    If(CheckSub2.Checked, rootFolders.Sum(Function(f) GetMailCountRecursive(f)),  ' CheckSubFolder2.Checked = True  → 含子資料夾: 各自完整子樹的總和
-            ''                          rootFolders.Sum(Function(f) GetMailCountL3(f)))         ' CheckSubFolder2.Checked = False → 只算選定的那一層
+            ''                          rootFolders.Sum(Function(f) GetMailCountOOM(f)))         ' CheckSubFolder2.Checked = False → 只算選定的那一層
             ''' 2026/3/20, 重寫了底層GetMailCountAll() 效能還是比不過現在上面的遞迴版本
             '' 原因: 原版遞迴只走一遍 COM 資料夾樹，新版走了兩遍COM:
-            '' 第一遍: GetSubtreeToList()  → BFS 遍歷，存取每個 folder.Folders
-            '' 第二遍: For Each allFolders → GetMailCountL3() 再讀每個資料夾一次
+            '' 第一遍: GetSubtree()  → BFS 遍歷，存取每個 folder.Folders
+            '' 第二遍: For Each allFolders → GetMailCountOOM() 再讀每個資料夾一次
 
             ' --- 計算所有選定根資料夾的郵件總數，作為 CollectYearCounts 進度條的分母
             ' 2026/04/16 by Gemini: 這裡優化為直接對 folderList (已展開的子資料夾) 進行一圈快速統計
@@ -1169,7 +1188,7 @@ Partial Class Form1
 
             For i As Integer = 0 To folderList.Count - 1
                 ' ✅ 使用 Tuple 內的 .Folder 與 .FolderPath，效能從 400ms 降至近乎 0ms
-                Dim c As Integer = GetMailCount(folderList(i).folder, _tv2FolderPaths(i))
+                Dim c As Integer = GetMailCount(_tv2FolderPaths(i), folderList(i).eid, folderList(i).sid)   ' 2026/06/28 Stage2: 免-folder 多載
                 If c > 0 Then totalMailCount += c
                 processedCountLocal += 1
                 ' 2026/04/16 by Gemini: 每 100 毫秒更新一次預計計數進度
@@ -1421,7 +1440,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function CollectYearCounts(fList As List(Of (Folder As Folder, fPath As String)), totalMailCount As Long, progress As IProgress(Of ProgressReport), cToken As CancellationToken, Optional fPaths As List(Of String) = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function CollectYearCounts(fList As List(Of (eid As String, sid As String, fPath As String)), totalMailCount As Long, progress As IProgress(Of ProgressReport), cToken As CancellationToken, Optional fPaths As List(Of String) = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
         ' ---------------------------------------------------------------
         ' === Layer 2: 流程協調層 ===
         ' 職責: BFS 遍歷 fList，管理快取，驅動 Layer3 計算，合併結果，回報進度
@@ -1429,12 +1448,10 @@ Partial Class Form1
         ' 規則: 不直接碰 UI 控制項 (ProgressBar1 等)，進度透過 onProgress callback 傳出, 自己不會知道上一層是單選還是多選，只知道接受傳入的 fList 清單
         '
         ' 參數:
-        '   fList      : 由 Layer1 組裝好的目標資料夾清單 (已包含 BFS 展開結果)
+        '   fList           : 由 Layer1 組裝好的目標資料夾清單 (已包含 BFS 展開結果，2026/06/28 Stage2 純資料 Tuple)
         '   totalMailCount  : 總郵件數，用來計算進度百分比的分母
         '   onProgress      : 進度 callback，每處理完一個資料夾呼叫一次，回傳 (已處理, 總數)
         '   cToken          : CancellationToken，由 Layer1 透過 OkayNowYouHaveToken() 取得，ESC 時拋 OperationCanceledException
-        ' ---------------------------------------------------------------
-        ' 2026/04/16 by Gemini: 參數改為 Tuple List 形式，內部邏輯直接解開 (Folder, FolderPath)
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始", $"目標資料夾數: {fList.Count:N0}")
 
@@ -1446,12 +1463,14 @@ Partial Class Form1
         Dim merged As New ConcurrentDictionary(Of Integer, Integer)
         Try
             For i As Integer = 0 To totalFolders - 1
-                ' ✅ 直接從 Tuple 取得，跳過 COM .FolderPath
-                Dim folder As Folder = fList(i).Folder
+                ' ✅ 2026/06/28 Stage2: 直接從純資料 Tuple 取得 eid, sid, fPath
+                Dim eid As String = fList(i).eid
+                Dim sid As String = fList(i).sid
                 Dim fPath As String = fList(i).fPath
 
                 ' ✅ 2026/04/10: 提前過濾沒有信件的資料夾 (by Gemini) 既然根本沒有信，就不必去查 DB 或打 COM，直接跳過
-                If GetMailCount(folder, fPath) <= 0 Then ' 放個空快取避免下次又查 (<= 0 也包含 -1 的情況視同沒信防護)
+                ' 改用免-folder 多載，完全避免觸碰 COM 物件
+                If GetMailCount(fPath, eid, sid) <= 0 Then ' 放個空快取避免下次又查 (<= 0 也包含 -1 的情況視同沒信防護)
                     _cacheYearCounts(fPath) = New ConcurrentDictionary(Of Integer, Integer)()
                     processedFolders += 1 : Continue For
                 End If
@@ -1459,7 +1478,8 @@ Partial Class Form1
                 ' 2026/04/17 by Claude: 改呼叫 GetYearCountsForFolder (L2.5)，移除原本內嵌的①②③快取邏輯
                 ' ①記憶體命中 ②DB lazy ③Layer3 COM 全部封裝在 GetYearCountsForFolder 內，與其他 L2.5 cache proxy layer 一致
                 ' OCE re-throw 由 GetYearCountsForFolder → GetYearCountsForFolderL3 往上冒泡，被本層 Catch OCE 接住
-                Dim folderResult As ConcurrentDictionary(Of Integer, Integer) = Await GetYearCountsForFolder(folder, fPath:=fPath, cToken:=cToken)
+                ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple,眼物化移除——folder 由免-folder 多載延後到 ③ 才建
+                Dim folderResult As ConcurrentDictionary(Of Integer, Integer) = Await GetYearCountsForFolder(fPath, eid, sid, cToken:=cToken)
 
                 merged = MergeDictionaries(merged, folderResult)    ' 把這個資料夾的結果合併到總計 (純 .NET 運算，不碰 COM)
                 processedCount += folderResult.Values.Sum()         ' 累加已處理郵件數，透過 callback 通知 Layer1 更新進度顯示
@@ -1468,10 +1488,10 @@ Partial Class Form1
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
                                           Sub() progress?.Report(New ProgressReport With {.CurrentCount = processedCount, .TotalCount = totalMailCount,
-                                                                                          .Message = $"正在統計年度分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (已統計 {processedCount:N0} / {totalMailCount:N0} 封信)..."}))
+                                                                                .Message = $"正在統計年度分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (已統計 {processedCount:N0} / {totalMailCount:N0} 封信)..."}))
             Next
         Catch ex As OperationCanceledException
-            ' by Gemini, 2026/04/11: 捕捉 ESC 中斷，回傳已計算的部分結果而不拋出不常
+            ' by Gemini, 2026/04/11: 捕捉 ESC 中斷，回傳已計算的部分結果而不拋出異常
             _dbg(" ├ 中斷", "ComputeYearCounts 已中斷")
         End Try
         _dbg(" ├ 結束", $"共 {merged.Count:N0} 個年份 | 郵件總計: {merged.Values.Sum():N0}") ' by Gemini, 2026/04/10
@@ -1496,12 +1516,14 @@ Partial Class Form1
         ' 逐資料夾取月份分布並合併
         Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
         For i As Integer = 0 To totalFolders - 1
-            Dim folder As Folder = _tv2FolderList(i).Folder
+            Dim eid As String = _tv2FolderList(i).eid
+            Dim sid As String = _tv2FolderList(i).sid
             Dim fPath As String = _tv2FolderList(i).fPath
             processedFolders += 1
             ' 2026/04/15 by Gemini 3.1 Pro: 傳入快取好的 fPath，消除 GetMonthCountsForYear 內的 COM 開銷
             ' 2026/04/17 by Claude: 改呼叫 GetMonthCountsForYear (L2.5)，提前過濾/快取/DB lazy 全封裝於內
-            Dim folderMonthCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCountsForYear(folder, selectedYear, fPath:=fPath, cToken:=cToken)
+            ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple,眼物化移除——folder 由免-folder 多載延後到 ③ 才建
+            Dim folderMonthCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCountsForYear(fPath, eid, sid, selectedYear, cToken:=cToken)
             monthCounts = MergeDictionaries(monthCounts, folderMonthCounts)
 
             ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判

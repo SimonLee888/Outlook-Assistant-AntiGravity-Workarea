@@ -446,8 +446,8 @@ Partial Class Form1
                 _lv3MailList.RemoveAll(Function(m) toRemove.Contains(m.EntryID))   ' 從虛擬資料源移除
 
                 For Each fPath In affectedPaths
-                    InvalidateBasicMailCache(fPath)     ' 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
-                    DbDeleteBasicMailInfoByPath(fPath)  ' 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
+                    InvalidateMailCache(fPath)     ' 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
+                    DbDeleteMailInfoByPath(fPath)  ' 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
                 Next
 
                 MoveMailsToRecycle(entryIDs)            ' 實體刪除 (移動到同 Store 的刪除郵件資料夾)
@@ -566,13 +566,13 @@ Partial Class Form1
                 fakeNodes.Add(New TreeNode() With {.Tag = f})
             Next
             Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, progress:=progress4, cToken:=cToken)
-            Await PreLoadBasicMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 basic_maillist 一次拉入記憶體
+            Await PreLoadMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mailinfo_list 一次拉入記憶體
 
             ' 2026/06/29 by Simon/Claude [Stage2]: 移除整批眼物化，直接走 id-tuple；folder 由免-folder 多載延後到 ③ 才建
             Dim processed As Integer = 0
             For Each t In targetTupleList
                 ' by Gemini 3.0 Flash, 2026/04/19: 替換為統一的底層讀取方法 (升級 L2.5)
-                Dim infoList = Await GetBasicMailInfo(t.fPath, t.eid, t.sid, needTopic:=True, cToken:=cToken)
+                Dim infoList = Await GetMailInfo(t.fPath, t.eid, t.sid, needTopic:=True, cToken:=cToken)
                 For Each item In infoList
                     If item.Topic = "" Then Continue For ' 沒有 Conversation Topic 的信件略過
                     If Not topicDict.ContainsKey(item.Topic) Then topicDict(item.Topic) = New List(Of MailItemInfo)()
@@ -1010,8 +1010,8 @@ Partial Class Form1
                 Next
 
                 For Each fPath In affectedPaths
-                    InvalidateBasicMailCache(fPath)     ' 2026/5/11 by Simon: 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
-                    DbDeleteBasicMailInfoByPath(fPath)  ' 2026/5/11 by Simon: 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
+                    InvalidateMailCache(fPath)     ' 2026/5/11 by Simon: 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
+                    DbDeleteMailInfoByPath(fPath)  ' 2026/5/11 by Simon: 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
                 Next
 
                 MoveMailsToRecycle(entryIDs)            ' 實體刪除 (移動到預設刪除資料夾)

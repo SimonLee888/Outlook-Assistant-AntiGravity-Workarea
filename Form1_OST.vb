@@ -14,7 +14,7 @@ Imports Microsoft.Office.Interop.Outlook
 ' Phase 1 (2026/04/19): OST/PST 目錄樹顯示 (SimTreeOST / SimTreePST)
 ' Phase 2 (2026/04/22): 點選資料夾 → ListView 顯示郵件清單
 '   - OST: LTP. → TC row data → OstMailRow
-'   - PST: GetBasicMailInfoOOM (OOM，Form1_Outlook.vb)
+'   - PST: GetMailInfoOOM (OOM，Form1_Outlook.vb)
 ' Phase 3 (待實作): CopyFolder / MoveFolder → OOM 寫入目標 PST
 '
 ' 注意:
@@ -267,7 +267,7 @@ Partial Class Form1
     End Sub
     Private Async Sub SimTreePST_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTreePST.AfterSelect
         ' Phase 2: 選取 PST 資料夾 → 使用 OOM GetTable → 顯示郵件清單
-        '   OOM 呼叫必須在 UI 執行緒（STA）；使用 Form1_Outlook.vb 的GetFolderBasicMailInfosL3，它已有快取機制與 cToken 支援。
+        '   OOM 呼叫必須在 UI 執行緒（STA）；使用 Form1_Outlook.vb 的GetFolderMailInfosL3，它已有快取機制與 cToken 支援。
         ' 2026/04/22 by Claude
 
         Dim folder = TryCast(e.Node?.Tag, Outlook.Folder)
@@ -281,7 +281,7 @@ Partial Class Form1
         Try
             Dim cToken As System.Threading.CancellationToken = OkayNowYouHaveToken()
             ' needTopic:=False：Tab7 不需要 Conversation Topic，省去讀 PR_CONVERSATION_TOPIC 開銷
-            Dim rows = Await GetBasicMailInfo(folder, needTopic:=False, cToken:=cToken)
+            Dim rows = Await GetMailInfo(folder, needTopic:=False, cToken:=cToken)
             ShowLvPstItems(rows.Select(Function(r) r.Mail).ToList())
             PgrsBar1.Text = $"共 {rows.Count:N0} 封 — {folder.Name}"
 
@@ -323,7 +323,7 @@ Partial Class Form1
 
     End Sub
     Private Sub ShowLvPstItems(mails As List(Of MailItemInfo))
-        ' 把 MailItemInfo 清單（來自 GetBasicMailInfoOOM）渲染到 _newLvPST
+        ' 把 MailItemInfo 清單（來自 GetMailInfoOOM）渲染到 _newLvPST
 
         ' by Gemini 3 Flash, 2026/04/23: 改用 AddRange 並對齊 Tab4 欄位順序與格式
         LvPST.BeginUpdate()

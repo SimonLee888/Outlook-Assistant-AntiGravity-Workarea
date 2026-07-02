@@ -226,8 +226,8 @@ Partial Class Form1
         ' by Gemini, 2026/04/01: 利用背景躲藏時間，預先載入其他 Tab 的 UI 與目錄樹，實現「切換瞬間無感」的流暢體驗
         ' 讓第一頁先穩穩地顯示出來，不要與使用者剛啟動後的第一波對 TreeView1 的操作搶資源
         InitMapiNamespace()
-        'InitRdoSession()
         InitDatabase()          ' by Gemini, 2026/04/06: 初始化 SQLite 快取資料庫
+        CheckRDO.Checked = True ' added by simon 2026/6/25, to init RDO by default
 
         If _isDebugMode Then    ' by Gemini, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
             CheckDebug.Visible = True
@@ -236,7 +236,7 @@ Partial Class Form1
         End If
 
         ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
-        'AddHandler Me.Resize, Sub() SyncDebugFormResize()    ' 改善最大化時的lv column resize 效能, 移回到自己的 Resize 事件裡處理, 2026/5/9 by simon
+        'AddHandler Me.Resize, Sub() SyncDebugFormResize()      ' 改善最大化時的lv column resize 效能, 移回到自己的 Resize 事件裡處理, 2026/5/9 by simon
         AddHandler Me.Move, Sub() SyncDebugFormMoveOnly()       ' 2026/06/19 by Simon/Claude: 拖曳移動只搬位置，完整貼齊延到 ResizeEnd
         Await Task.Yield()
 
@@ -293,8 +293,16 @@ Partial Class Form1
         Dim firstMsgItem = _statusHistory.FirstOrDefault(Function(x) x.Source = "PB1")
         If Not String.IsNullOrEmpty(firstMsgItem.Message) Then PgrsBar1.Text = firstMsgItem.Message
 
-        ' added by simon 2026/6/25, to init RDO by default
-        CheckRDO.Checked = True
+        ' PROBE_BASICINFO_RDO  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
+        ' 2026/07/02 by Claude: 無 GUI 自動觸發,命令列帶 /autoprobe 或 /autoprobe:StoreName|FolderName 才會啟動,正常啟動完全不受影響。
+        '   ⚠ /autoprobedb 要先判斷(否則會被下面 StartsWith("/autoprobe") 誤吃)。
+        Dim autoprobeDbArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase))
+        If autoprobeDbArg IsNot Nothing Then Dim unused5 = RunAutoProbeMailInfoDbRoundtrip(autoprobeDbArg)
+        Dim autoprobeArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobe", StringComparison.OrdinalIgnoreCase) AndAlso Not a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase))
+        If autoprobeArg IsNot Nothing Then Dim unused3 = RunAutoProbeBasicInfoRdo(autoprobeArg)
+        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/liststores", StringComparison.OrdinalIgnoreCase)) Then Dim unused4 = RunListStoresDump()
+        ' PROBE_BASICINFO_RDO  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
+
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
 
@@ -315,10 +323,9 @@ Partial Class Form1
                 _pstStoreList.Clear() : _pstStoreList = Nothing
             End If
 
-            If _olApp IsNot Nothing Then Marshal.FinalReleaseComObject(_olApp)
             If _olNS IsNot Nothing Then Marshal.FinalReleaseComObject(_olNS)
-            If _rdo IsNot Nothing Then Marshal.FinalReleaseComObject(_rdo)
-            ReleaseRdoSession()     ' 2026/06/23 by Simon/Claude: 對稱釋放 _rdo2 獨立 session + store 快取
+            If _olApp IsNot Nothing Then Marshal.FinalReleaseComObject(_olApp)
+            ReleaseRdoSession() ' 2026/06/23 by Simon/Claude: 對稱釋放 _rdo2 獨立 session + store 快取
             _dbg("結束")
             Return
         End If
@@ -1171,8 +1178,9 @@ Partial Class Form1
     Private Sub CheckRDO_CheckedChanged(sender As Object, e As EventArgs) Handles CheckRDO.CheckedChanged
         ' 用一個checkbox 動態決定是否載入Redemption
         If CheckRDO.Checked Then
-            ' 已知限制: 卸載後就無法再重新載入第二次, 不會成功
-            If _rdo Is Nothing Then Dim unused = InitRdoSessionWithoutEULA()
+            ' 2026/7/1 by simon, 所有RDO都已切換至獨立session的 _rdo2, 不再沿用 Outlook MAPI session, 讓原有的 _rdo 完全退役
+            'If _rdo Is Nothing Then Dim unused = InitRdoSessionWithoutEULA()  ' 已知限制: 掛載在_olNS上的RDO, 卸載後就無法再重新載入第二次, 不會成功
+            If _rdo2 Is Nothing Then Dim unused = InitRdoSessionWithoutEULA()
         Else
             ReleaseRdoSession()   ' 2026/06/23 by Simon/Claude Opus 4.8: 取消 RDO 時連 _rdo2 主讀取來源一起拆,避免 dispatcher 仍走 _rdo2
         End If
@@ -1373,7 +1381,7 @@ Partial Class Form1
             ' 2026/05/29 by Simon/Claude: 拆分SimTree4的雙重模式, 讓SimTree4回復到純粹的資料夾樹行為
 
             e.Handled = True : e.SuppressKeyPress = True
-            Await ForceTvRefresh(tv)
+            ForceTvRefresh(tv)
             If GetCurrentTv() Is SimTree1 Then Await ForceLv1Refresh()
             ' by Gemini 3.5 Flash, 2026/05/29: 限制 Await ForceLv1Refresh() 只有在當前是 Tab1 (SimTree1) 的時候才需要執行
 
@@ -1732,7 +1740,7 @@ Partial Class Form1
         _dbg("結束", $"已刷新 {processedCount} 個 TreeView")
         'PgrsBar1.Text = "UI 刷新完成 ✔"
     End Function
-    Private Async Function ForceTvRefresh(tv As SimTree) As Task
+    Private Sub ForceTvRefresh(tv As SimTree)
         ' ── F5 強制刷新整棵 SimTree ──────────────────────────────────────────────
         ' 職責: 不讀任何快取，重新從 Outlook COM 讀取整棵資料夾樹並更新 _cacheFolderTree
         '       ① 記錄目前展開路徑 + 選取路徑
@@ -1757,6 +1765,7 @@ Partial Class Form1
         _dbg("開始", tv.Name)
         If _pstStoreList Is Nothing OrElse _pstStoreList.Count = 0 Then Return
 
+        Dim sw As Stopwatch = Stopwatch.StartNew()   ' 2026/07/01 by Claude: F5 計時
         PgrsBar1.Text = $"F5: 重整 {tv.Name}..." : PgrsBar2.Text = ""
         _isUserBusy = True : Cursor = Cursors.WaitCursor
 
@@ -1772,9 +1781,7 @@ Partial Class Form1
             tv.RestoreTreeState(currentTvState)         ' ④ 重展開 + 還原選取 + 觸發 AfterSelect
             If tv.SelectedNodes.Count = 0 Then GotoDefaultInbox(tv) ' ⑤ Fallback: 找不到舊選取時退回預設 Inbox
 
-            PgrsBar1.Text = $"F5: {tv.Name} 重整完成" : PgrsBar2.Text = ""
-
-            'Await Task.Run(Sub() SaveCachesToDB())      ' 掃描完成後，再安全地存入資料庫
+            PgrsBar1.Text = $"F5: {tv.Name} 重整完成，花費 {sw.Elapsed.TotalSeconds:0.00} 秒。" : PgrsBar2.Text = ""
 
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message) : PgrsBar1.Text = $"F5 {tv.Name} 失敗: " & ex.Message
@@ -1783,7 +1790,7 @@ Partial Class Form1
             _isForceRefreshing = False                  ' 關閉強制更新旗標, 2026/6/1 by Simon/Gemini 3.1 Pro
         End Try
 
-    End Function
+    End Sub
     Private Function GetCurrentTv() As SimTree
         ''' <summary>
         ''' 根據 TabControl1 的選擇索引，判斷並傳回當前畫面上活動中的 TreeView/SimTree, by Gemini, 2026/03/30
@@ -2183,7 +2190,7 @@ Partial Class Form1
         _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理
 
         _cacheMailBody.Clear()      ' 2026/6/18 by simon, 之前漏掉了現在補上
-        _cacheBasicMailInfo.Clear() ' 2026/6/18 by simon, 之前漏掉了現在補上
+        _cacheMailInfo.Clear() ' 2026/6/18 by simon, 之前漏掉了現在補上
 
     End Sub
 #End Region

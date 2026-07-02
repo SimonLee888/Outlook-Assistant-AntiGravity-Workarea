@@ -682,7 +682,7 @@ Partial Class Form1
         '   Phase1 改用 Dictionary(Of String, Outlook.Folder) liveDict，每個資料夾只讀一次 FolderPath COM 屬性，
         '   Phase2/3/4 迭代 dict 的 Key/Value，完全省去重複的 folder.FolderPath COM 呼叫（~500 資料夾省 ~250ms）
         '   Phase2/3 節流改用 SmartThrottle(sw, cToken, ThrottleFreq.Low)，取代 Mod N + Task.Delay(1)
-        '   GetYearCountsForFolderL3 / GetFolderSizeOOM 補入 cToken:=cToken
+        '   GetYearCountOOM / GetFolderSizeOOM 補入 cToken:=cToken
         ' ---------------------------------------------------------------
         ' 2026/05/17 by simon/Gemini: RenewCacheToDB 大幅重構，改為「精確打擊」模式，
         '   不再 BFS 展開每個資料夾的子樹來找對應的 DB row，而是直接從 DB 撈出全部資料夾清單，然後用 GetFolderFromID 精確抓出 COM 物件，比對 snapshot 決定是否 dirty
@@ -1616,7 +1616,7 @@ Partial Class Form1
     Friend Function DbGetMonthCountsForFolder(fPath As String, year As Integer) As ConcurrentDictionary(Of Integer, Integer)
         ' ---------------------------------------------------------------
         ' DbGetMonthCountsForFolder — 讀取 month_counts WHERE folder_path=? AND year=?
-        ' 供 GetMonthCountsForYearL3 在記憶體 miss 時先查 DB，避免 COM 呼叫
+        ' 供 GetMonthCount(L2.5) 在記憶體 miss 時先查 DB，避免 COM 呼叫
         ' 回傳 Nothing 表示 DB 中無此 (folder_path, year) 組合
         '   ├ month_counts 新增函數群 (2026/04/09 by Claude)
         '   ├ 2026/04/09 修正：改用三欄 PK，接收 (fPath, year) 兩個參數
@@ -1955,7 +1955,7 @@ Partial Class Form1
     Private Sub DbSaveMonthCountsSingle(fPath As String, year As Integer, monthCounts As ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' DbSaveMonthCountsSingle — 增量寫入單一 (folder_path, year) 的月份分布
-        ' 在 GetMonthCountsForYearL3 完成 L3 COM 計算後立刻呼叫，不等待 SaveCache 按鈕。
+        ' 在 GetMonthCount 的 ③ COM 計算(RDO 或 OOM)完成後立刻呼叫，不等待 SaveCache 按鈕。
         ' 使用獨立 Transaction 包住最多 12 筆，確保原子性。
         '   ├ 2026/04/09 新增 by Claude：解決月份快取只在記憶體、SaveCache 才寫 DB 的問題
         '   ├ 根本原因：若該 session 沒點過月份視圖就不 SaveCache，下次仍打 COM

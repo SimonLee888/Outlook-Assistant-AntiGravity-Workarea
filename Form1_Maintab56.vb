@@ -1406,177 +1406,176 @@ Partial Class Form1
         'Finally : If table IsNot Nothing Then Marshal.ReleaseComObject(table)
         'End Try
 
-        Await TestProbeBasicInfoRdoParity()
+        'Await TestProbeBasicInfoRdoParity()
+        Await TestProbeYearMonthCountsRdoVsOOM()   ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL]: 驗證正式 GetYearCountRdo/OOM + GetMonthCountRdo/OOM parity + 耗時
 
     End Sub
 
     ' PROBE_YEARSQL  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
 
-    Private Function SpikeYearExecSqlLoop(rdoFolder As Redemption.RDOFolder, minYear As Integer, maxYear As Integer, fmtStr As String, useHash As Boolean) As Dictionary(Of Integer, Integer)
-        Dim result As New Dictionary(Of Integer, Integer)
-        Dim items = rdoFolder.Items
-        Dim tbl = items.MAPITable
-        Try
-            For y As Integer = minYear To maxYear
-                Dim lit1 As String = BuildDateLiteral(New Date(y, 1, 1, 0, 0, 0), fmtStr, useHash)
-                Dim lit2 As String = BuildDateLiteral(New Date(y, 12, 31, 23, 59, 59), fmtStr, useHash)
-                Try
-                    Dim rs As Object = tbl.ExecSQL($"SELECT COUNT(*) FROM Folder WHERE ReceivedTime >= {lit1} AND ReceivedTime <= {lit2}")
-                    Dim cnt As Integer = If(rs IsNot Nothing AndAlso Not CBool(rs.EOF), CInt(rs.Fields(0).Value), 0)
-                    If cnt > 0 Then result(y) = cnt
-                Catch ex As System.Exception
-                    _dbg("PROBE_YEARSQL 例外", $"{y} 年: {ex.GetBaseException().Message}")
-                End Try
+    Private Async Function TestProbeYearMonthCountsRdoVsOOM(Optional rootOverride As Folder = Nothing) As Task   ' PROBE_YEARSQL
+        ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL v4]: 探索階段(8種日期格式測試/TOP1+ORDER BY範圍偵測驗證)已完成並拍板,
+        '   邏輯已經寫進正式的 GetYearCountRdo/OOM、GetMonthCountRdo/OOM(Module_Outlook.vb)。
+        '   這一版探針不再自己重新兜格式測試/範圍偵測邏輯,改成直接呼叫「真正要上線的程式碼」逐夾比對+累計耗時。
+        '   月份測試沿用年份測試已經算出的 OOM 年份集合(每夾要測哪些年,不必重算一次)。
+        '   rootOverride 有值 → 無 GUI 自動觸發模式(供 RunAutoProbeYearMonthCounts 呼叫),結果額外鏡射寫成文字檔;GUI 手動觸發不寫檔,行為不變。
+        Dim logLines As New List(Of String)
+        Dim fileLog As System.Text.StringBuilder = If(rootOverride IsNot Nothing, New System.Text.StringBuilder(), Nothing)
+        Dim logDbg As Action(Of String) = Sub(s)
+                                               _dbg("YearMonthSpike", s)
+                                               logLines.Add(s)
+                                               If fileLog IsNot Nothing Then fileLog.AppendLine(s)
+                                           End Sub
+
+        If _rdo2 Is Nothing Then
+            If rootOverride Is Nothing Then MessageBox.Show("_rdo2 未初始化,請先勾選 CheckRDO。")
+            logDbg("✗ _rdo2 未初始化") : Return
+        End If
+
+        Dim roots As New List(Of Folder)
+        If rootOverride IsNot Nothing Then
+            roots.Add(rootOverride)
+        Else
+            Dim nodes As List(Of TreeNode) = SimTree3.SelectedNodes
+            If nodes Is Nothing OrElse nodes.Count = 0 Then MessageBox.Show("請先在 Tab3 的樹選定資料夾(選子樹的 root,不是葉節點)。") : Return
+            For Each n In nodes
+                Dim f As Folder = TryCast(n.Tag, Folder)
+                If f IsNot Nothing Then roots.Add(f)
             Next
-        Finally
-            TryMarshalRelease(tbl) : TryMarshalRelease(items)
-        End Try
-        Return result
-    End Function
+        End If
 
-    Private Function BuildDateLiteral(d As Date, fmtStr As String, useHash As Boolean) As String
-        ' 依候選格式把 Date 轉成 ExecSQL 看得懂的字面值(InvariantCulture,避開 zh-TW 上午/下午問題)
-        '   useHash=True → #...# (Jet/Access 風格) ; False → '...' (ISO/字串風格)
-        Dim s As String = d.ToString(fmtStr, System.Globalization.CultureInfo.InvariantCulture)
-        Return If(useHash, "#" & s & "#", "'" & s & "'")
-    End Function
+        Dim grandYearA As Long = 0, grandYearB As Long = 0, grandMonthA As Long = 0, grandMonthB As Long = 0
 
-    Private Function PickWorkingDateFormat(rdoFolder As Redemption.RDOFolder, testYear As Integer, log As List(Of String)) As (fmtStr As String, useHash As Boolean)?
-        ' 2026/07/01 by Simon/Claude [PROBE_YEARSQL]: 8 種候選全測不變;但挑選規則改成「優先選帶時間的成功格式」，
-        '   避免只有日期的格式(如 yyyy-MM-dd)把 12/31 23:59:59 邊界截斷成 00:00:00，year-end 那天的信有漏算風險。
-        Dim candidates As New List(Of (label As String, fmtStr As String, useHash As Boolean, hasTime As Boolean)) From {
-            ("A ISO date", "yyyy-MM-dd", False, False),
-            ("B ISO datetime", "yyyy-MM-dd HH:mm:ss", False, True),
-            ("C ISO-T datetime", "yyyy-MM-ddTHH:mm:ss", False, True),
-            ("D yyyyMMdd", "yyyyMMdd", False, False),
-            ("E US date", "MM/dd/yyyy", False, False),
-            ("F US datetime", "MM/dd/yyyy HH:mm:ss", False, True),
-            ("G #US date#", "MM/dd/yyyy", True, False),
-            ("H #US datetime#", "MM/dd/yyyy HH:mm:ss", True, True)
-        }
-        Dim startDate As New Date(testYear, 1, 1, 0, 0, 0), endDate As New Date(testYear, 12, 31, 23, 59, 59)
-        Dim items = rdoFolder.Items
-        Dim tbl = items.MAPITable
-        Dim winner As (fmtStr As String, useHash As Boolean)? = Nothing
-        Dim winnerHasTime As Boolean = False
-        Try
-            For Each c In candidates
-                Dim lit1 As String = BuildDateLiteral(startDate, c.fmtStr, c.useHash)
-                Dim lit2 As String = BuildDateLiteral(endDate, c.fmtStr, c.useHash)
-                Try
-                    Dim rs As Object = tbl.ExecSQL($"SELECT COUNT(*) FROM Folder WHERE ReceivedTime >= {lit1} AND ReceivedTime <= {lit2}")
-                    Dim cnt As Integer = If(rs IsNot Nothing AndAlso Not CBool(rs.EOF), CInt(rs.Fields(0).Value), 0)
-                    log.Add($"   格式測試 {c.label} : ✓ 可解析 | {testYear} 年 COUNT(*)={cnt} | 範例={lit1}")
-                    If winner Is Nothing OrElse (Not winnerHasTime AndAlso c.hasTime) Then
-                        winner = (c.fmtStr, c.useHash) : winnerHasTime = c.hasTime   ' 優先升級成帶時間的格式
-                    End If
-                Catch ex As System.Exception
-                    Dim msg As String = ex.GetBaseException().Message
-                    log.Add($"   格式測試 {c.label} : ✗ {If(msg.Length > 70, msg.Substring(0, 70) & "…", msg)}")
-                End Try
-            Next
-        Finally
-            TryMarshalRelease(tbl) : TryMarshalRelease(items)
-        End Try
-        Return winner
-    End Function
-
-    Private Async Sub SpikeYearCountExecSql()   ' PROBE_YEARSQL
-        ' 2026/07/01 by Simon/Claude [PROBE_YEARSQL v2]: 改成子樹版 ——
-        '   單一資料夾測不出真實負載(現實中沒人會把幾萬封信塞在同一夾),改用 GetSubtreeRdo 展開整支子樹,
-        '   逐夾累加比對:A=逐夾呼叫 production 的 GetYearCountsForFolderL3(物化時機比照 GetYearCountsForFolder L2.5,
-        '   GetFolderById 延後到真的要算才建);B=逐夾×逐年 ExecSQL COUNT(*) 累加。兩邊都用 GetMailCount 提前過濾空夾(比照 CollectYearCounts)。
-        Dim log As New List(Of String)
-        If _rdo2 Is Nothing Then MessageBox.Show("_rdo2 未初始化,請先勾選 CheckRDO。") : Return
-        Dim roots As List(Of TreeNode) = SimTree3.SelectedNodes
-        If roots Is Nothing OrElse roots.Count = 0 Then MessageBox.Show("請先在 Tab3 的樹選定資料夾(選子樹的 root,不是葉節點)。") : Return
-
-        Dim fmtWinner As (fmtStr As String, useHash As Boolean)? = Nothing
-        Dim giveUp As Boolean = False
-
-        For Each node As TreeNode In roots
-            If giveUp Then Exit For
-            Dim rootFolder As Folder = TryCast(node.Tag, Folder)
-            If rootFolder Is Nothing Then Continue For
+        For Each rootFolder In roots
             Dim rootPath As String = SafeGetPath(rootFolder)
-            log.Add("══════ 子樹 root: " & ExtractFolderName(rootPath) & " ══════")
+            logDbg("══════ 子樹 root: " & ExtractFolderName(rootPath) & " ══════")
 
             ' ── 展開整個子樹(沿用 production 的 GetSubtreeRdo,跟 CollectYearCounts 拿到的 fList 同一種合約) ──
             Dim swWalk = Stopwatch.StartNew()
             Dim fList As List(Of (eid As String, sid As String, fPath As String)) = GetSubtreeRdo(rootFolder, rootPath)
             swWalk.Stop()
-            If fList Is Nothing Then log.Add("✗ GetSubtreeRdo 失敗 → 跳過(本探針未處理 OOM BFS fallback 情境)") : Continue For
-            log.Add($"子樹展開: {fList.Count} 個資料夾 | {swWalk.ElapsedMilliseconds} ms")
+            If fList Is Nothing Then logDbg("✗ GetSubtreeRdo 失敗 → 跳過(本探針未處理 OOM BFS fallback 情境)") : Continue For
+            logDbg($"子樹展開: {fList.Count} 個資料夾 | {swWalk.ElapsedMilliseconds} ms")
 
-            ' ── A: 逐夾呼叫 production 的 GetYearCountsForFolderL3,合併全子樹(繞過①②快取,測純 COM 成本) ──
+            ' ── [年] A: 逐夾呼叫 production 的 GetYearCountOOM,合併全子樹(繞過①②快取,測純 COM 成本) ──
+            '   順手記錄每夾的 OOM 年份集合(perFolderYearsOOM),供下面月份測試沿用,不必重算一次。
             Dim yearsA As New Dictionary(Of Integer, Integer)
+            Dim perFolderYearsOOM As New Dictionary(Of String, Dictionary(Of Integer, Integer))
             Dim foldersWithMail As Integer = 0
-            Dim swA = Stopwatch.StartNew()
+            Dim swYearA = Stopwatch.StartNew()
             For Each item In fList
                 If GetMailCount(item.fPath, item.eid, item.sid) <= 0 Then Continue For
                 foldersWithMail += 1
                 Dim f As Folder = GetFolderById(item.eid, item.sid)
                 If f Is Nothing Then Continue For
-                Dim r = Await GetYearCountsForFolderL3(f, fPath:=item.fPath)
+                Dim r = Await GetYearCountOOM(f, fPath:=item.fPath)
+                perFolderYearsOOM(item.fPath) = New Dictionary(Of Integer, Integer)(r)
                 For Each kv In r : yearsA(kv.Key) = If(yearsA.ContainsKey(kv.Key), yearsA(kv.Key), 0) + kv.Value : Next
             Next
-            swA.Stop()
-            Dim totalA As Integer = yearsA.Values.Sum()
-            log.Add($"A  OOM GetTable+GetArray(逐夾累加) : {foldersWithMail} 個有信的夾 | {yearsA.Count} 個年份 | 共 {totalA} 封 | {swA.ElapsedMilliseconds} ms")
+            swYearA.Stop()
+            Dim totalYearA As Integer = yearsA.Values.Sum()
+            logDbg($"[年] A GetYearCountOOM(逐夾累加) : {foldersWithMail} 個有信的夾 | {yearsA.Count} 個年份 | 共 {totalYearA} 封 | {swYearA.ElapsedMilliseconds} ms")
 
-            If totalA = 0 Then log.Add("— 整支子樹無郵件, 跳過 ExecSQL 對拍") : Continue For
+            If totalYearA = 0 Then logDbg("— 整支子樹無郵件, 跳過對拍") : Continue For
 
-            ' ── B: 逐夾 × 逐年 ExecSQL COUNT(*),合併全子樹(範圍取 A 的 min~max 年) ──
-            Dim minYear As Integer = yearsA.Keys.Min(), maxYear As Integer = yearsA.Keys.Max()
-            Dim store As Redemption.RDOStore = GetRdoStore(rootPath)
-            If store Is Nothing Then log.Add("✗ GetRdoStore=Nothing → 跳過 B") : Continue For
-
+            ' ── [年] B: 逐夾呼叫 production 的 GetYearCountRdo(內部已含 TOP1+ORDER BY 範圍偵測 + 逐年 COUNT(*)) ──
             Dim yearsB As New Dictionary(Of Integer, Integer)
-            Dim nQueries As Integer = 0
-            Dim swB = Stopwatch.StartNew()
+            Dim yearRdoFail As Integer = 0
+            Dim swYearB = Stopwatch.StartNew()
             For Each item In fList
                 If GetMailCount(item.fPath, item.eid, item.sid) <= 0 Then Continue For
-                Dim rdoFolder As Redemption.RDOFolder = Nothing
-                Try : rdoFolder = TryCast(store.GetFolderFromID(item.eid), Redemption.RDOFolder)
-                Catch : End Try
-                If rdoFolder Is Nothing Then Continue For
-
-                If fmtWinner Is Nothing Then
-                    log.Add("   ── 日期字面值格式測試(全程只測一次)──")
-                    fmtWinner = PickWorkingDateFormat(rdoFolder, minYear, log)
-                    If fmtWinner Is Nothing Then
-                        log.Add("   ✗ 全部候選格式皆失敗 → 中止對拍")
-                        Dim o0 As Object = rdoFolder : TryMarshalRelease(o0)
-                        giveUp = True : Exit For
-                    End If
-                    log.Add($"   → 採用格式: {fmtWinner.Value.fmtStr} (useHash={fmtWinner.Value.useHash})")
-                End If
-
-                Dim r = SpikeYearExecSqlLoop(rdoFolder, minYear, maxYear, fmtWinner.Value.fmtStr, fmtWinner.Value.useHash)
-                nQueries += (maxYear - minYear + 1)
+                Dim r = GetYearCountRdo(item.fPath, item.eid, item.sid)
+                If r Is Nothing Then yearRdoFail += 1 : Continue For
                 For Each kv In r : yearsB(kv.Key) = If(yearsB.ContainsKey(kv.Key), yearsB(kv.Key), 0) + kv.Value : Next
-
-                Dim o As Object = rdoFolder : TryMarshalRelease(o)
             Next
-            swB.Stop()
-            If giveUp Then Continue For
+            swYearB.Stop()
 
-            Dim totalB As Integer = yearsB.Values.Sum()
-            Dim ok As Boolean = (yearsB.Count = yearsA.Count) AndAlso yearsA.All(Function(kv) yearsB.ContainsKey(kv.Key) AndAlso yearsB(kv.Key) = kv.Value)
-            log.Add($"B  RDO ExecSQL COUNT(*)(逐夾×逐年) : {yearsB.Count} 個年份 | 共 {totalB} 封 | {nQueries} 次查詢 | " &
-                    $"{swB.ElapsedMilliseconds} ms ({swB.ElapsedMilliseconds / CDbl(Math.Max(nQueries, 1)):F2} ms/次) | vs A: {If(ok, "一致✓", "✗ 不一致")}")
-            If Not ok Then
+            Dim totalYearB As Integer = yearsB.Values.Sum()
+            Dim yearOk As Boolean = (yearsB.Count = yearsA.Count) AndAlso yearsA.All(Function(kv) yearsB.ContainsKey(kv.Key) AndAlso yearsB(kv.Key) = kv.Value)
+            logDbg($"[年] B GetYearCountRdo(逐夾累加,含範圍偵測+逐年COUNT) : {yearsB.Count} 個年份 | 共 {totalYearB} 封 | RDO失敗={yearRdoFail} | " &
+                   $"{swYearB.ElapsedMilliseconds} ms | vs A: {If(yearOk, "一致✓", "✗ 不一致")} | 加速比: {swYearA.ElapsedMilliseconds / CDbl(Math.Max(swYearB.ElapsedMilliseconds, 1)):F1}x")
+            If Not yearOk Then
                 For Each y In yearsA.Keys.Union(yearsB.Keys).OrderBy(Function(x) x)
                     Dim av As Integer = If(yearsA.ContainsKey(y), yearsA(y), 0)
                     Dim bv As Integer = If(yearsB.ContainsKey(y), yearsB(y), 0)
-                    If av <> bv Then log.Add($"   ✗ {y}: A={av} B={bv}")
+                    If av <> bv Then logDbg($"   ✗ {y}: A={av} B={bv}")
                 Next
             End If
+            grandYearA += swYearA.ElapsedMilliseconds : grandYearB += swYearB.ElapsedMilliseconds
+
+            ' ── [月] 對每個有信資料夾 × 其 OOM 年份集合,逐一測 GetMonthCountOOM(A) vs GetMonthCountRdo(B) ──
+            '   key 用 year*100+month 避免跨年混淆(2026年1月=202601,2025年12月=202512,排序/比對都安全)
+            Dim monthsA As New Dictionary(Of Integer, Integer)
+            Dim monthsB As New Dictionary(Of Integer, Integer)
+            Dim monthPairsTested As Integer = 0, monthRdoFail As Integer = 0
+            Dim swMonthA As New Stopwatch(), swMonthB As New Stopwatch()
+            For Each item In fList
+                Dim folderYears As Dictionary(Of Integer, Integer) = Nothing
+                If Not perFolderYearsOOM.TryGetValue(item.fPath, folderYears) Then Continue For
+                For Each yr As Integer In folderYears.Keys
+                    monthPairsTested += 1
+                    Dim f As Folder = GetFolderById(item.eid, item.sid)
+                    If f Is Nothing Then Continue For
+
+                    swMonthA.Start()
+                    Dim rA = Await GetMonthCountOOM(f, yr, fPath:=item.fPath)
+                    swMonthA.Stop()
+                    For Each kv In rA : Dim key = yr * 100 + kv.Key : monthsA(key) = If(monthsA.ContainsKey(key), monthsA(key), 0) + kv.Value : Next
+
+                    swMonthB.Start()
+                    Dim rB = GetMonthCountRdo(item.fPath, item.eid, item.sid, yr)
+                    swMonthB.Stop()
+                    If rB Is Nothing Then monthRdoFail += 1 : Continue For
+                    For Each kv In rB : Dim key = yr * 100 + kv.Key : monthsB(key) = If(monthsB.ContainsKey(key), monthsB(key), 0) + kv.Value : Next
+                Next
+            Next
+
+            Dim totalMonthA As Integer = monthsA.Values.Sum(), totalMonthB As Integer = monthsB.Values.Sum()
+            Dim monthOk As Boolean = (monthsB.Count = monthsA.Count) AndAlso monthsA.All(Function(kv) monthsB.ContainsKey(kv.Key) AndAlso monthsB(kv.Key) = kv.Value)
+            logDbg($"[月] {monthPairsTested} 組(夾×年) | A GetMonthCountOOM : 共 {totalMonthA} 封 | {swMonthA.ElapsedMilliseconds} ms | " &
+                   $"B GetMonthCountRdo : 共 {totalMonthB} 封 | RDO失敗={monthRdoFail} | {swMonthB.ElapsedMilliseconds} ms | " &
+                   $"vs A: {If(monthOk, "一致✓", "✗ 不一致")} | 加速比: {swMonthA.ElapsedMilliseconds / CDbl(Math.Max(swMonthB.ElapsedMilliseconds, 1)):F1}x")
+            If Not monthOk Then
+                For Each ym In monthsA.Keys.Union(monthsB.Keys).OrderBy(Function(x) x)
+                    Dim av As Integer = If(monthsA.ContainsKey(ym), monthsA(ym), 0)
+                    Dim bv As Integer = If(monthsB.ContainsKey(ym), monthsB(ym), 0)
+                    If av <> bv Then logDbg($"   ✗ {ym \ 100}年{ym Mod 100}月: A={av} B={bv}")
+                Next
+            End If
+            grandMonthA += swMonthA.ElapsedMilliseconds : grandMonthB += swMonthB.ElapsedMilliseconds
         Next
 
-        For Each ln In log : _dbg("YearCountSpike", ln) : Next
-        MessageBox.Show(String.Join(vbCrLf, log), "年份計數對拍結果 (子樹版, ExecSQL vs GetTable) [PROBE_YEARSQL]")
-    End Sub
+        logDbg($"══════ 總計 ══════ 年: A={grandYearA}ms B={grandYearB}ms (加速比 {grandYearA / CDbl(Math.Max(grandYearB, 1)):F1}x) | " &
+               $"月: A={grandMonthA}ms B={grandMonthB}ms (加速比 {grandMonthA / CDbl(Math.Max(grandMonthB, 1)):F1}x)")
+
+        If rootOverride Is Nothing Then
+            MessageBox.Show(String.Join(vbCrLf, logLines), "年份/月份計數對拍結果 (Production: Rdo vs OOM) [PROBE_YEARSQL]")
+        Else
+            Try
+                Dim logPath = IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_YearMonthProbeResult.txt")
+                IO.File.WriteAllText(logPath, fileLog.ToString())
+                _dbg("PROBE_YEARSQL", $"結果已寫入 {logPath}")
+            Catch ex As System.Exception
+                _dbg("PROBE_YEARSQL 寫檔失敗", ex.Message)
+            End Try
+        End If
+    End Function
+    Private Async Function RunAutoProbeYearMonthCounts(arg As String) As Task
+        ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL]: 無 GUI 自動觸發進入點,格式與其他 autoprobe 系列一致。
+        '   格式: /autoprobeym (用 ResolveDefaultProbeFolder 預設值) 或 /autoprobeym:StoreName|FolderName。
+        Dim sw = Stopwatch.StartNew()
+        While (_pstStoreList Is Nothing OrElse _rdo2 Is Nothing) AndAlso sw.Elapsed.TotalSeconds < 30
+            Await Task.Delay(300)
+        End While
+        If _pstStoreList Is Nothing Then _dbg("PROBE_YEARSQL 自動觸發", "逾時: _pstStoreList 未就緒") : Return
+        If _rdo2 Is Nothing Then _dbg("PROBE_YEARSQL 自動觸發", "逾時: _rdo2 未就緒(RDO 未初始化)") : Return
+
+        Dim target As Folder = ResolveProbeTargetFolder(arg, "PROBE_YEARSQL 自動觸發")
+        If target Is Nothing Then Return
+
+        _dbg("PROBE_YEARSQL 自動觸發", $"開始,目標資料夾={target.FolderPath}")
+        Await TestProbeYearMonthCountsRdoVsOOM(target)
+    End Function
 
     ' PROBE_BASICINFO_RDO  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
     Private Async Function TestProbeBasicInfoRdoParity(Optional rootOverride As Folder = Nothing) As Task   ' PROBE_BASICINFO_RDO

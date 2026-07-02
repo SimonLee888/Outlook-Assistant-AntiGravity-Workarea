@@ -298,7 +298,9 @@ Partial Class Form1
         '   ⚠ /autoprobedb 要先判斷(否則會被下面 StartsWith("/autoprobe") 誤吃)。
         Dim autoprobeDbArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase))
         If autoprobeDbArg IsNot Nothing Then Dim unused5 = RunAutoProbeMailInfoDbRoundtrip(autoprobeDbArg)
-        Dim autoprobeArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobe", StringComparison.OrdinalIgnoreCase) AndAlso Not a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase))
+        Dim autoprobeYmArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobeym", StringComparison.OrdinalIgnoreCase))
+        If autoprobeYmArg IsNot Nothing Then Dim unused6 = RunAutoProbeYearMonthCounts(autoprobeYmArg)
+        Dim autoprobeArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobe", StringComparison.OrdinalIgnoreCase) AndAlso Not a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase) AndAlso Not a.StartsWith("/autoprobeym", StringComparison.OrdinalIgnoreCase))
         If autoprobeArg IsNot Nothing Then Dim unused3 = RunAutoProbeBasicInfoRdo(autoprobeArg)
         If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/liststores", StringComparison.OrdinalIgnoreCase)) Then Dim unused4 = RunListStoresDump()
         ' PROBE_BASICINFO_RDO  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------

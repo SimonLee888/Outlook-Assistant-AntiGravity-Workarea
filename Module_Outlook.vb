@@ -504,8 +504,8 @@ Partial Class Form1
     '   - GetAttachMailList(pFolder)        ' Tab3 Phase1，有 DB lazy (attach_maillist)
     '   - GetAttachFilename(mail)           ' Tab3 Phase2，有 DB lazy (attach_filenames)
     '   - GetSubtree(rootFolder)            ' 整棵子資料夾清單，有 DB lazy (2026/04/17)
-    '   - GetYearCountsForFolder(sFolder, fPath:=fPath) ' 單一資料夾年份分佈，有 DB lazy (2026/04/17)
-    '   - GetMonthCountsForYear(sFolder, year)          ' 單一資料夾月份分佈，有 DB lazy + 提前過濾 (2026/04/17)
+    '   - GetYearCount(sFolder, fPath:=fPath) ' 單一資料夾年份分佈，有 DB lazy (2026/04/17)
+    '   - GetMonthCount(sFolder, year)          ' 單一資料夾月份分佈，有 DB lazy + 提前過濾 (2026/04/17)
     ' ---------------------------------------------------------------
     ' 2026/04/07: Phase 2 — 在記憶體 miss 時加入 SQLite lazy SELECT，命中後一次填滿所有欄位
     '             寫入仍由 SaveCachesToDB (SaveCache 按鈕) 批次處理，本層不做即時寫入
@@ -691,13 +691,16 @@ Partial Class Form1
         Return size
 
     End Function
-    Private Async Function GetYearCountsForFolder(fPath As String, eid As String, sid As String, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function GetYearCount(fPath As String, eid As String, sid As String, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
-        ' GetYearCountsForFolder — 單一資料夾年份郵件分佈 (Layer2.5 快取代理)
+        ' GetYearCount — 單一資料夾年份郵件分佈 (Layer2.5 快取代理)
         ' 2026/04/17 by Claude: 從 CollectYearCounts (L2) 拆出，對齊其他 Layer2.5 快取函數架構
-        ' 呼叫順序: ① 記憶體命中 → ② DB lazy load → ③ Layer3 GetYearCountsForFolderL3
+        ' 呼叫順序: ① 記憶體命中 → ② DB lazy load → ③ 讀取派工(RDO 優先,失敗 fallback OOM)
         ' OCE 不在此攔截，直接 re-throw 讓 CollectYearCounts (L2) 的 Catch OCE 接住
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid)。熱路徑①②只靠 fPath,folder 延後到 ③ 才 GetFolderById 物化,消除每夾眼物化的 COM 稅。
+        ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL 驗證通過]: ③ 改為 RDO 派工(GetYearCountRdo via ExecSQL,免物化folder,
+        '   失敗才 fallback GetFolderById + GetYearCountOOM)。探針驗證: TOP1+ORDER BY 範圍偵測 55/55、6/6 兩子樹全數相符,
+        '   加計範圍偵測固定成本後仍比純 OOM 快 1.3x~4x。
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始", fPath & " | ID: " & eid) ' by Gemini 3.5 Flash, 2026/07/01
         Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
@@ -714,23 +717,28 @@ Partial Class Form1
         End If
 
         If _iLikeNoisy Then _dbg("    ├ Cache miss: ", ExtractFolderName(fPath))
-        Dim folder As Folder = GetFolderById(eid, sid)          ' 2026/06/29 by Simon/Claude [Stage2]: 延後物化,只有掉到 ③ COM fallback 才建 folder
-        Dim folderResult = Await GetYearCountsForFolderL3(folder, fPath:=fPath, cToken:=cToken) ' ③ Layer3 COM；OCE re-throw 至 L2
+        ' ③ 讀取派工: RDO 優先(免物化 folder),失敗才 GetFolderById 物化 + OOM
+        Dim folderResult = GetYearCountRdo(fPath, eid, sid)
+        If folderResult Is Nothing Then
+            Dim folder As Folder = GetFolderById(eid, sid)      ' 只有掉到 OOM 才物化
+            folderResult = Await GetYearCountOOM(folder, fPath:=fPath, cToken:=cToken) ' ③b Layer3 COM；OCE re-throw 至 L2
+        End If
         _cacheYearCounts(fPath) = folderResult                  ' ✅ OCE 時走不到此行，快取僅在完整計算後寫入
         Return folderResult
 
     End Function
-    Private Async Function GetMonthCountsForYear(fPath As String, eid As String, sid As String, year As Integer, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function GetMonthCount(fPath As String, eid As String, sid As String, year As Integer, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
-        ' GetMonthCountsForYear — 單一資料夾指定年份月份分佈 (Layer2.5 快取代理)
-        ' 2026/04/17 by Claude: 從 GetMonthCountsForYearL3 拆出快取與提前過濾邏輯
+        ' GetMonthCount — 單一資料夾指定年份月份分佈 (Layer2.5 快取代理)
+        ' 2026/04/17 by Claude: 從 GetMonthCountOOM 拆出快取與提前過濾邏輯
         '   原來的快取/過濾邏輯混在 L3 裡，現在統一到此 L2.5 層，L3 只剩純 COM
         ' 呼叫順序:
         '   提前過濾 1 — GetMailCount=0   → 直接回傳空，不打 COM
         '   提前過濾 2 — _cacheYearCounts 已知該年無信 → 直接回傳空，不打 COM
-        '   ① 記憶體命中 → ② DB lazy load → ③ Layer3 GetMonthCountsForYearL3
+        '   ① 記憶體命中 → ② DB lazy load → ③ 讀取派工(RDO 優先,失敗 fallback OOM)
         ' OCE 不在此攔截，直接 re-throw 讓 CollectMonthCounts (L2) 的 Catch OCE 接住
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid 領頭),folder 延後到 ③才物化
+        ' 2026/07/02 by Simon/Claude: ③ 比照 GetYearCount 套用 RDO 派工(年份架構已驗證,月份不另外測,直接套用)。
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始", fPath & " | Year: " & year) ' by Gemini 3.5 Flash, 2026/07/01
 
@@ -758,9 +766,12 @@ Partial Class Form1
             Return dbResult
         End If
 
-        ' ③ Layer3 COM 呼叫；OCE re-throw，不在此攔截 (寫入快取在 COM 完成後，OCE 天然繞過)
-        Dim folder As Folder = GetFolderById(eid, sid)   ' 2026/06/29 by Simon/Claude [Stage2]: 延後物化,只有掉到 ③ COM fallback 才建 folder
-        Dim monthCounts = Await GetMonthCountsForYearL3(folder, year, fPath:=fPath, cToken:=cToken)
+        ' ③ 讀取派工: RDO 優先(免物化 folder),失敗才 GetFolderById 物化 + OOM;OCE re-throw，不在此攔截 (寫入快取在 COM 完成後，OCE 天然繞過)
+        Dim monthCounts = GetMonthCountRdo(fPath, eid, sid, year)
+        If monthCounts Is Nothing Then
+            Dim folder As Folder = GetFolderById(eid, sid)   ' 只有掉到 OOM 才物化
+            monthCounts = Await GetMonthCountOOM(folder, year, fPath:=fPath, cToken:=cToken)
+        End If
         _cacheMonthCounts(cacheKey) = monthCounts           ' ✅ 完整計算後存入快取
         ' DbSaveMonthCountsSingle(fPath, year, monthCounts) ' ✅ 2026/04/09 設計: 增量寫入 DB (待啟用)
         If _iLikeNoisy Then _dbg(" ├ 結束", fPath & " | Year: " & year & " | 成果: " & If(monthCounts IsNot Nothing, monthCounts.Count.ToString(), "Nothing")) ' by Gemini 3.5 Flash, 2026/07/01
@@ -1488,6 +1499,95 @@ Partial Class Form1
             Return result
         Catch ex As System.Exception
             If _iLikeNoisy Then _dbg("GetMailInfoRdo 失敗", $"{ExtractFolderName(fPath)} | {ex.Message}")
+            Return Nothing
+        Finally
+            TryMarshalRelease(tbl) : TryMarshalRelease(items)
+            Dim o As Object = rdoFolder : TryMarshalRelease(o)
+        End Try
+    End Function
+    Private Function RdoDateLiteral(d As Date) As String
+        ' ExecSQL 只吃 ISO 'yyyy-MM-dd HH:mm:ss' 字面值(InvariantCulture,避開 zh-TW 上午/下午問題);
+        '   8 種候選格式已在 PROBE_YEARSQL 探針全部實測過(見 memory_20260702_1409),只有帶時間的 ISO 格式可解析且不會把 23:59:59 邊界截斷成 00:00:00。
+        Return "'" & d.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) & "'"
+    End Function
+    Private Function GetYearCountRdo(fPath As String, eid As String, sid As String) As ConcurrentDictionary(Of Integer, Integer)
+        ' ---------------------------------------------------------------
+        ' 單一資料夾年份郵件分佈 RDO 讀取層。store-scoped on _rdo2,ExecSQL COUNT(*) 逐年查詢。
+        '   ① 範圍偵測: TOP 1 ReceivedTime ... ORDER BY ASC/DESC 各查一次,找出真實 min/max 年份(不借用其他來源答案)。
+        '   ② 逐年 COUNT(*),日期字面值固定用格式 B('yyyy-MM-dd HH:mm:ss'),不在 production 重跑格式測試(探索階段才需要)。
+        '   探針驗證(2026/07/02 PROBE_YEARSQL): 範圍偵測 100% 準確(兩子樹 55/55、6/6 全數相符);
+        '     加計範圍偵測固定成本後仍比純 OOM 快 1.3x~4x(非早期樂觀估計的 5.5x,那是借用 OOM 答案的簡化版)。
+        '   解析失敗(store/folder 找不到/例外)回 Nothing,由 L2.5 proxy fallback 到 GetYearCountOOM;空夾回空字典(非失敗)。
+        ' 2026/07/02 by Simon/Claude
+        ' ---------------------------------------------------------------
+        Dim store As Redemption.RDOStore = GetRdoStore(fPath)
+        If store Is Nothing Then Return Nothing
+
+        Dim rdoFolder As Redemption.RDOFolder = Nothing
+        Dim items As Object = Nothing, tbl As Object = Nothing
+        Try
+            rdoFolder = TryCast(store.GetFolderFromID(eid), Redemption.RDOFolder)
+            If rdoFolder Is Nothing Then Return Nothing
+            items = rdoFolder.Items
+            tbl = items.MAPITable
+
+            ' ── ① 範圍偵測 ──
+            Dim minDate As Date? = Nothing, maxDate As Date? = Nothing
+            Dim rsMin As Object = tbl.ExecSQL("SELECT TOP 1 ReceivedTime FROM Folder ORDER BY ReceivedTime ASC")
+            If rsMin IsNot Nothing AndAlso Not CBool(rsMin.EOF) Then minDate = CDate(rsMin.Fields(0).Value)
+            If minDate Is Nothing Then Return New ConcurrentDictionary(Of Integer, Integer)()   ' 空夾: 無信,合法空結果,非失敗
+
+            Dim rsMax As Object = tbl.ExecSQL("SELECT TOP 1 ReceivedTime FROM Folder ORDER BY ReceivedTime DESC")
+            If rsMax IsNot Nothing AndAlso Not CBool(rsMax.EOF) Then maxDate = CDate(rsMax.Fields(0).Value)
+            If maxDate Is Nothing Then Return Nothing   ' min 有 max 沒有,資料異常,交給 OOM 保底
+
+            ' ── ② 逐年 COUNT(*) ──
+            Dim result As New ConcurrentDictionary(Of Integer, Integer)
+            For y As Integer = minDate.Value.Year To maxDate.Value.Year
+                Dim lit1 As String = RdoDateLiteral(New Date(y, 1, 1, 0, 0, 0))
+                Dim lit2 As String = RdoDateLiteral(New Date(y, 12, 31, 23, 59, 59))
+                Dim rs As Object = tbl.ExecSQL($"SELECT COUNT(*) FROM Folder WHERE ReceivedTime >= {lit1} AND ReceivedTime <= {lit2}")
+                Dim cnt As Integer = If(rs IsNot Nothing AndAlso Not CBool(rs.EOF), CInt(rs.Fields(0).Value), 0)
+                If cnt > 0 Then result(y) = cnt
+            Next
+            Return result
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("GetYearCountRdo 失敗", $"{ExtractFolderName(fPath)} | {ex.Message}")
+            Return Nothing
+        Finally
+            TryMarshalRelease(tbl) : TryMarshalRelease(items)
+            Dim o As Object = rdoFolder : TryMarshalRelease(o)
+        End Try
+    End Function
+    Private Function GetMonthCountRdo(fPath As String, eid As String, sid As String, year As Integer) As ConcurrentDictionary(Of Integer, Integer)
+        ' ---------------------------------------------------------------
+        ' 單一資料夾指定年份月份分佈 RDO 讀取層。store-scoped on _rdo2,逐月 ExecSQL COUNT(*)(固定12次,年份已知不需範圍偵測)。
+        '   架構比照 GetYearCountRdo(2026/07/02 由 Simon 拍板: 年份架構已驗證,月份不用另外開探針測,直接套用)。
+        '   解析失敗回 Nothing,由 L2.5 proxy fallback 到 GetMonthCountOOM。
+        ' 2026/07/02 by Simon/Claude
+        ' ---------------------------------------------------------------
+        Dim store As Redemption.RDOStore = GetRdoStore(fPath)
+        If store Is Nothing Then Return Nothing
+
+        Dim rdoFolder As Redemption.RDOFolder = Nothing
+        Dim items As Object = Nothing, tbl As Object = Nothing
+        Try
+            rdoFolder = TryCast(store.GetFolderFromID(eid), Redemption.RDOFolder)
+            If rdoFolder Is Nothing Then Return Nothing
+            items = rdoFolder.Items
+            tbl = items.MAPITable
+
+            Dim result As New ConcurrentDictionary(Of Integer, Integer)
+            For m As Integer = 1 To 12
+                Dim startDate As New Date(year, m, 1, 0, 0, 0)
+                Dim endDate As Date = startDate.AddMonths(1).AddSeconds(-1)
+                Dim rs As Object = tbl.ExecSQL($"SELECT COUNT(*) FROM Folder WHERE ReceivedTime >= {RdoDateLiteral(startDate)} AND ReceivedTime <= {RdoDateLiteral(endDate)}")
+                Dim cnt As Integer = If(rs IsNot Nothing AndAlso Not CBool(rs.EOF), CInt(rs.Fields(0).Value), 0)
+                If cnt > 0 Then result(m) = cnt
+            Next
+            Return result
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("GetMonthCountRdo 失敗", $"{ExtractFolderName(fPath)} | {year}年 | {ex.Message}")
             Return Nothing
         Finally
             TryMarshalRelease(tbl) : TryMarshalRelease(items)
@@ -2223,7 +2323,7 @@ Partial Class Form1
         ' ② 兩層都失敗，回傳 -1 讓呼叫端知道失敗了
         Return -1
     End Function
-    Private Async Function GetYearCountsForFolderL3(folder As Folder, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function GetYearCountOOM(folder As Folder, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' === Layer3: COM 資料層 ===
         ' 職責: 對 Outlook 發出 COM 呼叫，回傳單一資料夾的年份郵件分佈
@@ -2278,18 +2378,18 @@ Partial Class Form1
         Return yearCounts
 
     End Function
-    Private Async Function GetMonthCountsForYearL3(folder As Folder, year As Integer, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function GetMonthCountOOM(folder As Folder, year As Integer, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
-        ' GetMonthCountsForYearL3 — Layer3 COM 資料層: 單一資料夾月份郵件分佈
+        ' GetMonthCountOOM — Layer3 COM 資料層: 單一資料夾月份郵件分佈
         ' 職責: 對 Outlook 發出 COM 呼叫，回傳單一資料夾在指定年份中每個月的郵件數量
-        ' 規則: 不做快取、不做提前過濾、不遞迴 (這些全部交給 GetMonthCountsForYear L2.5 負責)
+        ' 規則: 不做快取、不做提前過濾、不遞迴 (這些全部交給 GetMonthCount L2.5 負責)
         '       OCE 不在此攔截，直接 re-throw 讓呼叫端感知取消
         ' 原始設計: 2026/3/24 by Gemini — 從逐月 Restrict 改為 GetTable + GetArray 一次讀完
         '   原本 12 次 Restrict + 12 次 Items.Count = 24 次 COM call
         '   現在 1 次 GetTable (含日期範圍 filter) + ceil(N/1000) 次 GetArray
         ' 2026/04/15 by Claude/Gemini: 加入 cToken 參數與 fPath 參數
         '   由 L2.5 直接傳入 fPath，完全消除 pFolder.FolderPath 的 COM 開銷
-        ' 2026/04/17 by Claude: 拆出快取/提前過濾邏輯至 GetMonthCountsForYear (L2.5)，此函數僅剩純 COM
+        ' 2026/04/17 by Claude: 拆出快取/提前過濾邏輯至 GetMonthCount (L2.5)，此函數僅剩純 COM
         ' ---------------------------------------------------------------
         fPath = SafeGetPath(folder, fPath)
         Dim fName As String = ExtractFolderName(fPath)
@@ -2318,7 +2418,7 @@ Partial Class Form1
                 ' 2026/04/15: OCE 向上冒泡，不在此攔截 (快取寫入在呼叫端 L2.5，OCE 自然繞過)
             Loop
         Catch ex As OperationCanceledException
-            If _iLikeNoisy Then _dbg("    ├ 已取消", $"{fName} ({year} 年)") : Throw      ' 2026/04/15: re-throw 讓 GetMonthCountsForYear (L2.5) 感知，不寫入快取
+            If _iLikeNoisy Then _dbg("    ├ 已取消", $"{fName} ({year} 年)") : Throw      ' 2026/04/15: re-throw 讓 GetMonthCount (L2.5) 感知，不寫入快取
         Catch ex As System.Exception
             If _iLikeNoisy Then _dbg("    ├ 錯誤", $"{fName}, year={year}: {ex.Message}") ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally

@@ -457,20 +457,23 @@ Partial Class Form1
                 ' 快取命中判斷: 兩個快取都有才算完整命中 (任一失效都重新計算，確保一致性)
                 Dim cachedMail As Integer, cachedSub As Integer
                 Dim isHit As Boolean = False
+                ' 2026/07/01 by Simon/Claude: 修復冷啟動(全新DB)子樹展不開的 regression —
+                '   記錄「此節點本身是否已被記憶體/DB 記錄過」，供下方 GetSortedSubFolderIDs 判斷
+                '   查無子項時是「真葉節點」還是「DB 根本沒掃過的未知節點」，只有後者才需要 COM fallback
+                Dim selfKnownToDb As Boolean = False
                 If _cacheMailCountAll.TryGetValue(fPath, cachedMail) AndAlso _cacheFolderCountAll.TryGetValue(fPath, cachedSub) Then
-                    isHit = True    ' ① 記憶體命中
+                    isHit = True            ' ① 記憶體命中
+                    selfKnownToDb = True    ' 記憶體已有值 = 本 session 已展開過，視為已知節點
                 Else
                     ' ② DB lazy load：只填本層欄位（mc/fc/fs/身分標識），不以 mca/fca 做剪枝
-                    ' by Claude Sonnet 4.6, 2026/04/25: 選項 A 修正 — DB 的 mca/fca/fsa 帶有模式語意，
-                    '   無法確認是在哪個 _showAllFolders 模式下計算並儲存的。
+                    ' by Claude Sonnet 4.6, 2026/04/25: 選項 A 修正 — DB 的 mca/fca/fsa 帶有模式語意，無法確認是在哪個 _showAllFolders 模式下計算並儲存的。
                     '   若直接使用 DB 值做剪枝，切換模式後或重啟後第一次統計會顯示舊模式的錯誤加總。
                     '   skipAggregates:=True → FillCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
-                    '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，
-                    '   重算結果透過 UpdateFolderStatsCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
+                    '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，重算結果透過 UpdateFolderStatsCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
                     '   效能代價：每次切換或重啟後第一次統計需完整展開（不能 DB 剪枝），可接受。
                     Dim row = DbGetFolderStats(fPath)
                     If row IsNot Nothing Then FillCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
-                    ' isHit 保持 False，BFS 不剪枝，繼續展開子資料夾重算聚合值
+                    selfKnownToDb = (row IsNot Nothing)   ' 2026/07/01 by Simon/Claude: DB 有查到記錄 = 已知節點(即使查無子項也信任是真葉節點) isHit 保持 False，BFS 不剪枝，繼續展開子資料夾重算聚合值
                 End If
 
                 If isHit Then
@@ -478,8 +481,7 @@ Partial Class Form1
                     entry.TotalSubCount = cachedSub
                     entry.IsFromCache = True
 
-                    ' ★ v4 bug fix: root (parentIdx=-1) 即使快取命中，也要繼續展開直屬子資料夾
-                    ' 只有非 root 節點才允許剪枝
+                    ' ★ v4 bug fix: root (parentIdx=-1) 即使快取命中，也要繼續展開直屬子資料夾，只有非 root 節點才允許剪枝
                     If curr.parentIdx <> -1 Then Continue Do
                 End If
 
@@ -488,7 +490,8 @@ Partial Class Form1
                 ' 優化第七點：將 GetSortedSubFolders 提取至變數，提升代碼可讀性並利於 Debug (by Gemini 3 Flash, 2026/05/05)
                 ' 2026/06/29 by Simon/Claude [Option A1]: 改走免物化的 GetSortedSubFolderIDs(回 path/eid/sid 純資料)，
                 '   path 直接用 DB 回傳(同源於冷快取時 COM 組裝)，不再 subFolder.Name 重爬 COM；DB 無此節點才退 ③ 列舉
-                Dim sortedSubs = GetSortedSubFolderIDs(fPath, curr.eid, curr.sid)
+                ' 2026/07/01 by Simon/Claude: 多傳入 selfKnownToDb，讓 ③ COM fallback 只在真正未知節點觸發(修復冷啟動 regression)
+                Dim sortedSubs = GetSortedSubFolderIDs(fPath, curr.eid, curr.sid, selfKnownToDb)
                 For Each subRow In sortedSubs
                     queue.Enqueue((subRow.eid, subRow.sid, subRow.path, myIdx))
                 Next
@@ -497,8 +500,7 @@ Partial Class Form1
         Catch ex As OperationCanceledException
             ' 2026/04/11 by Claude: 改為 re-throw，確保不完整的 BFS 樹不會繼續傳入
             ' UpdateFolderStatsCache，避免錯誤的中途統計結果汙染快取。
-            ' (原本 catch 後繼續 Return allEntries，導致上層 CollectFolderStatsByBFS
-            '  看不到中斷，仍執行 SummarizeSubTreeBottomUp + UpdateFolderStatsCache)
+            ' (原本 catch 後繼續 Return allEntries，導致上層 CollectFolderStatsByBFS 看不到中斷，仍執行 SummarizeSubTreeBottomUp + UpdateFolderStatsCache)
             _dbg("    ├ 中斷", $"BuildBfsFolderTree 已由使用者中斷")
             Throw
         End Try
@@ -726,6 +728,7 @@ Partial Class Form1
         ' 2026/05/13 by Claude Sonnet 4.6
         ' ─────────────────────────────────────────────────────────────────────
         _dbg("開始")
+        Dim sw As Stopwatch = Stopwatch.StartNew()   ' 2026/07/01 by Claude: F5 計時
         Dim selectedNodes As List(Of TreeNode) = SimTree1.SelectedNodes
         If selectedNodes.Count = 0 Then Return
 
@@ -779,7 +782,7 @@ Partial Class Form1
 
             ' ⑤ 持久化
             Await SaveCachesToDB()
-            PgrsBar1.Text = "F5 強制更新完成"
+            PgrsBar1.Text = "F5 強制更新完成，花費 " & sw.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
 
         Catch ex As OperationCanceledException
             PgrsBar1.Text = "由使用者中斷。"
@@ -1127,7 +1130,7 @@ Partial Class Form1
     '                                RenderLv2YearView, RenderCt2YearView
     '                                RenderLv2MonthView, RenderCt2MonthView
     '                                GoToLv2YearView, GoToLv2MonthView
-    '   Layer3 (COM 資料層)      : GetYearCountsForFolderL3, GetMonthCountsForYearL3 (Form1_Outlook.vb，不動)
+    '   Layer3 (COM 資料層)      : GetYearCountRdo/OOM, GetMonthCountRdo/OOM (Module_Outlook.vb)
     ' ==============================================================
 #Region "  ├ Layer1 UI事件層"
     Private Async Sub SimTree2_AfterSelect(sender As Object, e As TreeViewEventArgs) Handles SimTree2.AfterSelect
@@ -1475,11 +1478,11 @@ Partial Class Form1
                     processedFolders += 1 : Continue For
                 End If
 
-                ' 2026/04/17 by Claude: 改呼叫 GetYearCountsForFolder (L2.5)，移除原本內嵌的①②③快取邏輯
-                ' ①記憶體命中 ②DB lazy ③Layer3 COM 全部封裝在 GetYearCountsForFolder 內，與其他 L2.5 cache proxy layer 一致
-                ' OCE re-throw 由 GetYearCountsForFolder → GetYearCountsForFolderL3 往上冒泡，被本層 Catch OCE 接住
+                ' 2026/04/17 by Claude: 改呼叫 GetYearCount (L2.5)，移除原本內嵌的①②③快取邏輯
+                ' ①記憶體命中 ②DB lazy ③Layer3 COM(RDO優先,失敗fallback OOM) 全部封裝在 GetYearCount 內，與其他 L2.5 cache proxy layer 一致
+                ' OCE re-throw 由 GetYearCount → GetYearCountOOM 往上冒泡，被本層 Catch OCE 接住(RDO 路徑不拋 OCE)
                 ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple,眼物化移除——folder 由免-folder 多載延後到 ③ 才建
-                Dim folderResult As ConcurrentDictionary(Of Integer, Integer) = Await GetYearCountsForFolder(fPath, eid, sid, cToken:=cToken)
+                Dim folderResult As ConcurrentDictionary(Of Integer, Integer) = Await GetYearCount(fPath, eid, sid, cToken:=cToken)
 
                 merged = MergeDictionaries(merged, folderResult)    ' 把這個資料夾的結果合併到總計 (純 .NET 運算，不碰 COM)
                 processedCount += folderResult.Values.Sum()         ' 累加已處理郵件數，透過 callback 通知 Layer1 更新進度顯示
@@ -1501,7 +1504,7 @@ Partial Class Form1
     Private Async Function CollectMonthCounts(selectedYear As Integer, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' 月份資料收集 Layer2 (2026/04/12 由 ShowMonthView 計算部分拆出) 
-        ' 職責: 遍歷 _tv2FolderList，對每個資料夾呼叫 GetMonthCountsForYearL3，合併結果，回報進度
+        ' 職責: 遍歷 _tv2FolderList，對每個資料夾呼叫 GetMonthCount(RDO優先,失敗fallback OOM)，合併結果，回報進度
         '       不碰 UI render (render 由 GoToLv2MonthView 的 RenderLv2MonthView / RenderCt2MonthView 負責) 
         '       cToken 與 CollectYearCounts 同理，都需要傳入以支援 ESC 中斷
         '       OperationCanceledException 由 caller (GoToLv2MonthView → DoubleClick / HandleListViewKeyPress) 的 Catch 攔截
@@ -1520,10 +1523,10 @@ Partial Class Form1
             Dim sid As String = _tv2FolderList(i).sid
             Dim fPath As String = _tv2FolderList(i).fPath
             processedFolders += 1
-            ' 2026/04/15 by Gemini 3.1 Pro: 傳入快取好的 fPath，消除 GetMonthCountsForYear 內的 COM 開銷
-            ' 2026/04/17 by Claude: 改呼叫 GetMonthCountsForYear (L2.5)，提前過濾/快取/DB lazy 全封裝於內
+            ' 2026/04/15 by Gemini 3.1 Pro: 傳入快取好的 fPath，消除 GetMonthCount 內的 COM 開銷
+            ' 2026/04/17 by Claude: 改呼叫 GetMonthCount (L2.5)，提前過濾/快取/DB lazy 全封裝於內
             ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple,眼物化移除——folder 由免-folder 多載延後到 ③ 才建
-            Dim folderMonthCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCountsForYear(fPath, eid, sid, selectedYear, cToken:=cToken)
+            Dim folderMonthCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCount(fPath, eid, sid, selectedYear, cToken:=cToken)
             monthCounts = MergeDictionaries(monthCounts, folderMonthCounts)
 
             ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判

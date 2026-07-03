@@ -144,6 +144,11 @@ Partial Class Form1
 #Else
         _isDebugMode = False
 #End If
+        ' 2026/07/03 by Simon/Claude Fable 5: 提前登記 ActiveInstance (原本要等 DebugForm.Load 才設)。
+        '   VB 預設實例是 thread-local — 啟動早期背景執行緒 (EULA hook thread / AutoDismiss thread) 走 _dbg 的
+        '   fallback 路徑時，會各自建立「幽靈 DebugForm」，訊息進了沒人看得到的佇列 (2026/07/03 實測: RDO init
+        '   期間背景執行緒 log 全數消失)。從 UI 執行緒先建立預設實例並登記，訊息就會累積在真實例的佇列，待顯示時流出。
+        If _isDebugMode Then DebugForm.ActiveInstance = DebugForm
         _dbg("開始") ' debugForm 開始計時
         Dim stopwatch As Stopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
 
@@ -292,18 +297,6 @@ Partial Class Form1
         ' added by Gemini 3.1 Pro, 2026/04/12: 在所有的背景預載跟 Tab 初始化完成後，把一開始被蓋掉的啟動時間訊息重新顯示到 ProgressBar 上
         Dim firstMsgItem = _statusHistory.FirstOrDefault(Function(x) x.Source = "PB1")
         If Not String.IsNullOrEmpty(firstMsgItem.Message) Then PgrsBar1.Text = firstMsgItem.Message
-
-        ' PROBE_BASICINFO_RDO  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
-        ' 2026/07/02 by Claude: 無 GUI 自動觸發,命令列帶 /autoprobe 或 /autoprobe:StoreName|FolderName 才會啟動,正常啟動完全不受影響。
-        '   ⚠ /autoprobedb 要先判斷(否則會被下面 StartsWith("/autoprobe") 誤吃)。
-        Dim autoprobeDbArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase))
-        If autoprobeDbArg IsNot Nothing Then Dim unused5 = RunAutoProbeMailInfoDbRoundtrip(autoprobeDbArg)
-        Dim autoprobeYmArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobeym", StringComparison.OrdinalIgnoreCase))
-        If autoprobeYmArg IsNot Nothing Then Dim unused6 = RunAutoProbeYearMonthCounts(autoprobeYmArg)
-        Dim autoprobeArg = Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("/autoprobe", StringComparison.OrdinalIgnoreCase) AndAlso Not a.StartsWith("/autoprobedb", StringComparison.OrdinalIgnoreCase) AndAlso Not a.StartsWith("/autoprobeym", StringComparison.OrdinalIgnoreCase))
-        If autoprobeArg IsNot Nothing Then Dim unused3 = RunAutoProbeBasicInfoRdo(autoprobeArg)
-        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/liststores", StringComparison.OrdinalIgnoreCase)) Then Dim unused4 = RunListStoresDump()
-        ' PROBE_BASICINFO_RDO  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
 
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
@@ -1069,6 +1062,7 @@ Partial Class Form1
         _dbg("開始")
 
         Try ' by Gemini, 2026/04/01: 根據選定的分頁動態載入 UI 與資料 (Lazy Load UI)
+            _lv4SimCToken?.Cancel()   ' 2026/07/03 by Claude Sonnet 5: 切換分頁時取消Tab4尚未完成的相似度背景計算，避免離開Tab4後仍持續讀取mail body拖累其他分頁操作與DB寫入
             PgrsBar1.Text = "" : PgrsBar2.Text = ""
             Dim selectedTab As TabPage = CType(sender, TabControl).SelectedTab
             Dim tabIndex As Integer = TabControl1.SelectedIndex + 1 ' 產生 1, 2, 3, 4, 5 (Tab1~5)
@@ -2188,11 +2182,14 @@ Partial Class Form1
 
         _cacheFolderTree.Clear()
         _cacheSubTreeList.Clear()
-        _cacheIsMailFolder.Clear()
-        _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理
+        _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理 (2026/07/03: 已併入 isMail，_cacheIsMailFolder 汰除)
 
         _cacheMailBody.Clear()      ' 2026/6/18 by simon, 之前漏掉了現在補上
         _cacheMailInfo.Clear() ' 2026/6/18 by simon, 之前漏掉了現在補上
+
+        ' 2026/07/03 by Simon/Claude Fable 5: 記憶體被整批清空，尚未存檔的 dirty 標記已無資料可寫，一併清除避免殘留幽靈標記
+        _dirtyMailFolders.Clear()
+        _cacheCleanSubject.Clear()  ' GetCleanSubject 的 memoization 快取，同批清理
 
     End Sub
 #End Region

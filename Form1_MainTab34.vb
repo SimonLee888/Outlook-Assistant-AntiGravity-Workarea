@@ -715,6 +715,7 @@ Partial Class Form1
                     ' by Claude Sonnet 4.6, 2026/05/29: 廢棄變數，直接由下面 Lv4Topic.Visible = False 控制
 
                     _tv4SelectedTopicMailList = Nothing
+                    _lv4SimCToken?.Cancel()   ' 2026/07/03 by Claude Sonnet 5: 整個系列被清空前先取消尚未完成的相似度背景計算
                     Listview4.Items.Clear()
                     Lv4Topic.Visible = False : SimTree4.Visible = True : SimTree4.Focus()
 

@@ -43,7 +43,7 @@ Partial Class Form1
     ' ==============================================================
     '   Layer1  TreeView1_AfterSelect         UI 事件層：序號防護 + 批次寫 ListView
     '   Layer2  CollectFolderStatsByBFS       流程協調層，拆成五個子函數：
-    '             - BuildBfsFolderTree        BFS + 快取剪枝 (2026-04-08 加入 DB lazy，不驗 snapshot) 
+    '             - BuildBfsFolderTree        GetSubtree骨架 + 記憶體剪枝 (2026-04-08 加入 DB lazy 不驗 snapshot；2026/07/02 骨架整合)
     '             - FetchDirectMailCountsAsync呼叫 GetMailCount (有記憶體+DB lazy+COM 三層) 
     '             - SummarizeSubTreeBottomUp  純記憶體底部向上加總
     '             - UpdateFolderStatsCache    寫入 L2.5 快取字典
@@ -177,6 +177,11 @@ Partial Class Form1
 
             If _tab1SelectSeq <> mySeq Then Return  ' 序號機制配對：在 Await 回來後，若使用者已點擊其他節點，則放棄渲染
             RenderLv1(allItems)            ' ── 執行渲染 (UI 呈現) ──
+
+            ' 2026/07/03 by Simon/Claude: 與 EnterSelectedFolder 統一行為 — 單選時自動算子資料夾大小。
+            '   GetSubtree 骨架整合後 ComputeFolderSize 明顯變快，單層子資料夾即使亂點也能承受；
+            '   多選(deDupedNodes.Count > 1) 則不觸發，避免多個大資料夾同時展開造成瀏覽卡頓。
+            If deDupedNodes.Count = 1 Then ComputeFolderSize(Nothing, Nothing)
 
         Catch ex As OperationCanceledException
             _dbg("結束", "ESC 中斷") : PgrsBar1.Text = "由使用者中斷。" : Return
@@ -346,7 +351,7 @@ Partial Class Form1
         ' v5: 原有的百行巨型函數已被依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。
         '
         ' 拆分後的五個步驟 (Steps):
-        '   Step 1. BuildBfsFolderTree          : BFS 展開，收集整棵子樹的所有節點；若快取命中(非root)則剪枝。
+        '   Step 1. BuildBfsFolderTree          : GetSubtree 骨架一次展開 + 記憶體剪枝(2026/07/02 骨架整合)；若快取命中(非root)則剪枝。
         '   Step 2. FetchDirectMailCountsAsync  : 對未快取節點逐一呼叫 GetMailCount() 取本層郵件數。
         '                                         處理 progress 報告並支援 _cancelRequested 中斷。
         '   Step 3. SummarizeSubTreeBottomUp    : 利用 BFS「父索引 < 子索引」特性，從陣列尾端往前掃一次完成加總。
@@ -362,9 +367,9 @@ Partial Class Form1
         _dbg(" ├ 開始", rName)
 
         ' ── Step 1: 負責展開樹狀結構與初步快取剪枝 (by Gemini, 2026/04/05 改為非同步以提升響應)
-        ' pending B: 目前第二耗時, 占30~35%
+        ' pending B: 舊版(自走樹)占30~35%；2026/07/02 骨架整合後改吃 GetSubtree，冷啟動走 RDO 批次，請以新 PROBE_TIMING 數字重新評估
         Dim swP As Stopwatch = Stopwatch.StartNew()   ' PROBE_TIMING
-        Dim allEntries As List(Of FolderBfsEntry) = Await BuildBfsFolderTree(rootFolder, cToken:=cToken)
+        Dim allEntries As List(Of FolderBfsEntry) = Await BuildBfsFolderTree(rootFolder, cToken:=cToken, progress:=progress)
         Dim t1 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()    ' PROBE_TIMING
 
         ' ── Step 2: 負責與 COM 溝通，取得基本數據 
@@ -432,16 +437,60 @@ Partial Class Form1
     End Function
 
     ' 以下為 CollectFolderStatsByBFS 專用的拆分子函數 (Steps 1~5)
-    Private Async Function BuildBfsFolderTree(rootFolder As Folder, cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
-        ' 負責: 維護 Queue 執行 BFS，根據 Layer2.5 快取字典決定是否剪枝。
-        ' 產出: 所有走訪過的資料夾陣列，每個元素皆紀錄了其 ParentIndex。
+    Private Async Function BuildBfsFolderTree(rootFolder As Folder, cToken As CancellationToken, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of List(Of FolderBfsEntry))
+        ' 負責: 展開整棵子樹 + 依 Layer2.5 快取字典剪枝，產出「父索引 < 子索引」的 FolderBfsEntry 陣列。
+        ' 2026/07/02 by Simon/Claude [骨架整合]: 不再自己逐節點走樹(原: 每節點 DbGetOrderedSubFolderIDs 查一次 DB + 未知節點退 COM 物化)。
+        '   改為一次呼叫 GetSubtree(L2.5) 取完整骨架: ①記憶體 _cacheSubTreeList → ②DB 一條 LIKE → ③RDO 批次(GetSubtreeRdo) → ④OOM BFS。
+        '   Tab1 從此與 Tab2-5 共用同一份骨架快取；冷啟動由 RDO 批次/OOM 全樹掃接手，
+        '   原 selfKnownToDb 冷啟動特判(2026/07/01)與 GetSortedSubFolderIDs 的 ③ COM 物化退路從此不再需要。
+        '   保留的既有語意 (只是搬到記憶體樹上執行):
+        '     - 剪枝規則: 非 root 節點 mca/fca 雙快取命中才剪枝；root 永遠展開直屬子夾(v4 bug fix)。
+        '     - DB lazy: 未命中節點 DbGetFolderStats + FillCacheFromDbRow(skipAggregates:=True) 只填本層欄位，不驗 snapshot(原樣)。
+        '     - 模式過濾: 骨架為完整全集，套 FilterSubtreeByMode 對齊原 DbGetOrderedSubFolderIDs 的 is_mail 過濾。
+        '     - 顯示排序: 比照 DbGetOrderedSubFolderIDs 的 ORDER BY has_chinese ASC, folder_path ASC，在記憶體對每層子夾排序，
+        '                 確保 GetBfsResult 取 ParentIndex=0 的顯示順序不變。
         If _iLikeNoisy Then _dbg("    ├ 開始", rootFolder.Name)
+        Dim swP As Stopwatch = Stopwatch.StartNew()     ' PROBE_TIMING
 
-        ' 預分配容量為 512，足以涵蓋 90% 以上用戶的資料夾數量，避免 BFS 過程中的陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
-        Dim allEntries As New List(Of FolderBfsEntry)(512)
-        ' 2026/06/29 by Simon/Claude [Option A1]: queue 改持純 id tuple(eid/sid/path/parentIdx)，走樹零 COM 物化
+        ' ── ① 一次取得完整骨架 (首元素為 root 自身，含非郵件夾) ──
+        Dim rootPath As String = SafeGetPath(rootFolder)
+        Dim skeleton As List(Of (eid As String, sid As String, fPath As String)) = Await GetSubtree(rootFolder, includeSubF:=True, progress:=progress, cToken:=cToken)
+        Dim tSkel As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()     ' PROBE_TIMING
+
+        ' ── ② 模式過濾 + 建 parent → children 記憶體樹 (字典寫法比照 FilterSubtreeByMode) ──
+        Dim filtered As List(Of (eid As String, sid As String, fPath As String)) = FilterSubtreeByMode(skeleton, rootPath)
+        Dim byPath As New Dictionary(Of String, (eid As String, sid As String, fPath As String))(filtered.Count)
+        For Each t In filtered : byPath(t.fPath) = t : Next
+        Dim childrenOf As New Dictionary(Of String, List(Of (eid As String, sid As String, fPath As String)))(filtered.Count)
+        For Each t In filtered
+            Dim sepIdx As Integer = t.fPath.LastIndexOf("\"c)
+            If sepIdx > 0 Then
+                Dim parentPath As String = t.fPath.Substring(0, sepIdx)
+                If byPath.ContainsKey(parentPath) Then
+                    Dim lst As List(Of (eid As String, sid As String, fPath As String)) = Nothing
+                    If Not childrenOf.TryGetValue(parentPath, lst) Then lst = New List(Of (eid As String, sid As String, fPath As String))() : childrenOf(parentPath) = lst
+                    lst.Add(t)
+                End If
+            End If
+        Next
+        For Each kv In childrenOf   ' 英文優先排序，對齊 DbGetOrderedSubFolderIDs 的 SQL ORDER BY (has_chinese ASC, folder_path ASC)
+            kv.Value.Sort(Function(a, b)
+                              Dim ha As Integer = If(TextHasChineseChar(ExtractFolderName(a.fPath)), 1, 0)
+                              Dim hb As Integer = If(TextHasChineseChar(ExtractFolderName(b.fPath)), 1, 0)
+                              If ha <> hb Then Return ha.CompareTo(hb)
+                              Return String.CompareOrdinal(a.fPath, b.fPath)
+                          End Function)
+        Next
+
+        ' ── ③ 記憶體樹上執行原有 BFS + 快取剪枝 (剪枝/DB lazy 邏輯原樣，資料來源從 DB/COM 換成 childrenOf 字典) ──
+        Dim allEntries As New List(Of FolderBfsEntry)(Math.Max(filtered.Count, 16))
+        ' 2026/06/29 by Simon/Claude [Option A1]: queue 持純 id tuple(eid/sid/path/parentIdx)，走樹零 COM 物化 (原樣保留)
         Dim queue As New Queue(Of (eid As String, sid As String, path As String, parentIdx As Integer))(512)
-        queue.Enqueue((rootFolder.EntryID, rootFolder.StoreID, SafeGetPath(rootFolder), -1))
+        Dim rootT As (eid As String, sid As String, fPath As String) = Nothing
+        If Not byPath.TryGetValue(rootPath, rootT) Then     ' 理論上骨架必含 root；保底直接讀一次 COM 身分證
+            Try : rootT = (rootFolder.EntryID, rootFolder.StoreID, rootPath) : Catch : rootT = ("", "", rootPath) : End Try
+        End If
+        queue.Enqueue((rootT.eid, rootT.sid, rootPath, -1))
 
         ' by Gemini, 2026/04/05: 每 100ms 主動讓出執行緒並檢查中斷，兼顧效能與靈敏度
         Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
@@ -457,13 +506,8 @@ Partial Class Form1
                 ' 快取命中判斷: 兩個快取都有才算完整命中 (任一失效都重新計算，確保一致性)
                 Dim cachedMail As Integer, cachedSub As Integer
                 Dim isHit As Boolean = False
-                ' 2026/07/01 by Simon/Claude: 修復冷啟動(全新DB)子樹展不開的 regression —
-                '   記錄「此節點本身是否已被記憶體/DB 記錄過」，供下方 GetSortedSubFolderIDs 判斷
-                '   查無子項時是「真葉節點」還是「DB 根本沒掃過的未知節點」，只有後者才需要 COM fallback
-                Dim selfKnownToDb As Boolean = False
                 If _cacheMailCountAll.TryGetValue(fPath, cachedMail) AndAlso _cacheFolderCountAll.TryGetValue(fPath, cachedSub) Then
                     isHit = True            ' ① 記憶體命中
-                    selfKnownToDb = True    ' 記憶體已有值 = 本 session 已展開過，視為已知節點
                 Else
                     ' ② DB lazy load：只填本層欄位（mc/fc/fs/身分標識），不以 mca/fca 做剪枝
                     ' by Claude Sonnet 4.6, 2026/04/25: 選項 A 修正 — DB 的 mca/fca/fsa 帶有模式語意，無法確認是在哪個 _showAllFolders 模式下計算並儲存的。
@@ -471,9 +515,15 @@ Partial Class Form1
                     '   skipAggregates:=True → FillCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
                     '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，重算結果透過 UpdateFolderStatsCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
                     '   效能代價：每次切換或重啟後第一次統計需完整展開（不能 DB 剪枝），可接受。
-                    Dim row = DbGetFolderStats(fPath)
-                    If row IsNot Nothing Then FillCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
-                    selfKnownToDb = (row IsNot Nothing)   ' 2026/07/01 by Simon/Claude: DB 有查到記錄 = 已知節點(即使查無子項也信任是真葉節點) isHit 保持 False，BFS 不剪枝，繼續展開子資料夾重算聚合值
+                    '   (2026/07/02 骨架整合註記: 此處每節點一次 DbGetFolderStats 點查詢原本被刻意保留，目的是預熱 _cacheMailCount，
+                    '    讓 Step2 的 GetMailCount 走 ① 記憶體命中而不觸發「DB lazy + snapshot 驗證」的逐夾 COM 讀取。
+                    '   2026/07/03 by Simon/Claude [PROBE_HIERCNT 通過後]: mc/fc 現在已由 Step①的 GetSubtree(RDO 批次)免費回填,
+                    '    只剩 fs 仍無免費來源。三者都已在記憶體時這次點查詢已無新資訊可拿，跳過(FillCacheFromDbRow 是 TryAdd 語意本就不覆寫，
+                    '    此處只是省掉白做工的 SQL 往返，行為不變)。任一者仍缺才照原樣查 DB。
+                    If Not _cacheMailCount.ContainsKey(fPath) OrElse Not _cacheFolderCount.ContainsKey(fPath) OrElse Not _cacheFolderSize.ContainsKey(fPath) Then
+                        Dim row = DbGetFolderStats(fPath)
+                        If row IsNot Nothing Then FillCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
+                    End If
                 End If
 
                 If isHit Then
@@ -485,16 +535,11 @@ Partial Class Form1
                     If curr.parentIdx <> -1 Then Continue Do
                 End If
 
-                ' 未命中，或是 root (不論有無快取) → 展開直屬子資料夾
-                ' 傳入 fPath 給 GetSortedSubFolders 省去內部重爬 COM，並用字串組裝下一層路徑 (by Gemini 3.1 Pro)
-                ' 優化第七點：將 GetSortedSubFolders 提取至變數，提升代碼可讀性並利於 Debug (by Gemini 3 Flash, 2026/05/05)
-                ' 2026/06/29 by Simon/Claude [Option A1]: 改走免物化的 GetSortedSubFolderIDs(回 path/eid/sid 純資料)，
-                '   path 直接用 DB 回傳(同源於冷快取時 COM 組裝)，不再 subFolder.Name 重爬 COM；DB 無此節點才退 ③ 列舉
-                ' 2026/07/01 by Simon/Claude: 多傳入 selfKnownToDb，讓 ③ COM fallback 只在真正未知節點觸發(修復冷啟動 regression)
-                Dim sortedSubs = GetSortedSubFolderIDs(fPath, curr.eid, curr.sid, selfKnownToDb)
-                For Each subRow In sortedSubs
-                    queue.Enqueue((subRow.eid, subRow.sid, subRow.path, myIdx))
-                Next
+                ' 未命中，或是 root (不論有無快取) → 展開直屬子資料夾 (純記憶體查表，零 DB/COM)
+                Dim kids As List(Of (eid As String, sid As String, fPath As String)) = Nothing
+                If childrenOf.TryGetValue(fPath, kids) Then
+                    For Each k In kids : queue.Enqueue((k.eid, k.sid, k.fPath, myIdx)) : Next
+                End If
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii)  ' 2026/04/16 by Simon/Claude: 改用 SmartThrottle，省去 If/Restart/Task.Delay 三行套路
             Loop
         Catch ex As OperationCanceledException
@@ -505,8 +550,8 @@ Partial Class Form1
             Throw
         End Try
 
-        Dim total As Integer = allEntries.Count
-        _dbg("    ├ 結束", $"節點總計: {total} (含快取命中剪枝)")
+        ' PROBE_TIMING: 骨架取得 vs 記憶體剪枝分段計時，供與舊版 S1 (整段自走樹) 的歷史 log 對比
+        _dbg("    ├ 結束", $"骨架={skeleton.Count} 過濾後={filtered.Count} 節點={allEntries.Count}(含剪枝) | 骨架 {tSkel:F0}ms + 剪枝 {swP.Elapsed.TotalMilliseconds:F0}ms")
         Return allEntries
 
     End Function
@@ -1475,6 +1520,7 @@ Partial Class Form1
                 ' 改用免-folder 多載，完全避免觸碰 COM 物件
                 If GetMailCount(fPath, eid, sid) <= 0 Then ' 放個空快取避免下次又查 (<= 0 也包含 -1 的情況視同沒信防護)
                     _cacheYearCounts(fPath) = New ConcurrentDictionary(Of Integer, Integer)()
+                    MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤 (空表本身不會產生 DB 列，標記只是保持行為一致)
                     processedFolders += 1 : Continue For
                 End If
 

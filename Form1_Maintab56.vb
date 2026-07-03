@@ -62,7 +62,7 @@ Partial Class Form1
                 Dim scanned = Await ScanMailsToGroupDictAsync(folderList, False, progress5, cToken)
                 Dim allMails = scanned.Values.SelectMany(Function(x) x).ToList()
                 Dim targetT As Double = GetFuzzyTargetT()                                           ' S8 改接trackbar控制項參數 (低/中/高/極高)
-                Await PreComputeFuzzySimHashAsync(allMails, progress5, cToken)                      ' S3 build pass(暖快取跳過已算)
+                Await PreComputeFuzzySimHash(allMails, progress5, cToken)                      ' S3 build pass(暖快取跳過已算)
                 Dim cand = Await GenerateFuzzyCandidatePairs(allMails, targetT, cToken)             ' S4 size 視窗 + Hamming 一階
                 Dim filt = Await FilterCandidatesByJaccardAsync(cand, targetT, progress5, cToken)   ' S5 候選 body Jaccard 精算
                 Dim fuzzy = BuildFuzzyGroups(filt.Pairs, filt.Sets)                                 ' S6 union-find 分群 + scoreMap
@@ -390,32 +390,46 @@ Partial Class Form1
     Private Shared ReadOnly _fuzzyTierT As Double() = New Double() {0, 0.87, 0.92, 0.95, 0.98, 1}   ' index 0 佔位(trackbar 從 1 起)
     Private Shared ReadOnly _fuzzyTierName As String() = New String() {"", "低", "中", "高", "極高", "完全一致"}
 
-    Private Async Function PreComputeFuzzySimHashAsync(mails As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+    ' 2026/07/03 by Simon/Claude [平行化SimHash]: PROBE_BODYPAR 實測值，Simon 可自行調整(過高可能撞 OST 檔鎖競爭，效率遞減)
+    Private Const SIMHASH_PARALLEL_K As Integer = 8     ' 2026/07/03 by Simon/Claude [平行線程可自行調整(過高可能撞 OST 檔鎖競爭，效率遞減)]: 實測值 K=4 效率99%, K=8 效率還有75% (跨 349 資料夾/205616 封母體樣本)
+    Private ReadOnly _dbMailWriteLock As New Object()   ' 平行版多 worker 共用 _dbMail 連線寫入時的互斥鎖(SqliteConnection 非執行緒安全，不可多執行緒同時 BeginTransaction)
+    Private Function SplitIntoChunks(Of T)(list As List(Of T), k As Integer) As List(Of List(Of T))
+        ' 把 list 切成 k 塊(連續切片, 最後一塊可能較短)。供平行版 SimHash 與 PROBE_BODYPAR 探針共用
+        Dim result As New List(Of List(Of T))(k)
+        Dim n As Integer = list.Count
+        Dim per As Integer = CInt(Math.Ceiling(n / CDbl(k)))
+        For i As Integer = 0 To k - 1
+            Dim startIdx As Integer = i * per
+            If startIdx >= n Then result.Add(New List(Of T)()) : Continue For
+            result.Add(list.GetRange(startIdx, Math.Min(per, n - startIdx)))
+        Next
+        Return result
+    End Function
+    Private Async Function PreComputeFuzzySimHash(mails As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
         ' 對「_cacheSimHash 沒有的」郵件讀 body 算 simhash+bigram_count，寫回獨立 db 與記憶體快取。已算過的(暖快取)直接跳過。
-        '   ※ 故意走 GetMailBodyOOM(直接 L3)而非 GetMailBody：build pass 一次掃數萬封，若每封都進 _cacheMailBody 會撐爆記憶體；
-        '     simhash 算完 body 即丟。候選的 body 才在 S5 經 GetMailBody 讀(只快取那少數幾封)。若你偏好走 L2.5 改這一行即可。
-
-        ' 2026/06/23 by Simon/Claude Opus 4.8:
-        ' ※ 原直呼 GetMailBodyOOM 繞過 L2.5; 改 skipCache 後路由統一, RDO 提速涵蓋此熱路徑。
-        '    走 L2.5 GetMailBody 但帶 skipCache:=True：build pass 一次掃數萬封, skipCache 跳過 _cacheMailBody 讀寫避免撐爆記憶體; 同時仍經 L2.5 分派吃到 _rdo2 store-scoped RDO 提速。
-
+        ' 2026/07/03 by Simon/Claude [平行化SimHash]: PROBE_BODYPAR 實測(跨349資料夾/205616封母體樣本) K=8 平行讀 body 效率75%，
+        '   35萬封估4.3分鐘(對比單執行緒約25分鐘)。_rdo2 在且 Outlook session 就緒時走平行版；否則(未勾CheckRDO)退回序列版。
         LoadDbMail()
         Dim todo = mails.Where(Function(m) Not _cacheSimHash.ContainsKey(m.EntryID)).ToList()
         If todo.Count = 0 Then Return
 
-        Dim totalBodyChars As Long = 0   ' 估算mailbody總容量用探針(算完可移除): 累計 body 字元數，估算全快取記憶體footprint
+        If _rdo2 IsNot Nothing AndAlso _olNS IsNot Nothing Then
+            Await PreComputeFuzzySimHashParallel(todo, progress, cToken)
+        Else
+            Await PreComputeFuzzySimHashSerial(todo, progress, cToken)
+        End If
+    End Function
+    Private Async Function PreComputeFuzzySimHashSerial(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+        ' 序列版(原實作)：未勾 CheckRDO 或 Outlook session 未就緒時的 fallback。走 L2.5 GetMailBody(內建 RDO/OOM 分派)。
+        Dim totalBodyChars As Long = 0
         ' 2026/06/25 by Gemini 3.1 Pro: 將 Batch Size 提升至 3000，大幅降低磁碟寫入次數與 I/O 停頓
         Dim batch As New List(Of (EntryID As String, SimHash As Long, BigramCount As Integer))(3072)
-        Dim swEta As Stopwatch = Stopwatch.StartNew()  ' 2026/06/17 by Simon/Claude: 供進度速度與 ETA 計算
-        Dim swThrottle As Stopwatch = Stopwatch.StartNew() ' 2026/06/25 by Gemini 3.1 Pro: 用於雙重節流的時間閘門
+        Dim swEta As Stopwatch = Stopwatch.StartNew()       ' 2026/06/17 by Simon/Claude: 供進度速度與 ETA 計算
+        Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' 2026/06/25 by Gemini 3.1 Pro: 用於雙重節流的時間閘門
         For i As Integer = 0 To todo.Count - 1
             cToken.ThrowIfCancellationRequested()
             Dim id As String = todo(i).EntryID
-            ' 2026/06/18 估算mailbody總容量用探針(todo: 算完可移除)
-            ' Dim setB = BuildBigramSet(GetMailBodyOOM(id))            ' COM 讀取(昂貴) → 拆 bigram 集合
-
-            ' todo: 這裡真的需要skipCache:=True嗎? 區區幾百MB的純文字mailbody快取會撐爆記憶體??
-            Dim body As String = GetMailBody(id, todo(i).FolderPath, skipCache:=True)   ' 2026/06/23 by Simon/Claude Opus 4.8:
+            Dim body As String = GetMailBody(id, todo(i).FolderPath, skipCache:=True)
             totalBodyChars += body.Length
             Dim setB = BuildBigramSet(body)
             Dim sh As Long = ComputeSimHashFromSet(setB)
@@ -433,11 +447,124 @@ Partial Class Form1
                 Await SmartThrottle(swThrottle, cToken, ThrottleFreq.Hii)
             End If
         Next
-        ' 2026/06/18 估算mailbody總容量用探針(算完可移除)
-        _dbg("[Probe][MailBodySize]]", $"S3 讀 {todo.Count} 封, body 累計 {totalBodyChars:N0} 字元 ≈ {totalBodyChars * 2 / 1048576:F0} MB(純UTF-16) + 約 {todo.Count * 26 / 1048576:F0} MB(字串物件開銷)。此即全進 _cacheMailBody 的概估量")
+        _dbg("[SimHash]", $"序列版讀 {todo.Count} 封, body 累計 {totalBodyChars:N0} 字元 ≈ {totalBodyChars * 2 / 1048576:F0} MB(純UTF-16)")
 
         If batch.Count > 0 Then SaveDbMail(batch)
     End Function
+    Private Async Function PreComputeFuzzySimHashParallel(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+        ' 平行版：每個 worker 在自己的 ThreadPool 執行緒內自建/自用/自 Logoff 一個獨立 RDOSession(不碰共用 _rdo2/UI 緒)，
+        '   對齊 PROBE_BODYPAR 探針驗證過、確實能拿到平行加速的用法(memory_20260622_1846 §八: OOM 物件才必須留 UI 緒, RDO 獨立 session 可背景跑)。
+        '   RDO 解析失敗的少數信(探針觀察約0.3%)收進回傳清單，等全部 worker 結束、續回本協調函數(繼承呼叫端的 UI 緒 SynchronizationContext)後，
+        '   才用既有 GetMailBody(內建OOM fallback)逐封補算——OOM COM 物件只能在 UI 緒操作，背景 worker 絕不可呼叫 OOM。
+        Dim profileName As String = _olNS.CurrentProfileName
+        Dim k As Integer = Math.Min(SIMHASH_PARALLEL_K, Math.Max(1, todo.Count))
+        Dim chunks = SplitIntoChunks(todo, k)
+
+        Dim swEta As Stopwatch = Stopwatch.StartNew()
+        Dim processedCounter(0) As Integer     ' 單元素陣列：worker 們用 Interlocked 共用累加同一儲存格
+        Dim lastReportMs(0) As Long
+        Dim reportGate As New Object()
+        Dim totalCount As Integer = todo.Count
+
+        Dim tasks As New List(Of Task(Of List(Of MailItemInfo)))()
+        For w As Integer = 0 To k - 1
+            Dim idx As Integer = w
+            tasks.Add(Task.Run(Function() SimHashParallelWorker(profileName, chunks(idx), cToken, processedCounter, totalCount, swEta, lastReportMs, reportGate, progress)))
+        Next
+        Dim rdoFailedLists = Await Task.WhenAll(tasks)
+        Dim rdoFailed = rdoFailedLists.SelectMany(Function(x) x).ToList()
+
+        _dbg("[SimHash]", $"平行版(K={k}) 完成 {todo.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
+
+        ' RDO 解析失敗的少數信，回到 UI 緒用既有 GetMailBody(內建OOM fallback) 逐封補算
+        If rdoFailed.Count > 0 Then
+            Dim fallbackBatch As New List(Of (EntryID As String, SimHash As Long, BigramCount As Integer))(rdoFailed.Count)
+            For Each m In rdoFailed
+                cToken.ThrowIfCancellationRequested()
+                Dim body As String = GetMailBody(m.EntryID, m.FolderPath, skipCache:=True)
+                Dim setB = BuildBigramSet(body)
+                Dim sh = ComputeSimHashFromSet(setB)
+                _cacheSimHash(m.EntryID) = (sh, setB.Count)
+                fallbackBatch.Add((m.EntryID, sh, setB.Count))
+            Next
+            SaveDbMail(fallbackBatch)
+        End If
+    End Function
+    Private Function SimHashParallelWorker(profileName As String, subset As List(Of MailItemInfo), cToken As CancellationToken,
+                                            processedCounter As Integer(), totalCount As Integer, swEta As Stopwatch,
+                                            lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport)) As List(Of MailItemInfo)
+        ' 平行版 worker：自建獨立 session 掃 subset 算 simhash，寫入 _cacheSimHash(ConcurrentDictionary,執行緒安全)與 _dbMail(自帶鎖)。
+        '   RDO 解析失敗(store找不到/GetMessageFromID失敗/.Body失敗)的信收進回傳清單，交還協調函數做OOM補算(worker背景緒不可碰OOM)。
+        Dim rdoFailed As New List(Of MailItemInfo)()
+        Dim session As Redemption.RDOSession = Nothing
+        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
+        Try
+            Try
+                session = New Redemption.RDOSession()
+                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
+            Catch ex As System.Exception
+                _dbg("SimHashParallelWorker Logon失敗", ex.Message)
+                Return subset   ' 這個 worker 的整批信全部交還協調函數用 OOM 補算
+            End Try
+
+            storeByName = BuildRdoStoreByNameDict(session)
+
+            Dim batch As New List(Of (EntryID As String, SimHash As Long, BigramCount As Integer))(1024)
+            For i As Integer = 0 To subset.Count - 1
+                If (i And 127) = 0 Then cToken.ThrowIfCancellationRequested()
+                Dim m As MailItemInfo = subset(i)
+                Dim store As Redemption.RDOStore = Nothing
+                Dim body As String = Nothing
+                If storeByName.TryGetValue(GetStoreNameFromPath(m.FolderPath), store) Then
+                    Dim rm As Redemption.RDOMail = Nothing
+                    Try
+                        Try : rm = TryCast(store.GetMessageFromID(m.EntryID), Redemption.RDOMail) : Catch : End Try
+                        If rm IsNot Nothing Then Try : body = rm.Body : Catch : End Try
+                    Finally
+                        Dim o As Object = rm : TryMarshalRelease(o)
+                    End Try
+                End If
+
+                If body Is Nothing Then
+                    rdoFailed.Add(m)
+                Else
+                    Dim setB = BuildBigramSet(body)
+                    Dim sh = ComputeSimHashFromSet(setB)
+                    _cacheSimHash(m.EntryID) = (sh, setB.Count)
+                    batch.Add((m.EntryID, sh, setB.Count))
+                    If batch.Count >= 1000 Then
+                        SyncLock _dbMailWriteLock : SaveDbMail(batch) : End SyncLock
+                        batch.Clear()
+                    End If
+                End If
+
+                Dim done As Integer = Interlocked.Increment(processedCounter(0))
+                If (done And 63) = 0 Then
+                    Dim nowMs As Long = swEta.ElapsedMilliseconds
+                    If nowMs - Interlocked.Read(lastReportMs(0)) >= ThrottleFreq.Mid AndAlso Monitor.TryEnter(reportGate) Then
+                        Try
+                            If nowMs - lastReportMs(0) >= ThrottleFreq.Mid Then   ' 進鎖後再驗一次，避免重複回報(雙重檢查)
+                                lastReportMs(0) = nowMs
+                                Dim eta = CalculateSpeedAndETA(totalCount, done, swEta.Elapsed.TotalSeconds)
+                                progress?.Report(New ProgressReport With {.Message = $"計算內文指紋(平行K): {done}/{totalCount} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                            End If
+                        Finally
+                            Monitor.Exit(reportGate)
+                        End Try
+                    End If
+                End If
+            Next
+            If batch.Count > 0 Then SyncLock _dbMailWriteLock : SaveDbMail(batch) : End SyncLock
+            Return rdoFailed
+        Finally
+            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
+            If session IsNot Nothing Then
+                Try : session.Logoff() : Catch : End Try
+                Dim so As Object = session : TryMarshalRelease(so)
+            End If
+        End Try
+    End Function
+
     Private Async Function GenerateFuzzyCandidatePairs(mails As List(Of MailItemInfo), targetT As Double, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
         ' size 1/T 滑動視窗收斂 O(n²) + Hamming 一階篩。純 CPU、無 COM → 放 Task.Run 不凍 UI。
         Dim hThr As Integer = HammingThresholdFor(targetT)
@@ -824,7 +951,7 @@ Partial Class Form1
             If lv.VirtualMode Then lv.SelectedIndices.Clear() Else lv.SelectedItems.Clear()
             ' 對應不同的 TreeView 給予控制權
             If lv Is ListView3 Then SimTree3.Focus()
-            If lv Is Listview4 Then Lv4Topic.Focus()   ' 2026/5/29 by Simon/Claude: 拆分SimTree4的雙重模式後，將 Tab4 ESC 焦點從 SimTree4 調整到 Lv4Topic
+            If lv Is Listview4 Then Lv4Topic.Focus() : _lv4SimCToken?.Cancel()   ' 2026/5/29 by Simon/Claude: 拆分SimTree4的雙重模式後，將 Tab4 ESC 焦點從 SimTree4 調整到 Lv4Topic ' 2026/07/03 by Claude Sonnet 5: SelectedItems.Clear()觸發的SelectedIndexChanged在Count=0時會提前return不會自己取消，這裡補上明確取消
             If lv Is ListView5 Then SimTree5.Focus() ' 2026/05/03 by Gemini 3.1 Pro: 新增 Tab5 ESC 焦點歸位
             e.Handled = True
 
@@ -853,7 +980,7 @@ Partial Class Form1
     ' 設計重點：
     '   1. 跳過所有 cache (_cacheXXX / SSD)，直接打 COM 讀真值；讀完寫回顯示清單，並 patch 記憶體 cache。
     '   2. A/B 路徑「依數量」自動選擇 (與哪個 LV 無關)：
-    '        targetList.Count <  REFRESH_BATCH_THRESHOLD(42) → 方法A：逐封 RefreshMailInfoL3
+    '        targetList.Count <  REFRESH_BATCH_THRESHOLD(42) → 方法A：逐封 RefreshMailInfo
     '        targetList.Count >= 門檻                        → 方法B：依資料夾 GetTable+GetArray 批次
     '   3. 只刷「已在記憶體中的項目」：顯示清單 + 已含該 EntryID 的 cache；
     '      尚未 lazy load 的欄位 (附件數/檔名) 不主動額外讀取 (全體 F5 一律略過 AttachCount)。
@@ -919,7 +1046,7 @@ Partial Class Form1
     End Function
     Private Async Function RefreshLviCore(target As List(Of (lst As List(Of MailItemInfo), idx As Integer)), readAttachCount As Boolean, ct As CancellationToken) As Task(Of RefreshStats)
         ' 2026/06/14 by Simon/Claude Opus 4.8: 刷新核心分派器 — 給定一組 (清單,索引) targetList，依數量選 A/B 重讀 COM 並寫回 + patch 記憶體 cache
-        '   count <  門檻 → 方法A：逐封 RefreshMailInfoL3 (readAttachCount 決定是否讀附件數)
+        '   count <  門檻 → 方法A：逐封 RefreshMailInfo (readAttachCount 決定是否讀附件數)
         '   count >= 門檻 → 方法B：依資料夾 GetTable+GetArray 批次 (讀不到附件數，一律略過)
         Dim stats As New RefreshStats
         If target Is Nothing OrElse target.Count = 0 Then Return stats
@@ -933,7 +1060,7 @@ Partial Class Form1
                 ct.ThrowIfCancellationRequested()
                 Dim s = target(i)
                 Dim m As MailItemInfo = s.lst(s.idx)
-                Select Case RefreshMailInfoL3(m, readAttachCount)
+                Select Case RefreshMailInfo(m, readAttachCount)
                     Case RefreshResult.Updated : s.lst(s.idx) = m : UpdateMailCaches(m, readAttachCount) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude Opus 4.8: 標記為已刷新
                     Case RefreshResult.NotFound : stats.NotFound += 1   ' 保留舊資料不動 (移除政策由呼叫端日後決定)
                     Case Else : stats.Errored += 1
@@ -952,7 +1079,7 @@ Partial Class Form1
                     For Each s In grp
                         ct.ThrowIfCancellationRequested()
                         Dim m As MailItemInfo = s.lst(s.idx)
-                        Select Case RefreshMailInfoL3(m, readAttachCount)
+                        Select Case RefreshMailInfo(m, readAttachCount)
                             Case RefreshResult.Updated : s.lst(s.idx) = m : UpdateMailCaches(m, readAttachCount) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude Opus 4.8: 標記為已刷新
                             Case RefreshResult.NotFound : stats.NotFound += 1
                             Case Else : stats.Errored += 1
@@ -1018,6 +1145,10 @@ Partial Class Form1
     Private Sub UpdateMailCaches(mail As MailItemInfo, readAttachCount As Boolean)
         ' 2026/06/14 by Simon/Claude Opus 4.8: 只 patch「現有 in-memory cache 中已含此 EntryID」的項目；絕不新建 key、不觸發掃描/lazy load
         '   內層 List 是參考型別，原地改元素即可，dict 與 snapshot 不動
+        ' 2026/07/03 by Simon/Claude Fable 5: 原地 patch 不會經過 _cacheMailInfo(fPath)=... / _cacheAttachMailList(fPath)=... 這種
+        '   「整格重新賦值」的 dirty 追蹤標記點，SaveCache 的 dirty 過濾會因此漏掉這裡的異動。必須在此手動補標記，
+        '   否則 F5 逐封刷新改到的 Subject/Size/SenderName 等欄位永遠不會被寫回 SQLite。
+        MarkMailFolderDirty(mail.FolderPath)
 
         ' ① Tab3 附件清單快取
         Dim t3 As FolderCacheTab3 = Nothing
@@ -1223,7 +1354,6 @@ Partial Class Form1
             AddLv6StatLine("_cacheFolderTree", _cacheFolderTree.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheFolderIDs", _cacheFolderIDs.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheSubTreeList", _cacheSubTreeList.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheIsMailFolder", _cacheIsMailFolder.Count.ToString("N0") & " 筆")
             AddLv6StatLine("", "", isHeader:=False) ' 間隔
             AddLv6StatLine("_cacheMailCount", _cacheMailCount.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheMailCountAll", _cacheMailCountAll.Count.ToString("N0") & " 筆")
@@ -1384,6 +1514,8 @@ Partial Class Form1
 #Region "  ├ Debug 測試區"
     Private Async Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
 
+        ' 2026/07/03 by Simon/Claude: PROBE_HIERCNT 已驗證通過並上線(GetSubtreeRdoBatch 加 PR_CONTENT_COUNT)，探針區塊整段刪除。
+
         '' todo: 使用RDO ExecSQL 是否能直接過濾出含有特定附檔名的信件???
         '' 測試 DASL 是否能在 GetTable 直接濾出含有特定附檔名的信件
         'Dim folder As Folder = TryCast(SimTree3.SelectedNode.Tag, Folder) : Dim keyword As String = "2025" ' 測試關鍵字
@@ -1406,437 +1538,9 @@ Partial Class Form1
         'Finally : If table IsNot Nothing Then Marshal.ReleaseComObject(table)
         'End Try
 
-        'Await TestProbeBasicInfoRdoParity()
-        Await TestProbeYearMonthCountsRdoVsOOM()   ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL]: 驗證正式 GetYearCountRdo/OOM + GetMonthCountRdo/OOM parity + 耗時
 
     End Sub
 
-    ' PROBE_YEARSQL  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
-
-    Private Async Function TestProbeYearMonthCountsRdoVsOOM(Optional rootOverride As Folder = Nothing) As Task   ' PROBE_YEARSQL
-        ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL v4]: 探索階段(8種日期格式測試/TOP1+ORDER BY範圍偵測驗證)已完成並拍板,
-        '   邏輯已經寫進正式的 GetYearCountRdo/OOM、GetMonthCountRdo/OOM(Module_Outlook.vb)。
-        '   這一版探針不再自己重新兜格式測試/範圍偵測邏輯,改成直接呼叫「真正要上線的程式碼」逐夾比對+累計耗時。
-        '   月份測試沿用年份測試已經算出的 OOM 年份集合(每夾要測哪些年,不必重算一次)。
-        '   rootOverride 有值 → 無 GUI 自動觸發模式(供 RunAutoProbeYearMonthCounts 呼叫),結果額外鏡射寫成文字檔;GUI 手動觸發不寫檔,行為不變。
-        Dim logLines As New List(Of String)
-        Dim fileLog As System.Text.StringBuilder = If(rootOverride IsNot Nothing, New System.Text.StringBuilder(), Nothing)
-        Dim logDbg As Action(Of String) = Sub(s)
-                                               _dbg("YearMonthSpike", s)
-                                               logLines.Add(s)
-                                               If fileLog IsNot Nothing Then fileLog.AppendLine(s)
-                                           End Sub
-
-        If _rdo2 Is Nothing Then
-            If rootOverride Is Nothing Then MessageBox.Show("_rdo2 未初始化,請先勾選 CheckRDO。")
-            logDbg("✗ _rdo2 未初始化") : Return
-        End If
-
-        Dim roots As New List(Of Folder)
-        If rootOverride IsNot Nothing Then
-            roots.Add(rootOverride)
-        Else
-            Dim nodes As List(Of TreeNode) = SimTree3.SelectedNodes
-            If nodes Is Nothing OrElse nodes.Count = 0 Then MessageBox.Show("請先在 Tab3 的樹選定資料夾(選子樹的 root,不是葉節點)。") : Return
-            For Each n In nodes
-                Dim f As Folder = TryCast(n.Tag, Folder)
-                If f IsNot Nothing Then roots.Add(f)
-            Next
-        End If
-
-        Dim grandYearA As Long = 0, grandYearB As Long = 0, grandMonthA As Long = 0, grandMonthB As Long = 0
-
-        For Each rootFolder In roots
-            Dim rootPath As String = SafeGetPath(rootFolder)
-            logDbg("══════ 子樹 root: " & ExtractFolderName(rootPath) & " ══════")
-
-            ' ── 展開整個子樹(沿用 production 的 GetSubtreeRdo,跟 CollectYearCounts 拿到的 fList 同一種合約) ──
-            Dim swWalk = Stopwatch.StartNew()
-            Dim fList As List(Of (eid As String, sid As String, fPath As String)) = GetSubtreeRdo(rootFolder, rootPath)
-            swWalk.Stop()
-            If fList Is Nothing Then logDbg("✗ GetSubtreeRdo 失敗 → 跳過(本探針未處理 OOM BFS fallback 情境)") : Continue For
-            logDbg($"子樹展開: {fList.Count} 個資料夾 | {swWalk.ElapsedMilliseconds} ms")
-
-            ' ── [年] A: 逐夾呼叫 production 的 GetYearCountOOM,合併全子樹(繞過①②快取,測純 COM 成本) ──
-            '   順手記錄每夾的 OOM 年份集合(perFolderYearsOOM),供下面月份測試沿用,不必重算一次。
-            Dim yearsA As New Dictionary(Of Integer, Integer)
-            Dim perFolderYearsOOM As New Dictionary(Of String, Dictionary(Of Integer, Integer))
-            Dim foldersWithMail As Integer = 0
-            Dim swYearA = Stopwatch.StartNew()
-            For Each item In fList
-                If GetMailCount(item.fPath, item.eid, item.sid) <= 0 Then Continue For
-                foldersWithMail += 1
-                Dim f As Folder = GetFolderById(item.eid, item.sid)
-                If f Is Nothing Then Continue For
-                Dim r = Await GetYearCountOOM(f, fPath:=item.fPath)
-                perFolderYearsOOM(item.fPath) = New Dictionary(Of Integer, Integer)(r)
-                For Each kv In r : yearsA(kv.Key) = If(yearsA.ContainsKey(kv.Key), yearsA(kv.Key), 0) + kv.Value : Next
-            Next
-            swYearA.Stop()
-            Dim totalYearA As Integer = yearsA.Values.Sum()
-            logDbg($"[年] A GetYearCountOOM(逐夾累加) : {foldersWithMail} 個有信的夾 | {yearsA.Count} 個年份 | 共 {totalYearA} 封 | {swYearA.ElapsedMilliseconds} ms")
-
-            If totalYearA = 0 Then logDbg("— 整支子樹無郵件, 跳過對拍") : Continue For
-
-            ' ── [年] B: 逐夾呼叫 production 的 GetYearCountRdo(內部已含 TOP1+ORDER BY 範圍偵測 + 逐年 COUNT(*)) ──
-            Dim yearsB As New Dictionary(Of Integer, Integer)
-            Dim yearRdoFail As Integer = 0
-            Dim swYearB = Stopwatch.StartNew()
-            For Each item In fList
-                If GetMailCount(item.fPath, item.eid, item.sid) <= 0 Then Continue For
-                Dim r = GetYearCountRdo(item.fPath, item.eid, item.sid)
-                If r Is Nothing Then yearRdoFail += 1 : Continue For
-                For Each kv In r : yearsB(kv.Key) = If(yearsB.ContainsKey(kv.Key), yearsB(kv.Key), 0) + kv.Value : Next
-            Next
-            swYearB.Stop()
-
-            Dim totalYearB As Integer = yearsB.Values.Sum()
-            Dim yearOk As Boolean = (yearsB.Count = yearsA.Count) AndAlso yearsA.All(Function(kv) yearsB.ContainsKey(kv.Key) AndAlso yearsB(kv.Key) = kv.Value)
-            logDbg($"[年] B GetYearCountRdo(逐夾累加,含範圍偵測+逐年COUNT) : {yearsB.Count} 個年份 | 共 {totalYearB} 封 | RDO失敗={yearRdoFail} | " &
-                   $"{swYearB.ElapsedMilliseconds} ms | vs A: {If(yearOk, "一致✓", "✗ 不一致")} | 加速比: {swYearA.ElapsedMilliseconds / CDbl(Math.Max(swYearB.ElapsedMilliseconds, 1)):F1}x")
-            If Not yearOk Then
-                For Each y In yearsA.Keys.Union(yearsB.Keys).OrderBy(Function(x) x)
-                    Dim av As Integer = If(yearsA.ContainsKey(y), yearsA(y), 0)
-                    Dim bv As Integer = If(yearsB.ContainsKey(y), yearsB(y), 0)
-                    If av <> bv Then logDbg($"   ✗ {y}: A={av} B={bv}")
-                Next
-            End If
-            grandYearA += swYearA.ElapsedMilliseconds : grandYearB += swYearB.ElapsedMilliseconds
-
-            ' ── [月] 對每個有信資料夾 × 其 OOM 年份集合,逐一測 GetMonthCountOOM(A) vs GetMonthCountRdo(B) ──
-            '   key 用 year*100+month 避免跨年混淆(2026年1月=202601,2025年12月=202512,排序/比對都安全)
-            Dim monthsA As New Dictionary(Of Integer, Integer)
-            Dim monthsB As New Dictionary(Of Integer, Integer)
-            Dim monthPairsTested As Integer = 0, monthRdoFail As Integer = 0
-            Dim swMonthA As New Stopwatch(), swMonthB As New Stopwatch()
-            For Each item In fList
-                Dim folderYears As Dictionary(Of Integer, Integer) = Nothing
-                If Not perFolderYearsOOM.TryGetValue(item.fPath, folderYears) Then Continue For
-                For Each yr As Integer In folderYears.Keys
-                    monthPairsTested += 1
-                    Dim f As Folder = GetFolderById(item.eid, item.sid)
-                    If f Is Nothing Then Continue For
-
-                    swMonthA.Start()
-                    Dim rA = Await GetMonthCountOOM(f, yr, fPath:=item.fPath)
-                    swMonthA.Stop()
-                    For Each kv In rA : Dim key = yr * 100 + kv.Key : monthsA(key) = If(monthsA.ContainsKey(key), monthsA(key), 0) + kv.Value : Next
-
-                    swMonthB.Start()
-                    Dim rB = GetMonthCountRdo(item.fPath, item.eid, item.sid, yr)
-                    swMonthB.Stop()
-                    If rB Is Nothing Then monthRdoFail += 1 : Continue For
-                    For Each kv In rB : Dim key = yr * 100 + kv.Key : monthsB(key) = If(monthsB.ContainsKey(key), monthsB(key), 0) + kv.Value : Next
-                Next
-            Next
-
-            Dim totalMonthA As Integer = monthsA.Values.Sum(), totalMonthB As Integer = monthsB.Values.Sum()
-            Dim monthOk As Boolean = (monthsB.Count = monthsA.Count) AndAlso monthsA.All(Function(kv) monthsB.ContainsKey(kv.Key) AndAlso monthsB(kv.Key) = kv.Value)
-            logDbg($"[月] {monthPairsTested} 組(夾×年) | A GetMonthCountOOM : 共 {totalMonthA} 封 | {swMonthA.ElapsedMilliseconds} ms | " &
-                   $"B GetMonthCountRdo : 共 {totalMonthB} 封 | RDO失敗={monthRdoFail} | {swMonthB.ElapsedMilliseconds} ms | " &
-                   $"vs A: {If(monthOk, "一致✓", "✗ 不一致")} | 加速比: {swMonthA.ElapsedMilliseconds / CDbl(Math.Max(swMonthB.ElapsedMilliseconds, 1)):F1}x")
-            If Not monthOk Then
-                For Each ym In monthsA.Keys.Union(monthsB.Keys).OrderBy(Function(x) x)
-                    Dim av As Integer = If(monthsA.ContainsKey(ym), monthsA(ym), 0)
-                    Dim bv As Integer = If(monthsB.ContainsKey(ym), monthsB(ym), 0)
-                    If av <> bv Then logDbg($"   ✗ {ym \ 100}年{ym Mod 100}月: A={av} B={bv}")
-                Next
-            End If
-            grandMonthA += swMonthA.ElapsedMilliseconds : grandMonthB += swMonthB.ElapsedMilliseconds
-        Next
-
-        logDbg($"══════ 總計 ══════ 年: A={grandYearA}ms B={grandYearB}ms (加速比 {grandYearA / CDbl(Math.Max(grandYearB, 1)):F1}x) | " &
-               $"月: A={grandMonthA}ms B={grandMonthB}ms (加速比 {grandMonthA / CDbl(Math.Max(grandMonthB, 1)):F1}x)")
-
-        If rootOverride Is Nothing Then
-            MessageBox.Show(String.Join(vbCrLf, logLines), "年份/月份計數對拍結果 (Production: Rdo vs OOM) [PROBE_YEARSQL]")
-        Else
-            Try
-                Dim logPath = IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_YearMonthProbeResult.txt")
-                IO.File.WriteAllText(logPath, fileLog.ToString())
-                _dbg("PROBE_YEARSQL", $"結果已寫入 {logPath}")
-            Catch ex As System.Exception
-                _dbg("PROBE_YEARSQL 寫檔失敗", ex.Message)
-            End Try
-        End If
-    End Function
-    Private Async Function RunAutoProbeYearMonthCounts(arg As String) As Task
-        ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL]: 無 GUI 自動觸發進入點,格式與其他 autoprobe 系列一致。
-        '   格式: /autoprobeym (用 ResolveDefaultProbeFolder 預設值) 或 /autoprobeym:StoreName|FolderName。
-        Dim sw = Stopwatch.StartNew()
-        While (_pstStoreList Is Nothing OrElse _rdo2 Is Nothing) AndAlso sw.Elapsed.TotalSeconds < 30
-            Await Task.Delay(300)
-        End While
-        If _pstStoreList Is Nothing Then _dbg("PROBE_YEARSQL 自動觸發", "逾時: _pstStoreList 未就緒") : Return
-        If _rdo2 Is Nothing Then _dbg("PROBE_YEARSQL 自動觸發", "逾時: _rdo2 未就緒(RDO 未初始化)") : Return
-
-        Dim target As Folder = ResolveProbeTargetFolder(arg, "PROBE_YEARSQL 自動觸發")
-        If target Is Nothing Then Return
-
-        _dbg("PROBE_YEARSQL 自動觸發", $"開始,目標資料夾={target.FolderPath}")
-        Await TestProbeYearMonthCountsRdoVsOOM(target)
-    End Function
-
-    ' PROBE_BASICINFO_RDO  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
-    Private Async Function TestProbeBasicInfoRdoParity(Optional rootOverride As Folder = Nothing) As Task   ' PROBE_BASICINFO_RDO
-        ' 2026/07/02 by Simon/Claude [PROBE_BASICINFO_RDO]: 驗 GetMailInfoRdo 對 GetMailInfoOOM 逐欄 parity + 耗時對比。
-        '   走選中 root 全子樹(經 GetSubtree 拿 eid/sid/fPath 清單),逐夾比對 EntryID/Subject/Size/RcvTime/SenderName/MsgIDhash/SenderEmail。
-        '   ⚠ 選較小子樹測試(單一 PST 或某年份夾),別選整個估計(350000封/27檔) — OOM baseline 掃描本身就慢,探針目的是驗證不是效能賽跑。
-        ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO]: 加 rootOverride,供 RunAutoProbeBasicInfoRdo 無 GUI 觸發時傳入,
-        '   有值就跳過 TreeView 選取判斷;此時額外把輸出鏡射寫成文字檔(GUI 手動觸發路徑行為不變,不寫檔)。
-        Dim log As System.Text.StringBuilder = If(rootOverride IsNot Nothing, New System.Text.StringBuilder(), Nothing)
-        Dim logDbg As Action(Of String, String) = Sub(m As String, d As String)
-                                                        _dbg(m, d)
-                                                        If log IsNot Nothing Then log.AppendLine($"[{m}] {d}")
-                                                    End Sub
-
-        Dim root As Folder = If(rootOverride, TryCast(SimTree1.SelectedNode?.Tag, Folder))
-        If root Is Nothing Then logDbg("PROBE_BASICINFO_RDO", "請先在 Tab1 樹選一個 root 節點再按") : Return
-
-        Dim folders = Await GetSubtree(root, includeSubF:=True)
-        If folders Is Nothing OrElse folders.Count = 0 Then logDbg("PROBE_BASICINFO_RDO", "子樹為空") : Return
-
-        Dim ct As CancellationToken = CancellationToken.None
-        Dim folderCount As Integer = 0, totalOOM As Integer = 0, totalRdo As Integer = 0, missingCount As Integer = 0
-        Dim fieldMismatch As New Dictionary(Of String, Integer)(StringComparer.Ordinal) From {
-        {"Subject", 0}, {"Size", 0}, {"RcvTime", 0}, {"SenderName", 0}, {"MsgIDhash", 0}, {"SenderEmail", 0}}
-        Dim mismatchSamples As New List(Of String)(32)
-        ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO]: 逐欄不符抽樣(每欄最多 5 筆),印出 OOM vs RDO 實際值供根因排查。
-        Dim fieldSamples As New Dictionary(Of String, List(Of String))(StringComparer.Ordinal) From {
-        {"Subject", New List(Of String)}, {"RcvTime", New List(Of String)}, {"SenderName", New List(Of String)}}
-        Dim swOOM As New Stopwatch(), swRdo As New Stopwatch()
-
-        For Each ft In folders
-            Dim f As Folder = GetFolderById(ft.eid, ft.sid)
-            If f Is Nothing Then Continue For
-            folderCount += 1
-
-            swOOM.Start()
-            Dim oomList = Await GetMailInfoOOM(f, needTopic:=True, ct, ft.fPath)
-            swOOM.Stop()
-            TryMarshalRelease(f)
-
-            swRdo.Start()
-            Dim rdoList = GetMailInfoRdo(ft.fPath, ft.eid, ft.sid)
-            swRdo.Stop()
-
-            If oomList Is Nothing Then Continue For
-            totalOOM += oomList.Count
-            If rdoList Is Nothing Then logDbg("  ✗", $"[{ft.fPath}] RDO 回 Nothing(失敗)") : Continue For
-            totalRdo += rdoList.Count
-
-            Dim baseline As New Dictionary(Of String, MailItemInfo)(StringComparer.Ordinal)
-            For Each t In oomList : baseline(t.Mail.EntryID) = t.Mail : Next
-
-            For Each m In rdoList
-                Dim b As MailItemInfo = Nothing
-                If Not baseline.TryGetValue(m.EntryID, b) Then
-                    missingCount += 1
-                    If mismatchSamples.Count < 30 Then mismatchSamples.Add($"[{ft.fPath}] RDO EntryID={m.EntryID} 查無對應 OOM 資料")
-                    Continue For
-                End If
-                If Not String.Equals(m.Subject, b.Subject, StringComparison.Ordinal) Then
-                    fieldMismatch("Subject") += 1
-                    If fieldSamples("Subject").Count < 5 Then fieldSamples("Subject").Add($"OOM=""{b.Subject}"" | RDO=""{m.Subject}""")
-                End If
-                If m.Size <> b.Size Then fieldMismatch("Size") += 1
-                If m.RcvTime <> b.RcvTime Then
-                    fieldMismatch("RcvTime") += 1
-                    If fieldSamples("RcvTime").Count < 5 Then fieldSamples("RcvTime").Add($"OOM={b.RcvTime:yyyy-MM-dd HH:mm:ss} ({b.RcvTime.Kind}) | RDO={m.RcvTime:yyyy-MM-dd HH:mm:ss} ({m.RcvTime.Kind}) | 差={(m.RcvTime - b.RcvTime).TotalHours:F2}小時")
-                End If
-                If Not String.Equals(m.SenderName, b.SenderName, StringComparison.Ordinal) Then
-                    fieldMismatch("SenderName") += 1
-                    If fieldSamples("SenderName").Count < 5 Then fieldSamples("SenderName").Add($"OOM=""{b.SenderName}"" | RDO=""{m.SenderName}""")
-                End If
-                If Not String.Equals(m.MsgIDhash, b.MsgIDhash, StringComparison.Ordinal) Then fieldMismatch("MsgIDhash") += 1
-                If Not String.Equals(m.SenderEmail, b.SenderEmail, StringComparison.Ordinal) Then fieldMismatch("SenderEmail") += 1
-            Next
-        Next
-
-        logDbg("PROBE_BASICINFO_RDO 結果", $"資料夾數={folderCount} | 郵件數(OOM)={totalOOM} | 郵件數(RDO)={totalRdo} | RDO查無對應(EntryID缺漏)={missingCount}")
-        logDbg("  時間", $"OOM 累加={swOOM.Elapsed.TotalMilliseconds:F0}ms | RDO 累加={swRdo.Elapsed.TotalMilliseconds:F0}ms | 倍率={swOOM.Elapsed.TotalMilliseconds / Math.Max(swRdo.Elapsed.TotalMilliseconds, 0.001):F1}x")
-        For Each kv In fieldMismatch
-            If kv.Value > 0 Then logDbg("  ✗ 欄位不符", $"{kv.Key}: {kv.Value} 筆")
-        Next
-        For Each kv In fieldSamples
-            For Each s In kv.Value : logDbg($"  ✗樣本 {kv.Key}", s) : Next
-        Next
-        For Each s In mismatchSamples : logDbg("  ✗", s) : Next
-        If missingCount = 0 AndAlso fieldMismatch.Values.All(Function(v) v = 0) AndAlso folderCount > 0 Then
-            logDbg("  ✓", "全部欄位逐筆相符 → GetMailInfoRdo parity 通過")
-        End If
-
-        If log IsNot Nothing Then
-            Try
-                Dim logPath = IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult.txt")
-                IO.File.WriteAllText(logPath, log.ToString())
-                _dbg("PROBE_BASICINFO_RDO", $"結果已寫入 {logPath}")
-            Catch ex As System.Exception
-                _dbg("PROBE_BASICINFO_RDO 寫檔失敗", ex.Message)
-            End Try
-        End If
-    End Function
-    Private Function ResolveDefaultProbeFolder() As Folder
-        ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO]: 無 GUI 自動觸發用的預設探針資料夾 —
-        '   挑第一個 PST 的「刪除的郵件」(通常量小);失敗就退回該 store 的 Inbox。
-        If _pstStoreList Is Nothing OrElse _pstStoreList.Count = 0 Then Return Nothing
-        Dim store = _pstStoreList(0)
-        Try : Return TryCast(store.GetDefaultFolder(Outlook.OlDefaultFolders.olFolderDeletedItems), Folder) : Catch : End Try
-        Try : Return TryCast(store.GetDefaultFolder(Outlook.OlDefaultFolders.olFolderInbox), Folder) : Catch : Return Nothing : End Try
-    End Function
-    Private Async Function RunAutoProbeBasicInfoRdo(arg As String) As Task
-        ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO]: 無 GUI 自動觸發進入點,由 Form1_Shown 帶命令列參數呼叫。
-        '   格式: /autoprobe (用 ResolveDefaultProbeFolder 預設值) 或 /autoprobe:StoreName|FolderName (指定 store 根目錄下第一層子資料夾)。
-        '   等 _pstStoreList 與 _rdo2 就緒(逾時 30 秒),避免背景初始化尚未完成就掃描。
-        Dim sw = Stopwatch.StartNew()
-        While (_pstStoreList Is Nothing OrElse _rdo2 Is Nothing) AndAlso sw.Elapsed.TotalSeconds < 30
-            Await Task.Delay(300)
-        End While
-        If _pstStoreList Is Nothing Then _dbg("PROBE_BASICINFO_RDO 自動觸發", "逾時: _pstStoreList 未就緒") : Return
-        If _rdo2 Is Nothing Then _dbg("PROBE_BASICINFO_RDO 自動觸發", "逾時: _rdo2 未就緒(RDO 未初始化)") : Return
-
-        Dim target As Folder = ResolveProbeTargetFolder(arg, "PROBE_BASICINFO_RDO 自動觸發")
-        If target Is Nothing Then Return
-
-        _dbg("PROBE_BASICINFO_RDO 自動觸發", $"開始,目標資料夾={target.FolderPath}")
-        Await TestProbeBasicInfoRdoParity(target)
-    End Function
-    Private Function ResolveProbeTargetFolder(arg As String, logTag As String) As Folder
-        ' 2026/07/02 by Claude: 從 RunAutoProbeBasicInfoRdo 抽出,供多個探針共用同一套「命令列 store|folder → Folder」解析邏輯。
-        '   格式: 無 store|folder 段落 → 用 ResolveDefaultProbeFolder 預設值;"StoreName|FolderName" → 包含比對第一層子資料夾;"StoreName|*" → store 整個根目錄。
-        Dim target As Folder = Nothing
-        Dim colonIdx As Integer = arg.IndexOf(":"c)
-        If colonIdx >= 0 AndAlso arg.Substring(colonIdx + 1).Contains("|") Then
-            Dim sf = arg.Substring(colonIdx + 1).Split("|"c)
-            Dim storeName = sf(0) : Dim folderName = sf(1)
-            Dim store = _pstStoreList.FirstOrDefault(Function(s) s.DisplayName.IndexOf(storeName, StringComparison.OrdinalIgnoreCase) >= 0)
-            If store IsNot Nothing Then
-                Try
-                    If folderName = "*" Then
-                        target = store.GetRootFolder()
-                    Else
-                        For Each sub_ As Folder In store.GetRootFolder().Folders
-                            If sub_.Name.IndexOf(folderName, StringComparison.OrdinalIgnoreCase) >= 0 Then target = sub_ : Exit For
-                        Next
-                    End If
-                Catch
-                End Try
-            End If
-            If target Is Nothing Then _dbg(logTag, $"找不到符合 {storeName}\{folderName} 的資料夾,改用預設")
-        End If
-        If target Is Nothing Then target = ResolveDefaultProbeFolder()
-        If target Is Nothing Then _dbg(logTag, "找不到任何可用的預設資料夾")
-        Return target
-    End Function
-    Private Async Function RunListStoresDump() As Task
-        ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO]: 純列出 store + 第一層資料夾名稱,不跑掃描,供人工核對 /autoprobe 目標名稱用。
-        Dim sw = Stopwatch.StartNew()
-        While _pstStoreList Is Nothing AndAlso sw.Elapsed.TotalSeconds < 30
-            Await Task.Delay(300)
-        End While
-        Dim sb As New System.Text.StringBuilder()
-        If _pstStoreList Is Nothing Then
-            sb.AppendLine("逾時: _pstStoreList 未就緒")
-        Else
-            For Each store In _pstStoreList
-                sb.AppendLine($"[Store] {store.DisplayName}")
-                Try
-                    For Each f As Folder In store.GetRootFolder().Folders
-                        sb.AppendLine($"    - {f.Name}")
-                    Next
-                Catch ex As System.Exception
-                    sb.AppendLine($"    (讀取子資料夾失敗: {ex.Message})")
-                End Try
-            Next
-        End If
-        Dim logPath2 = IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_StoreList.txt")
-        IO.File.WriteAllText(logPath2, sb.ToString())
-        _dbg("LISTSTORES", $"已寫入 {logPath2}")
-    End Function
-    Private Async Function RunAutoProbeMailInfoDbRoundtrip(arg As String) As Task
-        ' 2026/07/02 by Claude [PROBE_MAILINFO_DB]: 無 GUI 自動觸發進入點,驗證 basic_maillist→mailinfo_list 改名後寫入/讀出正確性。
-        Dim sw = Stopwatch.StartNew()
-        While (_pstStoreList Is Nothing OrElse _rdo2 Is Nothing) AndAlso sw.Elapsed.TotalSeconds < 30
-            Await Task.Delay(300)
-        End While
-        If _pstStoreList Is Nothing Then _dbg("PROBE_MAILINFO_DB 自動觸發", "逾時: _pstStoreList 未就緒") : Return
-        If _rdo2 Is Nothing Then _dbg("PROBE_MAILINFO_DB 自動觸發", "逾時: _rdo2 未就緒(RDO 未初始化)") : Return
-
-        Dim target As Folder = ResolveProbeTargetFolder(arg, "PROBE_MAILINFO_DB 自動觸發")
-        If target Is Nothing Then Return
-
-        _dbg("PROBE_MAILINFO_DB 自動觸發", $"開始,目標資料夾={target.FolderPath}")
-        Await TestProbeMailInfoDbRoundtrip(target)
-    End Function
-    Private Async Function TestProbeMailInfoDbRoundtrip(root As Folder) As Task
-        ' 2026/07/02 by Claude [PROBE_MAILINFO_DB]: 驗證 basic_maillist→mailinfo_list 改名後,寫入/讀出的資料是否仍然正確。
-        '   流程: GetMailInfoOOM 拿 ground truth → 清 _cacheMailInfo → GetMailInfo(免-folder版,會走③RDO優先)填快取 →
-        '         SaveCachesToDB 落地寫進 mailinfo_list → 清記憶體(模擬程式重啟) → DbGetMailInfo 直接讀 mailinfo_list → 逐欄比對。
-        Dim log2 As New System.Text.StringBuilder()
-        Dim logDbg As System.Action(Of String) = Sub(s)
-                                                      _dbg("PROBE_MAILINFO_DB", s)
-                                                      log2.AppendLine(s)
-                                                  End Sub
-        Dim ct As CancellationToken = CancellationToken.None
-        Dim fPath As String = SafeGetPath(root)
-
-        Dim ids As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
-        If Not _cacheFolderIDs.TryGetValue(fPath, ids) Then Await GetSubtree(root, includeSubF:=False)
-        If Not _cacheFolderIDs.TryGetValue(fPath, ids) Then
-            logDbg("找不到 folder ids(_cacheFolderIDs 未登記),中止")
-            IO.File.WriteAllText(IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_DbRoundtrip.txt"), log2.ToString())
-            Return
-        End If
-
-        Dim oomList = Await GetMailInfoOOM(root, needTopic:=True, ct, fPath)
-        logDbg($"① OOM ground truth: {If(oomList Is Nothing, "Nothing", oomList.Count.ToString())} 封")
-
-        Dim dummy As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long) = Nothing
-        _cacheMailInfo.TryRemove(fPath, dummy)   ' 清掉既有快取,強制走③重新填,不然①命中會直接回傳測不到寫入路徑
-
-        Dim viaDispatch = Await GetMailInfo(fPath, ids.eid, ids.sid, needTopic:=True, ct)
-        logDbg($"② GetMailInfo(填快取,應走RDO優先): {If(viaDispatch Is Nothing, "Nothing", viaDispatch.Count.ToString())} 封")
-
-        Await SaveCachesToDB()
-        logDbg("③ SaveCachesToDB 完成(寫入 mailinfo_list)")
-
-        _cacheMailInfo.TryRemove(fPath, dummy)   ' 模擬程式重啟:清記憶體,確保下面讀到的是真的從 DB 來的
-        Dim dbResult = DbGetMailInfo(fPath)
-        If Not dbResult.HasValue Then
-            logDbg("✗ DbGetMailInfo 回 Nothing — mailinfo_list 寫入失敗或表不存在")
-        ElseIf oomList Is Nothing Then
-            logDbg("✗ OOM ground truth 是 Nothing,無法比對")
-        Else
-            Dim dbMails = dbResult.Value.Mails
-            logDbg($"④ DbGetMailInfo 讀回: {dbMails.Count} 封 | Snap={dbResult.Value.Snap}")
-
-            Dim baseline As New Dictionary(Of String, MailItemInfo)(StringComparer.Ordinal)
-            For Each t In oomList : baseline(t.Mail.EntryID) = t.Mail : Next
-
-            Dim mismatch As New Dictionary(Of String, Integer)(StringComparer.Ordinal) From {
-                {"Subject", 0}, {"Size", 0}, {"RcvTime", 0}, {"SenderName", 0}}
-            Dim missing As Integer = 0
-            For Each dm In dbMails
-                Dim b As MailItemInfo = Nothing
-                If Not baseline.TryGetValue(dm.Mail.EntryID, b) Then missing += 1 : Continue For
-                If Not String.Equals(dm.Mail.Subject, b.Subject, StringComparison.Ordinal) Then mismatch("Subject") += 1
-                If dm.Mail.Size <> b.Size Then mismatch("Size") += 1
-                If dm.Mail.RcvTime <> b.RcvTime Then mismatch("RcvTime") += 1
-                If Not String.Equals(dm.Mail.SenderName, b.SenderName, StringComparison.Ordinal) Then mismatch("SenderName") += 1
-            Next
-            logDbg($"⑤ DB讀回 vs OOM ground truth: 缺漏={missing}")
-            For Each kv In mismatch
-                If kv.Value > 0 Then logDbg($"✗ {kv.Key} 不符: {kv.Value} 筆")
-            Next
-            If missing = 0 AndAlso mismatch.Values.All(Function(v) v = 0) AndAlso dbMails.Count > 0 Then
-                logDbg("✓ mailinfo_list 寫入/讀出全部正確")
-            End If
-        End If
-
-        IO.File.WriteAllText(IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_DbRoundtrip.txt"), log2.ToString())
-    End Function
-    ' PROBE_BASICINFO_RDO  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
-    ' PROBE_YEARSQL  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
 #End Region
 #End Region
 

@@ -47,7 +47,6 @@ Partial Class Form1
     ' Private Shared ReadOnly _rdoFastPath As Boolean = False   ' 2026/06/13 by Simon/Claude Opus 4.8: RDO 快速路徑(⓪TotalItemCount / ①平行枚舉)開關。
     ' 問題: Redemption 走 MAPI 會枚舉到 OOM 看不到的隱藏/非-IPM 夾(Recoverable Items、Conversation Action Settings…)，
 
-    Private Shared _cacheIsMailFolder As New ConcurrentDictionary(Of String, Boolean)   ' 資料夾是否為郵件類型
     Private Shared _cacheMailCount As New ConcurrentDictionary(Of String, Long)         ' 自身資料夾的郵件個數
     Private Shared _cacheMailCountAll As New ConcurrentDictionary(Of String, Long)      ' 整支子樹的所有郵件總數
     Private Shared _cacheFolderCount As New ConcurrentDictionary(Of String, Long)       ' 自身資料夾的子目錄個數
@@ -65,8 +64,8 @@ Partial Class Form1
 
     ' GetSubtree() 的樹狀展開平坦化清單 (by Gemini, 2026/04/10: 帶路徑優化) (2026/06/28 Stage2: 改帶 eid/sid 不帶 COM 物件)
     Private Shared _cacheSubTreeList As New ConcurrentDictionary(Of String, List(Of (eid As String, sid As String, fPath As String)))
-    Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))              ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
-    Private Shared _cacheMailInfo As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long))    ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
+    Private Shared _cacheFolderIDs As New ConcurrentDictionary(Of String, (eid As String, sid As String, isMail As Boolean, hasCh As Boolean))      ' by Gemini, 2026/04/10: 專門儲存資料夾的身分標識與屬性標籤，用以橋接 Folder 物件與 SQLite 持久化
+    Private Shared _cacheMailInfo As New ConcurrentDictionary(Of String, (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long)) ' by Gemini, 2026/04/20: 專用於 Tab4 的郵件預掃描快取，Key 是資料夾路徑，Value 是該資料夾下所有郵件的基本資訊列表 (不帶 COM 物件) 與當下的 PR_CONTENT_COUNT 快照，用於快速顯示搜尋結果與驗證快取有效性
 
     Private Enum RefreshResult
         ' 2026/06/14 by Simon/Claude Opus 4.8: 單封刷新結果，供呼叫端決定失效郵件政策 (NotFound vs 暫時錯誤)
@@ -102,6 +101,12 @@ Partial Class Form1
     Private Shared ReadOnly _subjectPrefixRe As New Regex(
         "^(?:(?:RE|FW|FWD|AW|WG|VS|Rép|TR|回覆|回信|轉寄|轉發|回复|答复|转发|返信|転送|답장|회신|전달)\s*[：:]\s*)+",
         RegexOptions.IgnoreCase Or RegexOptions.Compiled)
+
+    ' 2026/07/03 by Simon/Claude Fable 5: GetCleanSubject 的 memoization 快取。
+    '   真實信箱裡 Re:/FW: 討論串會讓大量郵件共用同一個乾淨主旨，30 萬封信換算下來重複度很高；
+    '   LoadMailInfoInner/DbGetMailInfo(Batch) 等批次載入路徑每列都會呼叫一次，原本逐列重跑 Regex.Replace，
+    '   改成「相同 subject 字串只算一次」後，載入 30 萬列時大部分會直接命中這裡，省掉對應次數的 Regex 掃描。
+    Private Shared _cacheCleanSubject As New ConcurrentDictionary(Of String, String)
 
     ' 2026/06/18 by Simon/Claude Opus 4.8: NormalizeMailBody 三個 Regex 改預編譯(Shared ReadOnly + Compiled)。
     '   build pass 每封 3 次 Replace，預編譯省掉靜態快取查找並以 IL 加速。※ 真瓶頸在 COM 讀 mailBody，此為微優化。
@@ -163,6 +168,41 @@ Partial Class Form1
         '   第一次執行競爭條件改用 Thread.Sleep(1) 在 Set() 前解決，
         '   確保 AutoDismiss 輪詢 loop 已執行第一次再放行 New RDOSession()
         Try
+            ' 2026/07/03 by Simon/Claude Fable 5: SetWinEventHook 事件驅動隱藏 EULA
+            '   輪詢 SW_HIDE 有跨執行緒競速: (1) hide 太晚 → DWM 已合成一幀就閃; (2) hide 太早 → 被 VCL ShowModal 重新顯示
+            '
+            ' v5.1 (2026/07/03) 修正: v5 把 hook 裝在 UI 執行緒 → OUTOFCONTEXT 事件送進 UI 執行緒佇列，
+            '   但 UI 執行緒正被 New RDOSession 卡住無法 pump，事件到 Finally 卸 hook 時直接被丟棄 (callback 從未執行)。
+            '   改開「專職 hook 執行緒」: 自己安裝 hook + 跑 GetMessage 訊息迴圈，事件毫秒級送達，不依賴 UI 執行緒。
+            '   若實測仍偶發閃爍 (非同步送達跨過 vblank ~16ms)，再升級 WH_CBT 同步方案
+            _dbg(" ├ 進度", $"UI thread id={GetCurrentThreadId()}")   ' 診斷: 與 WinEvent 的事件執行緒比對，確認 TEULAForm 活在哪條執行緒
+            Dim hookReady As New System.Threading.ManualResetEventSlim(False)
+            Dim hookThread As New System.Threading.Thread(
+                Sub()
+                    _eulaWinEventProc = AddressOf EulaWinEventProc
+                    Dim hHook As IntPtr = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW,
+                        IntPtr.Zero, _eulaWinEventProc,
+                        CUInt(Environment.ProcessId), 0, WINEVENT_OUTOFCONTEXT)
+                    _eulaHookThreadId = GetCurrentThreadId()
+                    _dbg("    ├ WinEvent", $"hook 安裝{If(hHook = IntPtr.Zero, "失敗", "完成")}, hook thread id={_eulaHookThreadId}")
+                    hookReady.Set()
+                    If hHook = IntPtr.Zero Then Return
+
+                    ' message pump: OUTOFCONTEXT callback 由本迴圈的 GetMessage 觸發執行
+                    Dim m As New NativeMsg
+                    While GetMessage(m, IntPtr.Zero, 0, 0) > 0
+                        TranslateMessage(m) : DispatchMessage(m)
+                    End While
+
+                    UnhookWinEvent(hHook)   ' 與安裝同一執行緒卸載
+                    _eulaWinEventProc = Nothing
+                    _dbg("    ├ WinEvent", "hook 已卸載, hook thread 結束")
+                End Sub)
+            hookThread.IsBackground = True
+            hookThread.Priority = System.Threading.ThreadPriority.AboveNormal
+            hookThread.Start()
+            hookReady.Wait(500)
+
             Dim threadStarted As New System.Threading.ManualResetEventSlim(False)
             AutoDismissRdoEULA(threadStarted)
             ' 等 AutoDismiss thread 確認輪詢已開始，最多等 500ms
@@ -180,9 +220,42 @@ Partial Class Form1
         Catch ex As System.Exception
             _rdo2 = Nothing
             _dbg("Redemption init FAIL", ex.Message)
+        Finally
+            ' 2026/07/03: EULA 只在 RDOSession 建立期間出現，過後即結束 hook 執行緒 (WM_QUIT → pump 迴圈退出 → 自行卸 hook)
+            If _eulaHookThreadId <> 0 Then
+                PostThreadMessage(_eulaHookThreadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero)
+                _eulaHookThreadId = 0
+            End If
         End Try
 
     End Function
+    ' 2026/07/03 by Simon/Claude Fable 5: SetWinEventHook 事件驅動隱藏 EULA (v5 主力 hide 機制)
+    '   delegate 必須存成欄位保住參考，否則 GC 回收後 native callback 觸發 → CallbackOnCollectedDelegate crash
+    Private _eulaHookThreadId As UInteger = 0   ' v5.1: 專職 hook 執行緒的 native id，Finally 用 WM_QUIT 結束它
+    Private _eulaWinEventProc As WinEventDelegate
+    Private Sub EulaWinEventProc(hHook As IntPtr, eventType As UInteger, hwnd As IntPtr,
+                                 idObject As Integer, idChild As Integer,
+                                 dwEventThread As UInteger, dwmsEventTime As UInteger)
+        ' 只理會視窗本體的 SHOW 事件 (idObject=OBJID_WINDOW, idChild=0)，排除子物件/控制項雜訊
+        If idObject <> OBJID_WINDOW OrElse idChild <> 0 Then Return
+
+        Dim sb As New System.Text.StringBuilder(64)
+        GetClassName(hwnd, sb, 64)
+        Dim cls As String = sb.ToString()
+
+        ' dwmsEventTime = 事件「產生」的 tick；與「送達」時刻相減 = 佇列延遲，評估是否夠即時 (>16ms 就可能閃一幀)
+        Dim delayMs As Long = (Environment.TickCount And &HFFFFFFFFL) - dwmsEventTime
+        If delayMs < 0 Then delayMs += &H100000000L
+
+        If cls = "TEULAForm" Then
+            ShowWindow(hwnd, SW_HIDE)
+            If _iLikeNoisy Then _dbg("    ├ WinEvent", $"TEULAForm SHOW → 已隱藏 hWnd=0x{hwnd:X}, 佇列延遲={delayMs}ms, 事件執行緒={dwEventThread}")
+        Else
+            ' 診斷 (v5.1): hook 只活在 RDO init 這幾秒，全記錄不會洗版；「事件執行緒」可對照 UI thread id
+            '   確認 TEULAForm 到底活在哪條執行緒 → 若要升級 WH_CBT 同步方案，這決定 hook 要裝在哪
+            If _iLikeNoisy Then _dbg("    ├ WinEvent", $"SHOW: class={cls}, hWnd=0x{hwnd:X}, 延遲={delayMs}ms, 事件執行緒={dwEventThread}")
+        End If
+    End Sub
     Private Sub AutoDismissRdoEULA(threadStarted As System.Threading.ManualResetEventSlim)
         ' 自動點掉 Redemption EULA dialog
         ' 使用 WinSpy++ 確認的視窗結構 (2026-03-23) :
@@ -206,6 +279,9 @@ Partial Class Form1
         ' v4 (2026-03-23): 加入 ManualResetEventSlim 同步點
         '   threadStarted.Set() 通知呼叫端「輪詢已開始」，呼叫端等到 Set 後才呼叫 New RDOSession()，
         '   解決 thread pool 競爭導致首次執行抓不到視窗的問題
+        '
+        ' v5 (2026-07-03): 隱藏視窗的主力改由 SetWinEventHook (EulaWinEventProc) 事件驅動接手，
+        '   本執行緒降級為「點擊器 + 備援 hide」：負責 PostMessage 點 'I agree' + 'Ok' 結束 modal loop
         Dim t As New System.Threading.Thread(
             Sub()
                 ' ✅ 先讓輪詢 loop 跑第一次，再通知呼叫端
@@ -223,8 +299,13 @@ Partial Class Form1
                 If hWnd = IntPtr.Zero Then _dbg("    ├ 錯誤", "逾時: 找不到 TEULAForm") : Return ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2 (輔助執行緒)
 
                 ' ✅ 立刻隱藏，使用者不會看到 EULA dialog 閃出來
+                ' v5.2 (2026/07/03 by Simon/Claude Fable 5): 隱藏前先搬到螢幕外。
+                '   2026/07/03 log 實測: 本輪詢在 VCL Show 之前 ~60ms 就找到視窗，此時 SW_HIDE 是空包彈，
+                '   之後 ShowModal 會把視窗重新顯示 (殘餘閃爍的真正來源，由 WinEvent 事後再藏)。
+                '   先搬到 -32000 → 就算被重新顯示也在螢幕外，肉眼零閃爍。若 VCL 在 Show 時自行置中則此招失效 → 屆時升級 WH_CBT
+                SetWindowPos(hWnd, IntPtr.Zero, -32000, -32000, 0, 0, SWP_NOSIZE Or SWP_NOZORDER Or SWP_NOACTIVATE)
                 ShowWindow(hWnd, SW_HIDE)
-                _dbg("    ├ 成功", $"TEULAForm 隱藏 hWnd=0x{hWnd:X}") ' by Gemini, 2026/04/10
+                _dbg("    ├ 成功", $"TEULAForm 移出螢幕+隱藏 hWnd=0x{hWnd:X}") ' by Gemini, 2026/04/10
 
                 ' ── Step 1: "I agree" TRadioButton ──────────────────────
                 ' 輪詢等子控制項建立完成 (視窗已隱藏，等待時間使用者無感)
@@ -701,6 +782,7 @@ Partial Class Form1
         ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL 驗證通過]: ③ 改為 RDO 派工(GetYearCountRdo via ExecSQL,免物化folder,
         '   失敗才 fallback GetFolderById + GetYearCountOOM)。探針驗證: TOP1+ORDER BY 範圍偵測 55/55、6/6 兩子樹全數相符,
         '   加計範圍偵測固定成本後仍比純 OOM 快 1.3x~4x。
+        ' 2026/07/03 by Simon 註解: YearCount/MonthCount多線程平行化: 技術上可行但不值得, 在17~30萬封郵件的全庫重建也都不到二秒, 再砍也只快不到一秒反而增加多線程同步複雜度, 先不做。
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始", fPath & " | ID: " & eid) ' by Gemini 3.5 Flash, 2026/07/01
         Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
@@ -724,6 +806,7 @@ Partial Class Form1
             folderResult = Await GetYearCountOOM(folder, fPath:=fPath, cToken:=cToken) ' ③b Layer3 COM；OCE re-throw 至 L2
         End If
         _cacheYearCounts(fPath) = folderResult                  ' ✅ OCE 時走不到此行，快取僅在完整計算後寫入
+        MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
         Return folderResult
 
     End Function
@@ -739,6 +822,7 @@ Partial Class Form1
         ' OCE 不在此攔截，直接 re-throw 讓 CollectMonthCounts (L2) 的 Catch OCE 接住
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid 領頭),folder 延後到 ③才物化
         ' 2026/07/02 by Simon/Claude: ③ 比照 GetYearCount 套用 RDO 派工(年份架構已驗證,月份不另外測,直接套用)。
+        ' 2026/07/03 by Simon 註解: YearCount/MonthCount多線程平行化: 技術上可行但不值得, 在17~30萬封郵件的全庫重建也都不到二秒, 再砍也只快不到一秒反而增加多線程同步複雜度, 先不做。
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始", fPath & " | Year: " & year) ' by Gemini 3.5 Flash, 2026/07/01
 
@@ -773,6 +857,7 @@ Partial Class Form1
             monthCounts = Await GetMonthCountOOM(folder, year, fPath:=fPath, cToken:=cToken)
         End If
         _cacheMonthCounts(cacheKey) = monthCounts           ' ✅ 完整計算後存入快取
+        MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤 (用 fPath，非 cacheKey；cacheKey 含 "_year" 後綴)
         ' DbSaveMonthCountsSingle(fPath, year, monthCounts) ' ✅ 2026/04/09 設計: 增量寫入 DB (待啟用)
         If _iLikeNoisy Then _dbg(" ├ 結束", fPath & " | Year: " & year & " | 成果: " & If(monthCounts IsNot Nothing, monthCounts.Count.ToString(), "Nothing")) ' by Gemini 3.5 Flash, 2026/07/01
         Return monthCounts
@@ -784,7 +869,10 @@ Partial Class Form1
         ' by Gemini, 2026/04/05: Tab3 Phase 1 快取 - 取得單一資料夾本層含附件的郵件清單
         ' 2026/4/7 by Claude: ① 記憶體命中 → ② DB lazy (attach_maillist) → ③ Layer3
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid)。熱路徑①②只靠 fPath，folder 延後到 ③ 才 GetFolderById 物化，消除每夾眼物化的 COM 稅。(Tab3 為唯一呼叫者、OST 不使用，故直接改簽章不留多載)
-        ' todo: 優先要新增 GetAttachMailListRdo()，轉換至 _rdo2
+        ' 
+        ' 2026/07/02 by Simon/Claude: (原 todo「優先要新增 GetAttachMailListRdo()，轉換至 _rdo2」— 實測後結案: 不做。
+        '   hasattachment 的迴紋針語意(排除 Hidden/olOLE)是 Outlook 查詢引擎的加工,RDO 端 PR_HASATTACH 多算 59%、
+        '   逐封精篩慢 18 倍、Restrict 下推=raw PR_HASATTACH 且本身慢 6.7 倍, 三條路全實測封死,維持純 OOM。詳見 memory_20260623_2210 更正記錄。)
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始", fPath)                ' by Gemini 3.5 Flash, 2026/07/01
         Dim currentCount As Long = GetMailCount(fPath, eid, sid)  ' 免-folder，依賴同層快取
@@ -807,6 +895,7 @@ Partial Class Form1
         Dim folder As Folder = GetFolderById(eid, sid)
         Dim targetMailList As List(Of MailItemInfo) = Await GetAttachMailListOOM(folder, progress, cToken:=cToken)
         _cacheAttachMailList(fPath) = New FolderCacheTab3 With {.AttachMailList = targetMailList, .ItemCountSnap = currentCount}
+        MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
         If _iLikeNoisy Then _dbg(" ├ 結束", fPath & " | 成果: " & If(targetMailList IsNot Nothing, targetMailList.Count.ToString(), "Nothing")) ' by Gemini 3.5 Flash, 2026/07/01
         Return targetMailList
     End Function
@@ -909,7 +998,7 @@ Partial Class Form1
         Dim resultList = Await GetMailInfoOOM(folder, needTopic, cToken, fPath)
 
         ' 掃描完畢，存入記憶體快取 (SaveCache 時會持久化到 SSD)
-        If resultList IsNot Nothing Then _cacheMailInfo(fPath) = (resultList, currentSnap)
+        If resultList IsNot Nothing Then _cacheMailInfo(fPath) = (resultList, currentSnap) : MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
 
         Return resultList
     End Function
@@ -941,7 +1030,7 @@ Partial Class Form1
             If rdoResult IsNot Nothing Then
                 If _iLikeNoisy Then _dbg("GetMailInfo ③", $"RDO 命中 {ExtractFolderName(fPath)}({rdoResult.Count} 封)")   ' 2026/07/02 by Claude [Task2b 驗證用,暫留]: 確認實際走哪條路徑
                 Dim converted = rdoResult.Select(Function(m) (m, GetCleanSubject(m.Subject))).ToList()
-                _cacheMailInfo(fPath) = (converted, currentSnap)
+                _cacheMailInfo(fPath) = (converted, currentSnap) : MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
                 Return converted
             End If
         End If
@@ -950,8 +1039,30 @@ Partial Class Form1
         If _iLikeNoisy Then _dbg("GetMailInfo ③", $"OOM fallback {ExtractFolderName(fPath)}(_rdo2={If(_rdo2 Is Nothing, "Nothing", "有")})")   ' 2026/07/02 by Claude [Task2b 驗證用,暫留]
         Dim folder As Folder = GetFolderById(eid, sid)
         Dim resultList = Await GetMailInfoOOM(folder, needTopic, cToken, fPath)
-        If resultList IsNot Nothing Then _cacheMailInfo(fPath) = (resultList, currentSnap)
+        If resultList IsNot Nothing Then _cacheMailInfo(fPath) = (resultList, currentSnap) : MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
         Return resultList
+    End Function
+    Private Function RefreshMailInfo(ByRef info As MailItemInfo, readAttachCount As Boolean) As RefreshResult
+        ' ---------------------------------------------------------------
+        ' RefreshMailInfo — Layer2.5 快取代理層: 依 EntryID 從 COM 重讀單封郵件實體資訊，寫回 info (ByRef，MailItemInfo 為 Structure)
+        '   跳過所有 cache (_cacheXXX / SSD)，直接打 COM。RDO→OOM fallback。
+        '   readAttachCount=False: 只讀 Subject/Size/RcvTime/SenderName (全體 F5 用，省去開信枚舉附件)
+        '   readAttachCount=True : 額外枚舉 olByValue(=1) 附件數 (右鍵單筆/複數刷新用)
+        '   回傳 Updated/NotFound/TransientError；失效郵件的移除政策由呼叫端決定 (目前一律保留+記錄)
+        ' 2026/06/14 by Simon/Claude Opus 4.8
+        ' 2026/07/02 by Simon/Claude: 原名 RefreshMailInfoL3，拆成 RefreshMailInfoRdo(Layer3 RDO)/RefreshMailInfoOOM(Layer3 OOM)
+        '   兩段純資料層後，此函式只剩分派，改名去掉 L3 尾綴、移至 Layer2.5 區塊，比照 GetMailInfo(免-folder版)
+        '   ③ RDO優先/OOM兜底 的切分方式(此函式沒有 memory/DB 快取層，只有 RDO/OOM 分派這一層)。
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(info.EntryID) Then Return RefreshResult.NotFound
+
+        ' ⓪ RDO 優先: store-scoped on _rdo2,繞過 OOM 開信的記憶體開銷;RefreshMailInfoRdo 回 False 才落 ① OOM fallback。
+        If _rdo2 IsNot Nothing AndAlso info.FolderPath <> "" Then
+            If RefreshMailInfoRdo(info, readAttachCount) Then Return RefreshResult.Updated
+        End If
+
+        ' ① Fallback: RDO 讀不到才走 OOM
+        Return RefreshMailInfoOOM(info, readAttachCount)
     End Function
     Private Async Function PreLoadMailCacheAsync(folderList As List(Of (eid As String, sid As String, fPath As String)), cToken As CancellationToken) As Task
         ' ---------------------------------------------------------------
@@ -1130,6 +1241,9 @@ Partial Class Form1
     End Function
     Private Function GetSortedSubFolderIDs(fPath As String, parentEid As String, parentSid As String, selfKnownToDb As Boolean) As List(Of (path As String, eid As String, sid As String))
         ' ==========================================
+        ' 2026/07/02 by Simon/Claude [骨架整合]: 退役 — 唯一呼叫端 BuildBfsFolderTree 已改吃 GetSubtree 骨架(記憶體/DB LIKE/RDO批次/OOM 四層)，
+        '   本函數目前無任何呼叫端，暫留作參考；連同 selfKnownToDb 冷啟動特判一併停用，穩定一輪後可刪。
+        ' ==========================================
         ' 2026/06/29 by Simon/Claude [Option A1]: GetSortedSubFolders 的「免物化」對稱孿生 —
         '   回直屬子夾的 (path,eid,sid) 純資料 tuple，給 Tab1 暖重啟 id-tuple BFS 用，全程零 COM Folder 物化。
         '   ② DB 優先(DbGetOrderedSubFolderIDs，已含 entry_id IS NOT NULL [/is_mail=1] 過濾 + 英文優先排序)；
@@ -1174,6 +1288,8 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' HasSubFoldersFast — 光速版子資料夾加號預測 (專為 TreeView 展開設計)
         ' 2026/4/7 by Gemini, 解決 SSD 讀出後無法出現假節點 + 號，以及嚴重卡頓問題
+        ' 2026/7/2 by simon, 直接保底呼叫一次 cFolder.Folders.Count > 0
+        '   (比 PR_CONTENT_COUNT 還快，也比RDO 要先解 store/folder 才能讀屬性的解析開銷快，所以也不需轉到_rdo2)
         ' ---------------------------------------------------------------
         '   呼叫順序：① _cacheFolderCount 記憶體 → ② DbGetFolderStats(fPath).fc → ③ pFolder.Folders.Count COM
         '   已在 LoadSubFolderToTreeView 第 489 行啟用， 解決 DB 載入後 TreeView 不顯示 "+" 的問題
@@ -1195,18 +1311,22 @@ Partial Class Form1
         Try : Return cFolder.Folders.Count > 0 : Catch : Return False : End Try
     End Function
     Private Function IsMailFolder(folder As Folder, Optional fPath As String = "") As Boolean
+        ' 2026/07/03 by Simon/Claude: 併掉獨立的 _cacheIsMailFolder，改查 _cacheFolderIDs.isMail —
+        '   RDO/OOM 展開骨架時(GetSubtreeRdoBatch 的 PR_CONTAINER_CLASS / GetSubtreeOOM 的 IsMailFolder)已經回填這裡，
+        '   查無時才落 COM DefaultItemType，並把結果一併補進同一份字典供全體共用(不再各自為政)。
         fPath = SafeGetPath(folder, fPath)
         Dim fName As String = ExtractFolderName(fPath)
         If _iLikeNoisy Then _dbg(" ├ 開始", fName)
-        Dim isMail As Boolean
-        If _cacheIsMailFolder.TryGetValue(fPath, isMail) Then Return isMail
+
+        Dim info As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
+        If _cacheFolderIDs.TryGetValue(fPath, info) Then Return info.isMail
 
         Static allowedTypes As Outlook.OlItemType() = {Outlook.OlItemType.olMailItem,
                                                        Outlook.OlItemType.olPostItem}
         Try
             Dim itemType As Outlook.OlItemType = folder.DefaultItemType
-            isMail = allowedTypes.Contains(itemType)
-            _cacheIsMailFolder.TryAdd(fPath, isMail)
+            Dim isMail As Boolean = allowedTypes.Contains(itemType)
+            Try : _cacheFolderIDs.TryAdd(fPath, (folder.EntryID, folder.StoreID, isMail, TextHasChineseChar(fName))) : Catch : End Try
             If _iLikeNoisy AndAlso Not isMail Then _dbg("過濾非郵件資料夾", $"{fName} ({itemType})") ' 只有非郵件時才記錄
             Return isMail
         Catch
@@ -1232,10 +1352,9 @@ Partial Class Form1
         For Each key In _cacheMailCount.Keys.Where(isInSub).ToList() : _cacheMailCount.TryRemove(key, dL) : Next
         For Each key In _cacheFolderCount.Keys.Where(isInSub).ToList() : _cacheFolderCount.TryRemove(key, dL) : Next
 
-        ' 【修復關鍵 2】補上身分證與屬性字典的清理, 2026/6/1 by Simon/Gemini 3.1 Pro
+        ' 【修復關鍵 2】補上身分證字典的清理, 2026/6/1 by Simon/Gemini 3.1 Pro (2026/07/03: _cacheIsMailFolder 已併入 _cacheFolderIDs，移除獨立清理)
         Dim dummyId As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
         For Each key In _cacheFolderIDs.Keys.Where(isInSub).ToList() : _cacheFolderIDs.TryRemove(key, dummyId) : Next
-        For Each key In _cacheIsMailFolder.Keys.Where(isInSub).ToList() : _cacheIsMailFolder.TryRemove(key, False) : Next
 
         ' 2. 清除祖先節點的快取 (因為子節點異動，祖先的「包含子目錄」加總也會跟著變)
         For Each ancestor In GetAncestors(fPath)
@@ -1519,6 +1638,7 @@ Partial Class Form1
         '     加計範圍偵測固定成本後仍比純 OOM 快 1.3x~4x(非早期樂觀估計的 5.5x,那是借用 OOM 答案的簡化版)。
         '   解析失敗(store/folder 找不到/例外)回 Nothing,由 L2.5 proxy fallback 到 GetYearCountOOM;空夾回空字典(非失敗)。
         ' 2026/07/02 by Simon/Claude
+        ' 2026/07/03 by Simon 註解: YearCount/MonthCount多線程平行化: 技術上可行但不值得, 在17~30萬封郵件的全庫重建也都不到二秒, 再砍也只快不到一秒反而增加多線程同步複雜度, 先不做。
         ' ---------------------------------------------------------------
         Dim store As Redemption.RDOStore = GetRdoStore(fPath)
         If store Is Nothing Then Return Nothing
@@ -1565,6 +1685,7 @@ Partial Class Form1
         '   架構比照 GetYearCountRdo(2026/07/02 由 Simon 拍板: 年份架構已驗證,月份不用另外開探針測,直接套用)。
         '   解析失敗回 Nothing,由 L2.5 proxy fallback 到 GetMonthCountOOM。
         ' 2026/07/02 by Simon/Claude
+        ' 2026/07/03 by Simon 註解: YearCount/MonthCount多線程平行化: 技術上可行但不值得, 在17~30萬封郵件的全庫重建也都不到二秒, 再砍也只快不到一秒反而增加多線程同步複雜度, 先不做。
         ' ---------------------------------------------------------------
         Dim store As Redemption.RDOStore = GetRdoStore(fPath)
         If store Is Nothing Then Return Nothing
@@ -1594,95 +1715,44 @@ Partial Class Form1
             Dim o As Object = rdoFolder : TryMarshalRelease(o)
         End Try
     End Function
-    Private Function RefreshMailInfoL3(ByRef info As MailItemInfo, readAttachCount As Boolean) As RefreshResult
-        ' 2026/06/14 by Simon/Claude Opus 4.8: 依 EntryID 從 COM 重讀單封郵件實體資訊，寫回 info (ByRef，MailItemInfo 為 Structure)
-        '   跳過所有 cache (_cacheXXX / SSD)，直接打 COM。RDO→OOM fallback。
-        '   readAttachCount=False: 只讀 Subject/Size/RcvTime/SenderName (全體 F5 用，省去開信枚舉附件)
-        '   readAttachCount=True : 額外枚舉 olByValue(=1) 附件數 (右鍵單筆/複數刷新用)
-        '   回傳 Updated/NotFound/TransientError；失效郵件的移除政策由呼叫端決定 (目前一律保留+記錄)
-        Const MAPI_E_NOT_FOUND As Integer = &H8004010F   ' 找不到物件的 HRESULT，用以區分 NotFound vs 暫時性錯誤
-        If String.IsNullOrEmpty(info.EntryID) Then Return RefreshResult.NotFound
+    Private Function RefreshMailInfoRdo(ByRef info As MailItemInfo, readAttachCount As Boolean) As Boolean
+        ' ---------------------------------------------------------------
+        ' RefreshMailInfoRdo — Layer3 RDO 讀取層: store-scoped on _rdo2,依 EntryID 重讀單封郵件實體資訊寫回 info。
+        '   2026/06/28 by Simon/Claude: _rdo → _rdo2 store-scoped。路徑對齊 GetMailBodyRdo/GetAttachFilenameRdo:
+        '     由 info.FolderPath 經 GetRdoStore 解 store,再 store.GetMessageFromID(EntryID)。
+        '     (沿用舊 _rdo 區塊行為: RDO 路徑不更新 info.FolderPath;移動夾的路徑更新仍由 OOM 負責)
+        '   成功(找到郵件並寫回 info) → True;找不到 store/郵件或任何例外 → False,由呼叫端落 OOM fallback。
+        ' 2026/07/02 by Simon/Claude: 從舊 RefreshMailInfoL3 拆出,比照 GetMailInfoRdo/GetMailInfoOOM 切分方式;
+        '   分派層改名 RefreshMailInfo 並移至 Layer2.5 區塊,OOM 對應層 RefreshMailInfoOOM 移至 Layer3 OOM 區塊。
+        ' ---------------------------------------------------------------
+        Dim store As Redemption.RDOStore = GetRdoStore(info.FolderPath)
+        If store Is Nothing Then Return False
 
-        ' ⓪ Redemption 優先: store-scoped on _rdo2,繞過 OOM 開信的記憶體開銷;解析失敗(store 找不到/例外)直接落 ① OOM fallback。
-        ' 2026/06/28 by Simon/Claude: _rdo → _rdo2 store-scoped。路徑對齊 GetMailBodyRdo/GetAttachFilenameRdo:
-        '   由 info.FolderPath 經 GetRdoStore 解 store,再 store.GetMessageFromID(EntryID)。FolderPath 空 → 跳過走 OOM。
-        '   (沿用舊 _rdo 區塊行為: RDO 路徑不更新 info.FolderPath;移動夾的路徑更新仍由 ① OOM 負責)
-        If _rdo2 IsNot Nothing AndAlso info.FolderPath <> "" Then
-            Dim store As Redemption.RDOStore = GetRdoStore(info.FolderPath)
-            If store IsNot Nothing Then
-                Dim rdoMsg As Redemption.RDOMail = Nothing
-                Try
-                    rdoMsg = TryCast(store.GetMessageFromID(info.EntryID), Redemption.RDOMail)
-                    If rdoMsg IsNot Nothing Then
-                        info.Subject = rdoMsg.Subject
-                        info.Size = rdoMsg.Size
-                        info.RcvTime = rdoMsg.ReceivedTime
-                        info.SenderName = rdoMsg.SenderName
-                        If readAttachCount Then
-                            Dim n As Integer = 0
-                            For i As Integer = 1 To rdoMsg.Attachments.Count
-                                Dim att As Redemption.RDOAttachment = rdoMsg.Attachments.Item(i)
-                                Try : If att.Type = 1 Then n += 1   ' 僅算 olByValue(1)，與 GetAttachFilenameOOM 一致
-                                Finally : Dim o As Object = att : TryMarshalRelease(o)
-                                End Try
-                            Next
-                            info.AttachCount = n
-                        End If
-                        Return RefreshResult.Updated
-                    End If
-                Catch ex As System.Exception   ' RDO 任何失敗都讓 OOM 再試一次，由 OOM 作最終結論
-                    If _iLikeNoisy Then _dbg("    ├ ⓪ RDO 失敗，走 OOM fallback", ex.Message)
-                Finally
-                    Dim o As Object = rdoMsg : TryMarshalRelease(o)
-                End Try
-            End If
-        End If
-
-        ' ① Fallback: Outlook OOM
-        Dim mail As Outlook.MailItem = Nothing
+        Dim rdoMsg As Redemption.RDOMail = Nothing
         Try
-            mail = TryCast(_olNS.GetItemFromID(info.EntryID), Outlook.MailItem)
-            If mail Is Nothing Then Return RefreshResult.NotFound
+            rdoMsg = TryCast(store.GetMessageFromID(info.EntryID), Redemption.RDOMail)
+            If rdoMsg Is Nothing Then Return False
 
-            info.Subject = mail.Subject
-            info.Size = mail.Size
-            info.RcvTime = mail.ReceivedTime
-            info.SenderName = mail.SenderName
-            info.FolderPath = SafeGetPath(TryCast(mail.Parent, Folder)) ' 2026/6/15 by simon: 新增直接從 mail.Parent 更新路徑，確保即使資料夾被移動後仍能正確更新
-            ' todo: mail.Parent 會建立一個 COM object，傳入函數後沒有變數持有，TryMarshalRelease 就無從釋放 → COM memory leak
-
+            info.Subject = rdoMsg.Subject
+            info.Size = rdoMsg.Size
+            info.RcvTime = rdoMsg.ReceivedTime
+            info.SenderName = rdoMsg.SenderName
             If readAttachCount Then
-                Dim attachments As Outlook.Attachments = Nothing
-                Try
-                    attachments = mail.Attachments
-                    Dim attCount As Integer = attachments.Count    ' 存成變數避免 COM 重複呼叫
-                    Dim n As Integer = 0
-                    For i As Integer = 1 To attCount
-                        Dim att As Outlook.Attachment = attachments.Item(i)
-                        Try : If att.Type = Outlook.OlAttachmentType.olByValue Then n += 1   ' 僅算 olByValue(1)
-                        Finally : TryMarshalRelease(att)
-                        End Try
-                    Next
-                    info.AttachCount = n
-                Finally
-                    TryMarshalRelease(attachments)
-                End Try
+                Dim n As Integer = 0
+                For i As Integer = 1 To rdoMsg.Attachments.Count
+                    Dim att As Redemption.RDOAttachment = rdoMsg.Attachments.Item(i)
+                    Try : If att.Type = 1 Then n += 1   ' 僅算 olByValue(1)，與 GetAttachFilenameOOM 一致
+                    Finally : Dim o As Object = att : TryMarshalRelease(o)
+                    End Try
+                Next
+                info.AttachCount = n
             End If
-            Return RefreshResult.Updated
-
-        Catch ex As System.Runtime.InteropServices.COMException
-            ' 區分 NotFound (ID 失效) 與暫時性錯誤，供呼叫端日後移除政策使用
-            If ex.ErrorCode = MAPI_E_NOT_FOUND Then
-                If _iLikeNoisy Then _dbg("    ├ ① NotFound", info.EntryID)
-                Return RefreshResult.NotFound
-            End If
-            If _iLikeNoisy Then _dbg("    ├ ① COM 暫時性錯誤", ex.Message)
-            Return RefreshResult.TransientError
-        Catch ex As System.Exception
-            If _iLikeNoisy Then _dbg("    ├ ① 例外", ex.Message)
-            Return RefreshResult.TransientError
+            Return True
+        Catch ex As System.Exception   ' RDO 任何失敗都讓 OOM 再試一次，由 OOM 作最終結論
+            If _iLikeNoisy Then _dbg("    ├ RDO 失敗，走 OOM fallback", ex.Message)
+            Return False
         Finally
-            TryMarshalRelease(mail)
+            Dim o As Object = rdoMsg : TryMarshalRelease(o)
         End Try
     End Function
 
@@ -1721,6 +1791,22 @@ Partial Class Form1
         _rdo2StoreByPath(folderPath) = store                                    ' 含 Nothing 亦記,避免重複解析
         Return store
 
+    End Function
+    Private Function BuildRdoStoreByNameDict(session As Redemption.RDOSession) As Dictionary(Of String, Redemption.RDOStore)
+        ' 供多執行緒平行讀取使用：每個獨立 RDOSession(非共用 _rdo2)各自建立一份 store 顯示名→RDOStore 對照表。
+        '   不可共用 _rdo2StoreByName/_rdo2StoreByPath，那兩張表綁定共用 _rdo2、僅供 UI 緒單一存取(見 GetRdoStore 開頭註解)。
+        ' 2026/07/03 by Simon/Claude [平行化SimHash]: 抽出自 PROBE_BODYPAR 探針驗證過的邏輯，供 production 平行版 worker 共用
+        Dim d As New Dictionary(Of String, Redemption.RDOStore)()
+        For i As Integer = 1 To session.Stores.Count
+            Dim st As Redemption.RDOStore = session.Stores.Item(i)
+            Dim nm As String = st.Name
+            If Not String.IsNullOrEmpty(nm) AndAlso Not d.ContainsKey(nm) Then
+                d(nm) = st
+            Else
+                Dim o As Object = st : TryMarshalRelease(o)
+            End If
+        Next
+        Return d
     End Function
     Private Function GetSubtreeRdo(rootFolder As Folder, rootPath As String, Optional progress As IProgress(Of ProgressReport) = Nothing) As List(Of (eid As String, sid As String, fPath As String))
         ' 🆕 2026/06/25 by Simon/Claude: GetSubtreeRdo 派工殼 — Phase1 批次主支,失敗退 RDO 枚舉(3e);Phase2 共用 OOM 還原。
@@ -1763,10 +1849,13 @@ Partial Class Form1
         '   不釋放 rdoRoot(外層殼負責),只釋放自己 GetFolderFromID 開出的子夾。
         ' 2026/06/28 by Simon/Claude [Stage2]: COLS 多撈 PR_CONTAINER_CLASS(0x3613001E),由 CcIsMail 推 isMail 帶進 node,
         '   讓 Phase2 不需物化 folder 也有 isMail。(若夾普遍無 CC 改 0x3613001F;Stage0 實證夾無CC僅 ~4.5% 且全是郵件夾,CcIsMail 空→mail 已涵蓋)
+        ' 2026/07/03 by Simon/Claude [PROBE_HIERCNT 通過後上線]: COLS 多撈 PR_CONTENT_COUNT(0x36020003),同一次 GetRows 順手回填 _cacheMailCount。
+        '   探針實證(13 個真實子樹、374+ 夾): mc 與 OOM PropertyAccessor 全一致、額外耗時在雜訊等級(單一 +202ms 冷啟動異常值二次重跑不再重現)。
+        '   讀不到值(Nothing/轉型失敗)時不寫快取，留給既有 GetMailCount 的 DB lazy/COM fallback 處理，不寫入猜測值。
         If _iLikeNoisy Then _dbg(" ├ 開始", store.ToString & rdoRoot.ToString & rootPath.ToString)
         Dim nodes As New List(Of (eid As String, name As String, path As String, isMail As Boolean))(512)
         Dim toRel As New List(Of Object)()
-        Const COLS As String = "Name, EntryID, http://schemas.microsoft.com/mapi/proptag/0x360A000B, http://schemas.microsoft.com/mapi/proptag/0x3613001E"  ' PR_SUBFOLDERS, PR_CONTAINER_CLASS
+        Const COLS As String = "Name, EntryID, http://schemas.microsoft.com/mapi/proptag/0x360A000B, http://schemas.microsoft.com/mapi/proptag/0x3613001E, http://schemas.microsoft.com/mapi/proptag/0x36020003"  ' PR_SUBFOLDERS, PR_CONTAINER_CLASS, PR_CONTENT_COUNT
         Try
             Dim q As New Queue(Of (f As Redemption.RDOFolder, p As String))(512) : q.Enqueue((rdoRoot, rootPath))
             While q.Count > 0
@@ -1788,6 +1877,11 @@ Partial Class Form1
                         Dim cc As String = TryCast(row.GetValue(lb + 3), String)               ' PR_CONTAINER_CLASS → CcIsMail
                         Dim cp As String = cur.p & "\" & nm
                         nodes.Add((eidHex, nm, cp, CcIsMail(cc)))
+
+                        Dim vCnt As Object = row.GetValue(lb + 4)                              ' PR_CONTENT_COUNT → _cacheMailCount
+                        If vCnt IsNot Nothing Then
+                            Try : _cacheMailCount(cp) = Convert.ToInt64(vCnt) : Catch : End Try
+                        End If
 
                         If hasSub Then
                             Dim child As Redemption.RDOFolder = Nothing
@@ -2610,6 +2704,60 @@ Partial Class Form1
         End Try
         Return resultList
     End Function
+    Private Function RefreshMailInfoOOM(ByRef info As MailItemInfo, readAttachCount As Boolean) As RefreshResult
+        ' ---------------------------------------------------------------
+        ' RefreshMailInfoOOM — Layer3 OOM 讀取層: 依 EntryID 從 Outlook COM 重讀單封郵件實體資訊寫回 info。
+        '   回傳 Updated/NotFound/TransientError；失效郵件的移除政策由呼叫端決定 (目前一律保留+記錄)
+        ' 2026/07/02 by Simon/Claude: 從舊 RefreshMailInfoL3 拆出,比照 GetMailInfoRdo/GetMailInfoOOM 切分方式;
+        '   分派層改名 RefreshMailInfo 並移至 Layer2.5 區塊,RDO 對應層 RefreshMailInfoRdo 留在 Layer3 RDO 區塊。
+        ' ---------------------------------------------------------------
+        Const MAPI_E_NOT_FOUND As Integer = &H8004010F   ' 找不到物件的 HRESULT，用以區分 NotFound vs 暫時性錯誤
+        Dim mail As Outlook.MailItem = Nothing
+        Try
+            mail = TryCast(_olNS.GetItemFromID(info.EntryID), Outlook.MailItem)
+            If mail Is Nothing Then Return RefreshResult.NotFound
+
+            info.Subject = mail.Subject
+            info.Size = mail.Size
+            info.RcvTime = mail.ReceivedTime
+            info.SenderName = mail.SenderName
+            info.FolderPath = SafeGetPath(TryCast(mail.Parent, Folder)) ' 2026/6/15 by simon: 新增直接從 mail.Parent 更新路徑，確保即使資料夾被移動後仍能正確更新
+            ' todo: mail.Parent 會建立一個 COM object，傳入函數後沒有變數持有，TryMarshalRelease 就無從釋放 → COM memory leak
+
+            If readAttachCount Then
+                Dim attachments As Outlook.Attachments = Nothing
+                Try
+                    attachments = mail.Attachments
+                    Dim attCount As Integer = attachments.Count    ' 存成變數避免 COM 重複呼叫
+                    Dim n As Integer = 0
+                    For i As Integer = 1 To attCount
+                        Dim att As Outlook.Attachment = attachments.Item(i)
+                        Try : If att.Type = Outlook.OlAttachmentType.olByValue Then n += 1   ' 僅算 olByValue(1)
+                        Finally : TryMarshalRelease(att)
+                        End Try
+                    Next
+                    info.AttachCount = n
+                Finally
+                    TryMarshalRelease(attachments)
+                End Try
+            End If
+            Return RefreshResult.Updated
+
+        Catch ex As System.Runtime.InteropServices.COMException
+            ' 區分 NotFound (ID 失效) 與暫時性錯誤，供呼叫端日後移除政策使用
+            If ex.ErrorCode = MAPI_E_NOT_FOUND Then
+                If _iLikeNoisy Then _dbg("    ├ NotFound", info.EntryID)
+                Return RefreshResult.NotFound
+            End If
+            If _iLikeNoisy Then _dbg("    ├ COM 暫時性錯誤", ex.Message)
+            Return RefreshResult.TransientError
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("    ├ 例外", ex.Message)
+            Return RefreshResult.TransientError
+        Finally
+            TryMarshalRelease(mail)
+        End Try
+    End Function
     Private Async Function GetMailInfoAsDict(fPath As String, ct As CancellationToken) As Task(Of Dictionary(Of String, MailItemInfo))
         ' 2026/06/14 by Simon/Claude Opus 4.8: 方法B底層 — 對單一資料夾一次 GetTable+GetArray，回傳 EntryID→基本欄位 dict
         '   不加 hasattachment 過濾 (要服務 Lv3/4/5 任意郵件)；解析不到資料夾 → 回 Nothing 讓呼叫端退回方法A
@@ -2776,6 +2924,7 @@ Partial Class Form1
         ' 故意不走完整 Layer3 fallback 的GetMailCount，只走最快的 PropertyAccessor 路徑
         ' 失敗時回傳 -999 (不可能等於任何正常 snapshot 值，確保快取失效)
         ' 2026/4/7 by Gemini, 解決 SSD 讀出後 snapshot 驗證失敗導致的重複統計問題
+        ' 2026/7/2 by simon, 直接保底呼叫一次 folder.Items.Count, 比RDO 要先解 store/folder 才能讀屬性的解析開銷快，所以也不需轉到_rdo2)
         ' ---------------------------------------------------------------
         Dim fName As String = ExtractFolderName(fPath)
         If _iLikeNoisy Then _dbg(" ├ 開始", fName)
@@ -3030,6 +3179,10 @@ Partial Class Form1
         ' 支援包含 Re:, FW:, 回覆:, 轉寄: 等多國語言前綴的重複巢狀清理
         If String.IsNullOrEmpty(subject) Then Return ""
 
+        ' 2026/07/03 by Simon/Claude Fable 5: memoization — 相同 subject 字串直接回傳快取結果，不重跑 Regex
+        Dim cached As String = Nothing
+        If _cacheCleanSubject.TryGetValue(subject, cached) Then Return cached
+
         'Dim clean = subject
         'Dim prefixes As String() = {"RE:", "FW:", "回覆:", "回信：", "轉寄:", "答复:", "转发:", "AW:", "VS:"} ' 加入德文/法文常見前綴
         'Dim found As Boolean = True
@@ -3049,7 +3202,9 @@ Partial Class Form1
         '   - 新增語系：日(返信/転送)、韓(답장/회신/전달)、德(AW/WG)、法(Rép/TR)、北歐(VS)
         '   - 半形(:)全形(：)冒號通吃；前後空白(\s*)不限；大小寫不分(IgnoreCase)
         '   - 多層巢狀("Re: Re: FW: ...") 一次 Replace 完成，只產生一次 string allocation
-        Return _subjectPrefixRe.Replace(subject, "")
+        Dim result = _subjectPrefixRe.Replace(subject, "")
+        _cacheCleanSubject(subject) = result   ' 2026/07/03 by Simon/Claude Fable 5: 存回 memoization 快取
+        Return result
 
     End Function
     Private Function NormalizeMailBody(body As String) As String
@@ -3101,9 +3256,8 @@ Partial Class Form1
                 If .fsa >= 0 Then _cacheFolderSizeAll.TryAdd(fPath, .fsa)
             End If
 
-            ' by Gemini, 2026/04/10: 填充身分標識與標籤快取
+            ' by Gemini, 2026/04/10: 填充身分標識與標籤快取 (2026/07/03: isMail 併入 _cacheFolderIDs，_cacheIsMailFolder 汰除)
             If Not String.IsNullOrEmpty(.eid) Then _cacheFolderIDs.TryAdd(fPath, (.eid, .sid, .isMail = 1, .hasCh = 1))
-            If .isMail >= 0 Then _cacheIsMailFolder.TryAdd(fPath, .isMail = 1)
         End With
     End Sub
 #End Region

@@ -85,10 +85,80 @@ Partial Class Form1
     Private Shared Function TimeEndPeriod(ByVal uPeriod As Integer) As Integer
     End Function
 
+    ' === 2026/07/03 by Simon/Claude Fable 5: EULA 自動關閉改用 SetWinEventHook 事件驅動 (取代純輪詢的 SW_HIDE 競速) ===
+    '   OUTOFCONTEXT 不需 DLL injection，事件經由「安裝 hook 那條執行緒」的訊息佇列送達 (該執行緒必須有 message pump)
+    Private Delegate Sub WinEventDelegate(
+        hWinEventHook As IntPtr, eventType As UInteger, hwnd As IntPtr,
+        idObject As Integer, idChild As Integer,
+        dwEventThread As UInteger, dwmsEventTime As UInteger)
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function SetWinEventHook(
+        ByVal eventMin As UInteger,
+        ByVal eventMax As UInteger,
+        ByVal hmodWinEventProc As IntPtr,
+        ByVal lpfnWinEventProc As WinEventDelegate,
+        ByVal idProcess As UInteger,
+        ByVal idThread As UInteger,
+        ByVal dwFlags As UInteger) As IntPtr
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function UnhookWinEvent(
+        ByVal hWinEventHook As IntPtr) As Boolean
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll", CharSet:=Runtime.InteropServices.CharSet.Auto)>
+    Private Shared Function GetClassName(
+        ByVal hWnd As IntPtr,
+        ByVal lpClassName As System.Text.StringBuilder,
+        ByVal nMaxCount As Integer) As Integer
+    End Function
+
+    ' === 2026/07/03 by Simon/Claude Fable 5: 專職 hook 執行緒的 message pump 用 ===
+    '   OUTOFCONTEXT 事件送到「安裝 hook 那條執行緒」的訊息佇列；UI 執行緒被 New RDOSession 卡住時
+    '   無法 pump，事件永遠送不到 → 必須開專職執行緒自己跑 GetMessage 迴圈
+    <Runtime.InteropServices.StructLayout(Runtime.InteropServices.LayoutKind.Sequential)>
+    Private Structure NativeMsg
+        Public hwnd As IntPtr
+        Public message As UInteger
+        Public wParam As IntPtr
+        Public lParam As IntPtr
+        Public time As UInteger
+        Public ptX As Integer
+        Public ptY As Integer
+    End Structure
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function GetMessage(
+        ByRef lpMsg As NativeMsg,
+        ByVal hWnd As IntPtr,
+        ByVal wMsgFilterMin As UInteger,
+        ByVal wMsgFilterMax As UInteger) As Integer
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function TranslateMessage(
+        ByRef lpMsg As NativeMsg) As Boolean
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function DispatchMessage(
+        ByRef lpMsg As NativeMsg) As IntPtr
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function PostThreadMessage(
+        ByVal idThread As UInteger,
+        ByVal msg As UInteger,
+        ByVal wParam As IntPtr,
+        ByVal lParam As IntPtr) As Boolean
+    End Function
+    <Runtime.InteropServices.DllImport("kernel32.dll")>
+    Private Shared Function GetCurrentThreadId() As UInteger
+    End Function
+
     ' ── 常數 ───
     Private Const WM_LBUTTONDOWN As Integer = &H201
     Private Const WM_LBUTTONUP As Integer = &H202
     Private Const SW_HIDE As Integer = 0
+    Private Const EVENT_OBJECT_SHOW As UInteger = &H8002    ' 2026/07/03: 視窗變為可見的 WinEvent
+    Private Const WINEVENT_OUTOFCONTEXT As UInteger = 0     ' 2026/07/03: 非注入式，事件走訊息佇列非同步送達
+    Private Const OBJID_WINDOW As Integer = 0               ' 2026/07/03: 過濾用，只理會視窗本體事件
+    Private Const WM_QUIT As UInteger = &H12                ' 2026/07/03: 結束 hook 執行緒的 GetMessage 迴圈用
 
     ' TreeView 雙緩衝
     Private Const TV_FIRST As Integer = &H1100

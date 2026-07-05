@@ -42,11 +42,11 @@ Partial Class Form1
 #Region "■ 04 Tab1: 資料夾統計 — 重構後程式碼 v5 (最終版) ==="
     ' ==============================================================
     '   Layer1  TreeView1_AfterSelect         UI 事件層：序號防護 + 批次寫 ListView
-    '   Layer2  CollectFolderStatsByBFS       流程協調層，拆成五個子函數：
+    '   Layer2  CollectFolderInfoByBFS       流程協調層，拆成五個子函數：
     '             - BuildBfsFolderTree        GetSubtree骨架 + 記憶體剪枝 (2026-04-08 加入 DB lazy 不驗 snapshot；2026/07/02 骨架整合)
     '             - FetchDirectMailCountsAsync呼叫 GetMailCount (有記憶體+DB lazy+COM 三層) 
-    '             - SummarizeSubTreeBottomUp  純記憶體底部向上加總
-    '             - UpdateFolderStatsCache    寫入 L2.5 快取字典
+    '             - SumUpSubTreeBottomUp  純記憶體底部向上加總
+    '             - UpdateFolderInfoCache    寫入 L2.5 快取字典
     '             - GetBfsResult              提取 root + 直屬子資料夾
     '   Layer3  GetMailCountOOM / GetFolderCountOOM 等 COM 底層
     '
@@ -72,7 +72,7 @@ Partial Class Form1
     '           保留 v1 的所有效能優勢，同時修正第二次點選只顯示 root 的問題
     '           不引入 Task.WhenAll (實測 sequential BFS 比 parallel of parallel 快) (cache: 0.01s，應當與 v1 相同)
     '
-    '   v5  大幅重構 CollectFolderStatsByBFS，依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。(2026/04/04 by Gemini)
+    '   v5  大幅重構 CollectFolderInfoByBFS，依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。(2026/04/04 by Gemini)
     '
     ' ── 為什麼 v4 不用 Task.WhenAll？─────────────────────────────
     '   v2/v3fix 的「並行的並行」看起來應該更快，但實測反而輸給 v1，
@@ -86,7 +86,7 @@ Partial Class Form1
     '       取得選中資料夾 → 呼叫 Layer2 → 批次更新 ListView1
     '       規則: 不做計算，不直接操作 COM，只傳達意圖與呈現結果
     '
-    '   Layer2  CollectFolderStatsByBFS 流程協調層 (核心)
+    '   Layer2  CollectFolderInfoByBFS 流程協調層 (核心)
     '       BFS 展開整棵子樹 (root 永遠展開直屬子，其餘節點依快取決定)
     '       → 呼叫 Layer3 讀每個節點的直接郵件數
     '       → 底部向上彙總 (O(N)，無遞迴 stack overflow 風險)
@@ -148,7 +148,7 @@ Partial Class Form1
         ' ==============================================================
         ' 重構抽離, 2026/5/14 by simon
         '   - GetDeDupedNodes:       父子去重，確保同時選中父資料夾與子資料夾時不重複計算, 可重複用於F5 Refresh
-        '   - ComputeTab1FolderStats: 非同步計算統計數字，支援一般模式與 F5 強制刷新模式
+        '   - CollectTab1FolderInfo: 非同步計算統計數字，支援一般模式與 F5 強制刷新模式
         '   - RenderLv1:    將計算好的 ListViewItem 清單更新至 ListView1，包含雙緩衝優化與過期狀態清理
         ' ==============================================================
         _dbg("開始") : Dim sw As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
@@ -173,7 +173,7 @@ Partial Class Form1
         Try
             ' ── 執行運算 (Layer 1.5) ──
             ' 傳入去重後的節點，取得組裝好的 ListViewItem 清單
-            Dim allItems As List(Of ListViewItem) = Await ComputeTab1FolderStats(deDupedNodes, cToken)
+            Dim allItems As List(Of ListViewItem) = Await CollectTab1FolderInfo(deDupedNodes, cToken)
 
             If _tab1SelectSeq <> mySeq Then Return  ' 序號機制配對：在 Await 回來後，若使用者已點擊其他節點，則放棄渲染
             RenderLv1(allItems)            ' ── 執行渲染 (UI 呈現) ──
@@ -245,7 +245,7 @@ Partial Class Form1
 
                 ' 手動計算統計並渲染 (等同 SimTree1_AfterSelect 的流程)
                 Dim dedupedNodes As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
-                Dim items As List(Of ListViewItem) = Await ComputeTab1FolderStats(dedupedNodes, cToken)
+                Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken)
                 RenderLv1(items)
 
                 ' 在 ListView1 中找到代表「剛才那個資料夾」的列並移去高亮
@@ -289,12 +289,12 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function ComputeTab1FolderStats(dedupedNodes As List(Of TreeNode), cToken As CancellationToken, Optional skipCache As Boolean = False) As Task(Of List(Of ListViewItem))
+    Private Async Function CollectTab1FolderInfo(dedupedNodes As List(Of TreeNode), cToken As CancellationToken, Optional skipCache As Boolean = False) As Task(Of List(Of ListViewItem))
         ''' <summary>
         ''' [Layer 1.5 業務邏輯層] 針對去重後的節點進行非同步統計運算。
         ''' 支援一般 BFS 運算與 F5 強制刷新模式。
-        ''' skipCache=True   時委派給 CollectFolderStatsByL3ForceRefresh (直打 L3)；
-        ''' skipCache=False  走 CollectFolderStatsByBFS (BFS + 快取剪枝)。
+        ''' skipCache=True   時委派給 CollectFolderInfoForceL3 (直打 L3)；
+        ''' skipCache=False  走 CollectFolderInfoByBFS (BFS + 快取剪枝)。
         ''' </summary>
         ''' <param name="dedupedNodes">已去重過的選中節點清單</param>
         ''' <param name="cToken">取消標記</param>
@@ -314,10 +314,10 @@ Partial Class Form1
             Dim rows As List(Of FolderBfsEntry)
             If skipCache = False Then
                 ' === 標準模式：呼叫 Layer2 BFS 展開，含快取剪枝機制 ===
-                rows = Await CollectFolderStatsByBFS(folder, New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message), cToken:=cToken)
+                rows = Await CollectFolderInfoByBFS(folder, New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message), cToken:=cToken)
             Else
                 ' === F5 強制刷新策略：直接呼叫 L3 接口，不走 BFS 隊列 ===
-                rows = Await CollectFolderStatsByL3ForceRefresh(folder, cToken)
+                rows = Await CollectFolderInfoForceL3(folder, cToken)
             End If
 
             ' 序列安全性檢查：若在 Await 期間使用者切換了選擇，立即終止運算
@@ -342,7 +342,7 @@ Partial Class Form1
 
         Return allItems
     End Function
-    Private Async Function CollectFolderStatsByBFS(rootFolder As Folder, progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
+    Private Async Function CollectFolderInfoByBFS(rootFolder As Folder, progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
         ' ==============================================================
         ' === Layer 2 (流程協調層) ===
         ' 職責: BFS 廣度優先搜索，展開整棵子樹，管理快取剪枝，驅動 Layer3，底部向上彙總，回傳顯示清單
@@ -354,8 +354,8 @@ Partial Class Form1
         '   Step 1. BuildBfsFolderTree          : GetSubtree 骨架一次展開 + 記憶體剪枝(2026/07/02 骨架整合)；若快取命中(非root)則剪枝。
         '   Step 2. FetchDirectMailCountsAsync  : 對未快取節點逐一呼叫 GetMailCount() 取本層郵件數。
         '                                         處理 progress 報告並支援 _cancelRequested 中斷。
-        '   Step 3. SummarizeSubTreeBottomUp    : 利用 BFS「父索引 < 子索引」特性，從陣列尾端往前掃一次完成加總。
-        '   Step 4. UpdateFolderStatsCache      : 將最新結果寫入 Layer2.5 的 _cacheMailCountAll 等字典。
+        '   Step 3. SumUpSubTreeBottomUp    : 利用 BFS「父索引 < 子索引」特性，從陣列尾端往前掃一次完成加總。
+        '   Step 4. UpdateFolderInfoCache      : 將最新結果寫入 Layer2.5 的 _cacheMailCountAll 等字典。
         '   Step 5. GetBfsResult                : 從陣列中挑出 root 與直屬子資料夾 (ParentIndex=0) 並補讀快取。
         '…
         ' 架構與效能考量:
@@ -378,8 +378,8 @@ Partial Class Form1
         Dim t2 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()    ' PROBE_TIMING
 
         ' ── Step 3 & 4: 純記憶體運算與快取更新
-        SummarizeSubTreeBottomUp(allEntries)
-        UpdateFolderStatsCache(allEntries)
+        SumUpSubTreeBottomUp(allEntries)
+        UpdateFolderInfoCache(allEntries)
         Dim t34 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()   ' PROBE_TIMING
 
         ' ── Step 5: 提取 UI 所需的結果並回報最終進度
@@ -390,8 +390,8 @@ Partial Class Form1
         Return res
 
     End Function
-    Private Async Function CollectFolderStatsByL3ForceRefresh(folder As Folder, cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
-        ' 2026/05/27 by Simon/Claude: 從 ComputeTab1FolderStats skipCache 分支抽出
+    Private Async Function CollectFolderInfoForceL3(folder As Folder, cToken As CancellationToken) As Task(Of List(Of FolderBfsEntry))
+        ' 2026/05/27 by Simon/Claude: 從 CollectTab1FolderInfo skipCache 分支抽出
         ' F5 強制刷新策略：直打 L3，只計算 root + 直屬子資料夾，不走 BFS 整棵子樹
         Dim rootPath As String = SafeGetPath(folder)
         PgrsBar2.Text = $"F5: 讀取 {ExtractFolderName(rootPath)}..."
@@ -410,14 +410,13 @@ Partial Class Form1
         Dim rows As New List(Of FolderBfsEntry) From {New FolderBfsEntry With {.Folder = folder, .FolderPath = rootPath,
                                                                                .DirectMailCount = rootMc, .TotalMailCount = rootMca, .TotalSubCount = rootFca}}
 
+        ' ✅ 2026/5/31 by Gemini/Simon: 加入 skipCache 引數判斷是否要強制讀取COM
         ' 處理直屬子資料夾 (ps. 這裡是不是多餘重複了?? 上面不是已經用CountAll也都更新cache了, 為何還要再逐一讀一次直屬子資料夾?? 這裡的邏輯是什麼??)
         ' 解答：這並非多餘。by Gemini 3.5 Flash, 2026/06/27
         '   (1) 根資料夾呼叫的 GetMailCountAllOOM(root) 只會回傳整棵子樹的總郵件數，在計算過程中「完全不會」寫入或更新任何直屬子資料夾的個別快取字典。
         '   (2) F5 強制重刷的 UI 畫面需要同時呈現 Root 與其所有「直屬子資料夾」的獨立統計數據。
         '       為了取得各直屬子資料夾個別的 DirectMailCount 與 TotalMailCount/TotalSubCount 數據，必須逐一尋訪直屬子資料夾 (child)，
         '       對其單獨呼叫 GetMailCountAllOOM(child) 以取得其子樹總數，寫入其 childPath 對應的快取字典中，並將個別的 FolderBfsEntry 包入 rows 回傳。
-
-        ' ✅ 2026/5/31 by Gemini/Simon: 加入 skipCache 引數判斷是否要強制讀取COM
         For Each child As Folder In GetSortedSubFolders(folder, rootPath, skipCache:=True)
             cToken.ThrowIfCancellationRequested()
             Dim childPath As String = rootPath & "\" & child.Name
@@ -436,7 +435,7 @@ Partial Class Form1
         Return rows
     End Function
 
-    ' 以下為 CollectFolderStatsByBFS 專用的拆分子函數 (Steps 1~5)
+    ' 以下為 CollectFolderInfoByBFS 專用的拆分子函數 (Steps 1~5)
     Private Async Function BuildBfsFolderTree(rootFolder As Folder, cToken As CancellationToken, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of List(Of FolderBfsEntry))
         ' 負責: 展開整棵子樹 + 依 Layer2.5 快取字典剪枝，產出「父索引 < 子索引」的 FolderBfsEntry 陣列。
         ' 2026/07/02 by Simon/Claude [骨架整合]: 不再自己逐節點走樹(原: 每節點 DbGetOrderedSubFolderIDs 查一次 DB + 未知節點退 COM 物化)。
@@ -445,7 +444,7 @@ Partial Class Form1
         '   原 selfKnownToDb 冷啟動特判(2026/07/01)與 GetSortedSubFolderIDs 的 ③ COM 物化退路從此不再需要。
         '   保留的既有語意 (只是搬到記憶體樹上執行):
         '     - 剪枝規則: 非 root 節點 mca/fca 雙快取命中才剪枝；root 永遠展開直屬子夾(v4 bug fix)。
-        '     - DB lazy: 未命中節點 DbGetFolderStats + FillCacheFromDbRow(skipAggregates:=True) 只填本層欄位，不驗 snapshot(原樣)。
+        '     - DB lazy: 未命中節點 DbGetFolderInfo + FillCacheFromDbRow(skipAggregates:=True) 只填本層欄位，不驗 snapshot(原樣)。
         '     - 模式過濾: 骨架為完整全集，套 FilterSubtreeByMode 對齊原 DbGetOrderedSubFolderIDs 的 is_mail 過濾。
         '     - 顯示排序: 比照 DbGetOrderedSubFolderIDs 的 ORDER BY has_chinese ASC, folder_path ASC，在記憶體對每層子夾排序，
         '                 確保 GetBfsResult 取 ParentIndex=0 的顯示順序不變。
@@ -513,15 +512,15 @@ Partial Class Form1
                     ' by Claude Sonnet 4.6, 2026/04/25: 選項 A 修正 — DB 的 mca/fca/fsa 帶有模式語意，無法確認是在哪個 _showAllFolders 模式下計算並儲存的。
                     '   若直接使用 DB 值做剪枝，切換模式後或重啟後第一次統計會顯示舊模式的錯誤加總。
                     '   skipAggregates:=True → FillCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
-                    '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，重算結果透過 UpdateFolderStatsCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
+                    '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，重算結果透過 UpdateFolderInfoCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
                     '   效能代價：每次切換或重啟後第一次統計需完整展開（不能 DB 剪枝），可接受。
-                    '   (2026/07/02 骨架整合註記: 此處每節點一次 DbGetFolderStats 點查詢原本被刻意保留，目的是預熱 _cacheMailCount，
+                    '   (2026/07/02 骨架整合註記: 此處每節點一次 DbGetFolderInfo 點查詢原本被刻意保留，目的是預熱 _cacheMailCount，
                     '    讓 Step2 的 GetMailCount 走 ① 記憶體命中而不觸發「DB lazy + snapshot 驗證」的逐夾 COM 讀取。
                     '   2026/07/03 by Simon/Claude [PROBE_HIERCNT 通過後]: mc/fc 現在已由 Step①的 GetSubtree(RDO 批次)免費回填,
                     '    只剩 fs 仍無免費來源。三者都已在記憶體時這次點查詢已無新資訊可拿，跳過(FillCacheFromDbRow 是 TryAdd 語意本就不覆寫，
                     '    此處只是省掉白做工的 SQL 往返，行為不變)。任一者仍缺才照原樣查 DB。
                     If Not _cacheMailCount.ContainsKey(fPath) OrElse Not _cacheFolderCount.ContainsKey(fPath) OrElse Not _cacheFolderSize.ContainsKey(fPath) Then
-                        Dim row = DbGetFolderStats(fPath)
+                        Dim row = DbGetFolderInfo(fPath)
                         If row IsNot Nothing Then FillCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
                     End If
                 End If
@@ -544,8 +543,8 @@ Partial Class Form1
             Loop
         Catch ex As OperationCanceledException
             ' 2026/04/11 by Claude: 改為 re-throw，確保不完整的 BFS 樹不會繼續傳入
-            ' UpdateFolderStatsCache，避免錯誤的中途統計結果汙染快取。
-            ' (原本 catch 後繼續 Return allEntries，導致上層 CollectFolderStatsByBFS 看不到中斷，仍執行 SummarizeSubTreeBottomUp + UpdateFolderStatsCache)
+            ' UpdateFolderInfoCache，避免錯誤的中途統計結果汙染快取。
+            ' (原本 catch 後繼續 Return allEntries，導致上層 CollectFolderInfoByBFS 看不到中斷，仍執行 SumUpSubTreeBottomUp + UpdateFolderInfoCache)
             _dbg("    ├ 中斷", $"BuildBfsFolderTree 已由使用者中斷")
             Throw
         End Try
@@ -559,7 +558,7 @@ Partial Class Form1
         ' 負責: 對未快取節點打 COM (呼叫 GetMailCount)，並負責 UI 節流 (Task.Yield) 與 ESC 中斷檢查。
         ' 2026/04/11 by Claude: 回傳值從 Task(Of Boolean) 改為 Task，原本的 Return True/False 均改為 re-throw。
         '   理由: 呼叫端 Await FetchDirectMailCountsAsync(...) 完全丟棄了 Task(Of Boolean) 的回傳值，
-        '         等同 Return True 無效，ESC 後上層照樣執行 UpdateFolderStatsCache 污染快取。
+        '         等同 Return True 無效，ESC 後上層照樣執行 UpdateFolderInfoCache 污染快取。
         '         改為 Throw 後，OperationCanceledException 直接傳到 TreeView1_AfterSelect 的 catch 攔截。
 
         If _iLikeNoisy Then _dbg("    ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
@@ -590,7 +589,7 @@ Partial Class Form1
         _dbg("    ├ 結束", $"共讀取 {total:N0} 個節點 (非快取) ") ' by Gemini, 2026/04/04: Issue 2 補上結束
 
     End Function
-    Private Sub SummarizeSubTreeBottomUp(allEntries As IReadOnlyList(Of FolderBfsEntry))
+    Private Sub SumUpSubTreeBottomUp(allEntries As IReadOnlyList(Of FolderBfsEntry))
         ' 負責: 底部向上彙總。利用 BFS 父節點索引必小於子節點的特性，反向遍歷即可。
         ' 備註: 純記憶體 O(N) 運算且無 COM 呼叫，無 StackOverflow 風險。
 
@@ -609,7 +608,7 @@ Partial Class Form1
         _dbg("    ├ 結束", $"共讀取 {allEntries.Count:N0} 個節點 (非快取) ") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
 
     End Sub
-    Private Sub UpdateFolderStatsCache(allEntries As IReadOnlyList(Of FolderBfsEntry))
+    Private Sub UpdateFolderInfoCache(allEntries As IReadOnlyList(Of FolderBfsEntry))
         ' 負責: 將新計算的彙總結果寫入 Layer2.5 快取 
         ' 備註: TryAdd 不覆蓋既有值，避免污染快取
         If _iLikeNoisy Then _dbg("    ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 2
@@ -633,25 +632,27 @@ Partial Class Form1
 
         ' 2026/06/29 by Simon/Claude [Option A1]: UI 物化交界 — 只對 root + 直屬子夾物化 COM Folder(供 .Name/IsMailFolder/Tag)，
         '   走樹的全樹其餘節點維持零物化。root 物化僅 1 次 COM(可忽略)。
-        If allEntries(0).Folder Is Nothing Then allEntries(0).Folder = GetFolderById(allEntries(0).Eid, allEntries(0).Sid)
+        ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_TAB1E2E 拆帳後]: 徹底去物化 — 拆帳實測 26 store 全選第二輪:
+        '   GetFolderById 物化 178 次 ≈205ms + folder 版 GetMailCount(內含 SafeGetPath COM 讀 .FolderPath) ≈37ms,佔 0.55 秒的大宗。
+        '   root+直屬子夾也不再物化(.Folder 維持 Nothing);本層郵件數改走免-folder GetMailCount(fPath,eid,sid)(①記憶體命中 0 COM);
+        '   UI Tag 改帶 id-tuple(見 BuildLv1Item),Enter/ComputeSize 消費端用到那一刻才物化單一資料夾。
 
         For i As Integer = 1 To allEntries.Count - 1
             Dim entry As FolderBfsEntry = allEntries(i)
             If entry.ParentIndex = 0 Then
-                If entry.Folder Is Nothing Then entry.Folder = GetFolderById(entry.Eid, entry.Sid)   ' 直屬子夾物化
-                ' 若直屬子資料夾快取命中，補讀一下其本層郵件 (DirectMailCount)
-                If entry.IsFromCache Then entry.DirectMailCount = GetMailCount(entry.Folder)
+                ' 若直屬子資料夾快取命中，補讀一下其本層郵件 (DirectMailCount) — 免-folder 版,0 COM
+                If entry.IsFromCache Then entry.DirectMailCount = GetMailCount(entry.FolderPath, entry.Eid, entry.Sid)
                 result.Add(entry)
             End If
         Next
 
-        ' 若 root 自身快取命中，也補讀其本層郵件數
-        If allEntries(0).IsFromCache Then allEntries(0).DirectMailCount = GetMailCount(allEntries(0).Folder)
+        ' 若 root 自身快取命中，也補讀其本層郵件數 — 免-folder 版
+        If allEntries(0).IsFromCache Then allEntries(0).DirectMailCount = GetMailCount(allEntries(0).FolderPath, allEntries(0).Eid, allEntries(0).Sid)
 
         ' 2026/5/6 by Claude Sonnet 4.6, GetBfsResult 內，建立 result 清單後，預載 fsa
         For Each e In allEntries
             If Not _cacheFolderSizeAll.ContainsKey(e.FolderPath) Then
-                Dim row = DbGetFolderStats(e.FolderPath)
+                Dim row = DbGetFolderInfo(e.FolderPath)
                 If row IsNot Nothing AndAlso row.fsa >= 0 Then _cacheFolderSizeAll.TryAdd(e.FolderPath, row.fsa)
             End If
         Next
@@ -680,6 +681,11 @@ Partial Class Form1
 
         If items IsNot Nothing AndAlso items.Count > 0 Then ListView1.Items.AddRange(items.ToArray())
         ListView1.EndUpdate()
+
+        ' 2026/07/04 by Simon/Claude: 列數變化會讓捲軸出現/消失，進而改變 ClientSize.Width，
+        ' 但控制項本身 Width 不變 → 不會觸發 Resize 事件 → 欄寬不會自動跟著重算。
+        ' CalculateLvColumnSize 內部已有「ClientSize.Width 未變就直接返回」的防線，這裡呼叫不會造成額外負擔。
+        CalculateLvColumnSize(ListView1)
         _dbg("結束")
     End Sub
     Private Function BuildLv1GroupHeader(rootEntry As FolderBfsEntry, parentNode As TreeNode) As ListViewItem
@@ -698,7 +704,8 @@ Partial Class Form1
         Dim totalMailStr As String = rootEntry.TotalMailCount.ToString("N0") & " "
 
         ' 欄位順序: 名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
-        Dim lvi As New ListViewItem({"▸ " & rootEntry.Folder.Name, directMailStr, totalSubStr, totalMailStr, sizeStr})
+        ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: 名稱改取自 FolderPath 尾段(純字串),不再讀 .Folder.Name(COM;且 BFS 路徑 .Folder 現為 Nothing)
+        Dim lvi As New ListViewItem({"▸ " & ExtractFolderName(rootEntry.FolderPath), directMailStr, totalSubStr, totalMailStr, sizeStr})
         lvi.Font = New Font(ListView1.Font, _fontBold)
         lvi.BackColor = SystemColors.GradientInactiveCaption
         lvi.Tag = Nothing
@@ -719,9 +726,18 @@ Partial Class Form1
         '   1. 資料夾名稱：还原開頭縮排空白 (" - ")，保持整齊。
         '   2. 防止切邊：斜體時字串結尾補一格空白。
         ' 2026/05/27 by Simon/Claude: 改用 FormatFolderSizeStr 取代重複邏輯，fPath 直接用 .FolderPath
-
-        Dim isItalicFolder As Boolean = Not IsMailFolder(entry.Folder)
-        Dim displayName As String = " - " & entry.Folder.Name
+        ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_TAB1E2E 拆帳後,去物化配套]:
+        '   - isMail 改查 _cacheFolderIDs(骨架展開時已回填;原 IsMailFolder(folder) 無 fPath → SafeGetPath 每列 1 次 COM)。
+        '     查無時: BFS 路徑依「查無預設視為 mail」慣例(不斜體);F5 路徑 .Folder 在,照舊走 IsMailFolder(帶 fPath 免 COM)。
+        '   - 名稱改取自 FolderPath 尾段(原 .Folder.Name 每列 1 次 COM)。兩者合計原本 ≈112ms/輪(26 store 全選)。
+        Dim isItalicFolder As Boolean = False
+        Dim fInfo As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
+        If _cacheFolderIDs.TryGetValue(entry.FolderPath, fInfo) Then
+            isItalicFolder = Not fInfo.isMail
+        ElseIf entry.Folder IsNot Nothing Then
+            isItalicFolder = Not IsMailFolder(entry.Folder, fPath:=entry.FolderPath)
+        End If
+        Dim displayName As String = " - " & ExtractFolderName(entry.FolderPath)
         If isItalicFolder Then displayName &= " "
 
         ' 大小: Lazy，從快取讀；未計算過則留空，等 ColumnClick 或右鍵選單觸發計算
@@ -742,9 +758,19 @@ Partial Class Form1
         End If
 
         ' 2026/04/13 by Simon/Claude: Tag 改為 ValueTuple，ComputeFolderSize 與 EnterSelectedFolder 同步更新
-        lvi.Tag = (SubFolder:=entry.Folder, ParentNode:=parentNode)
+        ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: Tag 擴充為 5 欄 id-tuple —
+        '   BFS 路徑 SubFolder=Nothing(帶 Eid/Sid/FPath 身分證);F5 路徑 SubFolder 照舊有值(Eid/Sid 可能為空)。
+        '   消費端(Enter/ComputeSize/F5/SelectFolderInListView)以 ResolveLv1TagFolder 統一「用到那一刻才物化」。
+        lvi.Tag = (SubFolder:=entry.Folder, Eid:=entry.Eid, Sid:=entry.Sid, FPath:=entry.FolderPath, ParentNode:=parentNode)
         Return lvi
 
+    End Function
+    Private Function ResolveLv1TagFolder(t As (SubFolder As Folder, Eid As String, Sid As String, FPath As String, ParentNode As TreeNode)) As Folder
+        ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: Lv1 Tag → Folder 的統一物化交界。
+        '   F5 路徑 SubFolder 已在 → 直接用;BFS 路徑 SubFolder=Nothing → 以身分證 GetFolderById 物化單一資料夾(1 次 COM,只付給真的被點到的那列)。
+        If t.SubFolder IsNot Nothing Then Return t.SubFolder
+        If String.IsNullOrEmpty(t.Eid) Then Return Nothing
+        Return GetFolderById(t.Eid, t.Sid)
     End Function
     Private Function BuildLv1SumRow(selectedCount As Integer, totalSub As Integer, totalMail As Long) As ListViewItem
         ' 合計列：多選模式才插入，顯示跨資料夾加總。Tag = Nothing
@@ -788,8 +814,9 @@ Partial Class Form1
         Dim sizeItemPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         For Each lvi As ListViewItem In ListView1.Items
             If lvi.Tag IsNot Nothing AndAlso lvi.SubItems.Count > 4 AndAlso lvi.SubItems(4).Text <> "- " Then
-                Dim t As (SubFolder As Folder, ParentNode As TreeNode) = DirectCast(lvi.Tag, (SubFolder As Folder, ParentNode As TreeNode))
-                Dim fp As String = SafeGetPath(t.SubFolder)
+                ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: Tag 改 5 欄 id-tuple,fPath 直接取 Tag.FPath(0 COM),不再 SafeGetPath(t.SubFolder)
+                Dim t = DirectCast(lvi.Tag, (SubFolder As Folder, Eid As String, Sid As String, FPath As String, ParentNode As TreeNode))
+                Dim fp As String = If(String.IsNullOrEmpty(t.FPath), SafeGetPath(t.SubFolder), t.FPath)
                 If Not String.IsNullOrEmpty(fp) Then sizeItemPaths.Add(fp)
             End If
         Next
@@ -802,7 +829,7 @@ Partial Class Form1
             Next
 
             ' ③ 核心統計 (skipCache:=True)
-            Dim items As List(Of ListViewItem) = Await ComputeTab1FolderStats(dedupedNodes, cToken, skipCache:=True)
+            Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken, skipCache:=True)
             RenderLv1(items)
 
             ' ④ Size 重算
@@ -811,15 +838,18 @@ Partial Class Form1
                 For Each lvi As ListViewItem In ListView1.Items
                     If lvi.Tag Is Nothing Then Continue For
 
-                    Dim t As (SubFolder As Folder, ParentNode As TreeNode) = DirectCast(lvi.Tag, (SubFolder As Folder, ParentNode As TreeNode))
-                    Dim fp As String = SafeGetPath(t.SubFolder)
+                    ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: fPath 取 Tag.FPath;F5 強制重算必打 COM,此處才 ResolveLv1TagFolder 物化
+                    Dim t = DirectCast(lvi.Tag, (SubFolder As Folder, Eid As String, Sid As String, FPath As String, ParentNode As TreeNode))
+                    Dim fp As String = If(String.IsNullOrEmpty(t.FPath), SafeGetPath(t.SubFolder), t.FPath)
                     If Not sizeItemPaths.Contains(fp) Then Continue For
+                    Dim tagFolder As Folder = ResolveLv1TagFolder(t)
+                    If tagFolder Is Nothing Then Continue For
 
                     lvi.SubItems(4).Text = "計算中..."
                     Dim dl As Long : _cacheFolderSize.TryRemove(fp, dl) : _cacheFolderSizeAll.TryRemove(fp, dl)
-                    Dim sz As Long = Await GetFolderSizeAll(t.SubFolder, fp, skipCache:=True, cToken:=cToken)       ' 2026/06/27 by Simon/Claude: 改走 skipCache 跳過 ①記憶體+②DB,保證強制重算(原 TryRemove 只清記憶體擋不住 DB lazy)
+                    Dim sz As Long = Await GetFolderSizeAll(tagFolder, fp, skipCache:=True, cToken:=cToken)       ' 2026/06/27 by Simon/Claude: 改走 skipCache 跳過 ①記憶體+②DB,保證強制重算(原 TryRemove 只清記憶體擋不住 DB lazy)
                     If sz < 0 Then : lvi.SubItems(4).Text = "計算失敗"
-                    Else : lvi.SubItems(4).Text = (sz / 1024 ^ 2).ToString(If(sz >= 1024 ^ 2, "N0", "N2")) & " MB"  ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
+                    Else : lvi.SubItems(4).Text = FormatFolderSizeStr(fp) ' 2026/07/04 by Simon/Claude: 改用 FormatFolderSizeStr 統一格式(0 才會顯示 "- ",避免與 BuildLv1Item 顯示不一致)
                     End If
                     If sz >= 0 Then _cacheFolderSizeAll(fp) = sz
                 Next
@@ -945,6 +975,108 @@ Partial Class Form1
         Next
         Return dedupedNodes
     End Function
+    Private Sub SelectFolderInListView(lv As ListView, targetFolder As Folder)
+        ''' <summary>
+        ''' 在指定的 ListView 中尋找並選取對應的 Folder 項目
+        ''' </summary>
+        ''' <param name="lv">目標 ListView</param>
+        ''' <param name="targetFolder">要尋找並選取的目標 Folder 物件</param>
+        ''' <remarks>by Gemini 3.5 Flash, 2026/05/27: 將原 ESC 鍵退回上層時高亮原資料夾的巢狀尋找邏輯重構抽離為獨立子程序，以提供更好的型別轉換安全性</remarks>
+        If lv Is Nothing OrElse targetFolder Is Nothing Then Return
+
+        Dim targetEid As String = targetFolder.EntryID
+        For Each item As ListViewItem In lv.Items
+            If item.Tag IsNot Nothing Then
+                Try
+                    ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: 優先用 Tag.Eid 比對(0 COM);F5 路徑 Eid 空才退 SubFolder.EntryID
+                    Dim t = DirectCast(item.Tag, (SubFolder As Folder, Eid As String, Sid As String, FPath As String, ParentNode As TreeNode))
+                    Dim itemEid As String = t.Eid
+                    If String.IsNullOrEmpty(itemEid) AndAlso t.SubFolder IsNot Nothing Then itemEid = t.SubFolder.EntryID
+                    If Not String.IsNullOrEmpty(itemEid) AndAlso String.Equals(itemEid, targetEid, StringComparison.OrdinalIgnoreCase) Then
+                        item.Selected = True
+                        item.Focused = True
+                        item.EnsureVisible()
+                        Exit For
+                    End If
+                Catch ex As System.InvalidCastException
+                    ' 忽略不支援轉換為該 Tuple 結構的 Tag 項目 (例如標題或合計列)
+                End Try
+            End If
+        Next
+    End Sub
+    Private Async Sub ComputeFolderSize(sender As Object, e As EventArgs)
+        _isUserBusy = True
+        _dbg(" ├ 開始", $"選取項目數: {ListView1.SelectedItems.Count}")
+
+        Try
+            Dim stopwatch As Stopwatch = Stopwatch.StartNew()
+
+            ' by Gemini 3.5 Flash, 2026/06/27: 若有選取項目則僅計算選取者；若無選取項目，則預設計算 ListView1 內的所有項目
+            Dim targetItems As New List(Of ListViewItem)()
+            If ListView1.SelectedItems.Count > 0 Then
+                For Each item As ListViewItem In ListView1.SelectedItems : targetItems.Add(item) : Next
+            Else
+                For Each item As ListViewItem In ListView1.Items : targetItems.Add(item) : Next
+            End If
+
+            If targetItems.Count > 0 Then
+                Dim cToken As CancellationToken = OkayNowYouHaveToken()
+                For Each s As ListViewItem In targetItems
+                    If s.Tag Is Nothing Then Continue For ' 排除標題列或合計列
+                    If s.SubItems.Count > 4 Then s.SubItems(4).Text = "計算中..." Else s.SubItems.Add("計算中...")
+                    ' 提高反應速度, 先占位 (如果已經有FolderSize的子項目就先把它改成「計算中...」, 如果還沒有就先加一個占位用的子項目)
+                Next
+
+                Dim swThrottle As Stopwatch = Stopwatch.StartNew()
+                ' 僅統計有 Tag（有效資料夾）的項目數量
+                Dim totalCount As Integer = 0
+                For Each s As ListViewItem In targetItems
+                    If s.Tag IsNot Nothing Then totalCount += 1
+                Next
+                Dim processedCount As Integer = 0
+
+                For Each s As ListViewItem In targetItems
+                    'If s.Index = 0 Then Continue For ' 一樣, 若選中本體目錄則跳過 (之前統計速度還很慢的時候, 怕計算量太大跑太久)
+                    ' 2026/04/13 by Simon/Claude: Tag 升級為 ValueTuple (SubFolder, ParentNode)；群組標題行 / 合計列 Tag=Nothing，直接跳過
+                    If s.Tag Is Nothing Then Continue For
+
+                    ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: ① fsa 記憶體命中 → 0 COM(GetBfsResult 的 fsa DB 補讀已預熱);
+                    '   未命中才 ResolveLv1TagFolder 物化單一資料夾走原 GetFolderSizeAll 路徑(該路徑本來就要打 COM 算大小)。
+                    Dim t = DirectCast(s.Tag, (SubFolder As Folder, Eid As String, Sid As String, FPath As String, ParentNode As TreeNode))
+                    Dim fp As String = If(String.IsNullOrEmpty(t.FPath), SafeGetPath(t.SubFolder), t.FPath)
+                    Dim folderSize As Long
+                    If Not _cacheFolderSizeAll.TryGetValue(fp, folderSize) Then
+                        Dim folder As Folder = ResolveLv1TagFolder(t)
+                        If folder Is Nothing Then Continue For
+                        folderSize = Await GetFolderSizeAll(folder, fp, cToken:=cToken)
+                    End If
+
+                    Dim strFolderSize As String
+                    ' 2026/07/04 by Simon/Claude: 改用 FormatFolderSizeStr 統一格式(0 才會顯示 "- ",避免與 BuildLv1Item 顯示不一致)
+                    If folderSize < 0 Then : strFolderSize = "計算失敗"
+                    Else : strFolderSize = FormatFolderSizeStr(fp)
+                    End If
+                    If s.SubItems.Count > 4 Then s.SubItems(4).Text = strFolderSize Else s.SubItems.Add(strFolderSize)
+
+                    processedCount += 1
+                    Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                                              Sub() PgrsBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({ExtractFolderName(fp)})")
+                Next
+            End If
+
+            PgrsBar2.Text = "統計資料夾大小花費了 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+        Catch ex As OperationCanceledException
+            PgrsBar2.Text = "計算已由使用者中斷。"
+            _dbg(" ├ 中斷", "ComputeFolderSize 已中斷")
+        Catch ex As System.Exception
+            PgrsBar2.Text = "發生錯誤: " & ex.Message
+            _dbg(" ├ 錯誤", ex.Message)
+        Finally
+            _isUserBusy = False
+            _dbg("結束")
+        End Try
+
+    End Sub
     Private Function FormatFolderSizeStr(fPath As String) As String
         ' 2026/05/27 by Simon/Claude: 抽出 BuildLv1GroupHeader / BuildLv1Item 重複的大小字串格式化
         Dim sizeVal As Long
@@ -984,7 +1116,8 @@ Partial Class Form1
         If selectedItem.Tag Is Nothing Then Return
 
         ' 從 ValueTuple Tag 取得子資料夾與其父 TreeNode
-        Dim t As (SubFolder As Folder, ParentNode As TreeNode) = DirectCast(selectedItem.Tag, (SubFolder As Folder, ParentNode As TreeNode))
+        ' 2026/07/04 by Simon/Claude Fable 5 [去物化配套]: Tag 改 5 欄 id-tuple;EntryID 直接取 Tag.Eid(0 COM),BFS 路徑不再需要 SubFolder
+        Dim t = DirectCast(selectedItem.Tag, (SubFolder As Folder, Eid As String, Sid As String, FPath As String, ParentNode As TreeNode))
         Dim parentNode As TreeNode = t.ParentNode
         If parentNode Is Nothing Then Return
 
@@ -993,13 +1126,15 @@ Partial Class Form1
 
         ' ② 在直屬子節點裡找目標 (不遞迴，不呼叫任何 Expand)
         ' 2026/04/22 by Gemini 3 Flash: UI 顯示字串有格式化前綴與防切邊空白，改用 EntryID 進行精確匹配，避免搜尋失敗。
-        Dim targetEntryID As String = t.SubFolder.EntryID
+        Dim targetEntryID As String = t.Eid
+        If String.IsNullOrEmpty(targetEntryID) AndAlso t.SubFolder IsNot Nothing Then targetEntryID = t.SubFolder.EntryID   ' F5 路徑保底
         Dim foundNode As TreeNode = Nothing
         _dbg("    ├ 搜尋節點", $"目標 EntryID: '{targetEntryID}', 父節點: '{parentNode.Text}', 子節點數: {parentNode.Nodes.Count}")
 
         For Each node As TreeNode In parentNode.Nodes
             Dim nodeFolder As Folder = TryCast(node.Tag, Folder)
-            If nodeFolder IsNot Nothing AndAlso nodeFolder.EntryID = targetEntryID Then
+            ' 2026/07/04 by Simon/Claude Fable 5: EntryID 比對改不分大小寫 — Tag.Eid 可能來自 RDO 骨架 hex 字串,與 OOM EntryID 大小寫保險對齊
+            If nodeFolder IsNot Nothing AndAlso String.Equals(nodeFolder.EntryID, targetEntryID, StringComparison.OrdinalIgnoreCase) Then
                 foundNode = node : Exit For
             End If
         Next
@@ -1020,7 +1155,7 @@ Partial Class Form1
         SimTree1.AddSelectedNode(foundNode)
 
         Dim deduped As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
-        Dim items As List(Of ListViewItem) = Await ComputeTab1FolderStats(deduped, OkayNowYouHaveToken())
+        Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(deduped, OkayNowYouHaveToken())
         RenderLv1(items)
 
         ' by Gemini 3.5 Flash, 2026/06/27: 進入資料夾後，自動呼叫 ComputeFolderSize 計算該層各個子資料夾的大小
@@ -1032,100 +1167,6 @@ Partial Class Form1
         End If
         _dbg("結束")
 
-    End Sub
-    Private Async Sub ComputeFolderSize(sender As Object, e As EventArgs)
-        _isUserBusy = True
-        _dbg(" ├ 開始", $"選取項目數: {ListView1.SelectedItems.Count}")
-
-        Try
-            Dim stopwatch As Stopwatch = Stopwatch.StartNew()
-
-            ' by Gemini 3.5 Flash, 2026/06/27: 若有選取項目則僅計算選取者；若無選取項目，則預設計算 ListView1 內的所有項目
-            Dim targetItems As New List(Of ListViewItem)()
-            If ListView1.SelectedItems.Count > 0 Then
-                For Each item As ListViewItem In ListView1.SelectedItems : targetItems.Add(item) : Next
-            Else
-                For Each item As ListViewItem In ListView1.Items : targetItems.Add(item) : Next
-            End If
-
-            If targetItems.Count > 0 Then
-                Dim cToken As CancellationToken = OkayNowYouHaveToken()
-                For Each s As ListViewItem In targetItems
-                    If s.Tag Is Nothing Then Continue For ' 排除標題列或合計列
-                    If s.SubItems.Count > 4 Then s.SubItems(4).Text = "計算中..." Else s.SubItems.Add("計算中...")
-                    ' 提高反應速度, 先占位 (如果已經有FolderSize的子項目就先把它改成「計算中...」, 如果還沒有就先加一個占位用的子項目)
-                Next
-
-                Dim swThrottle As Stopwatch = Stopwatch.StartNew()
-                ' 僅統計有 Tag（有效資料夾）的項目數量
-                Dim totalCount As Integer = 0
-                For Each s As ListViewItem In targetItems
-                    If s.Tag IsNot Nothing Then totalCount += 1
-                Next
-                Dim processedCount As Integer = 0
-
-                For Each s As ListViewItem In targetItems
-                    'If s.Index = 0 Then Continue For ' 一樣, 若選中本體目錄則跳過 (之前統計速度還很慢的時候, 怕計算量太大跑太久)
-                    ' 2026/04/13 by Simon/Claude: Tag 升級為 ValueTuple (SubFolder, ParentNode)；群組標題行 / 合計列 Tag=Nothing，直接跳過
-                    If s.Tag Is Nothing Then Continue For
-
-                    Dim t As (SubFolder As Folder, ParentNode As TreeNode) = DirectCast(s.Tag, (SubFolder As Folder, ParentNode As TreeNode))
-                    Dim folder As Folder = t.SubFolder
-                    If folder Is Nothing Then Continue For
-
-                    Dim folderSize As Long = Await GetFolderSizeAll(folder, cToken:=cToken)
-
-                    Dim strFolderSize As String
-                    ' by Gemini 3 Flash, 2026/04/20: 資料大小單位統一改為 MB (保留兩位小數)，更能直觀反映 Outlook 佔用情況
-                    ' 2026/6/27 by simon: 根據 mbSize 是否大於等於 1，動態決定格式是要 "N0" 還是 "N2"
-                    If folderSize < 0 Then : strFolderSize = "計算失敗"
-                    Else : strFolderSize = (folderSize / 1024 ^ 2).ToString(If(folderSize >= 1024 ^ 2, "N0", "N2")) & " MB"
-                    End If
-                    If s.SubItems.Count > 4 Then s.SubItems(4).Text = strFolderSize Else s.SubItems.Add(strFolderSize)
-
-                    processedCount += 1
-                    Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                              Sub() PgrsBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({folder.Name})")
-                Next
-            End If
-
-            PgrsBar2.Text = "統計資料夾大小花費了 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
-        Catch ex As OperationCanceledException
-            PgrsBar2.Text = "計算已由使用者中斷。"
-            _dbg(" ├ 中斷", "ComputeFolderSize 已中斷")
-        Catch ex As System.Exception
-            PgrsBar2.Text = "發生錯誤: " & ex.Message
-            _dbg(" ├ 錯誤", ex.Message)
-        Finally
-            _isUserBusy = False
-            _dbg("結束")
-        End Try
-
-    End Sub
-    Private Sub SelectFolderInListView(lv As ListView, targetFolder As Folder)
-        ''' <summary>
-        ''' 在指定的 ListView 中尋找並選取對應的 Folder 項目
-        ''' </summary>
-        ''' <param name="lv">目標 ListView</param>
-        ''' <param name="targetFolder">要尋找並選取的目標 Folder 物件</param>
-        ''' <remarks>by Gemini 3.5 Flash, 2026/05/27: 將原 ESC 鍵退回上層時高亮原資料夾的巢狀尋找邏輯重構抽離為獨立子程序，以提供更好的型別轉換安全性</remarks>
-        If lv Is Nothing OrElse targetFolder Is Nothing Then Return
-
-        For Each item As ListViewItem In lv.Items
-            If item.Tag IsNot Nothing Then
-                Try
-                    Dim t = DirectCast(item.Tag, (SubFolder As Folder, ParentNode As TreeNode))
-                    If t.SubFolder IsNot Nothing AndAlso t.SubFolder.EntryID = targetFolder.EntryID Then
-                        item.Selected = True
-                        item.Focused = True
-                        item.EnsureVisible()
-                        Exit For
-                    End If
-                Catch ex As System.InvalidCastException
-                    ' 忽略不支援轉換為該 Tuple 結構的 Tag 項目 (例如標題或合計列)
-                End Try
-            End If
-        Next
     End Sub
 #End Region
 #End Region

@@ -849,7 +849,7 @@ Partial Class Form1
                     ' 2026/06/22 by Simon/Claude: 缺口1+2 ② Surgical 嚴格清除 —
                     '   (a) 取 live 全郵件 entryID，算「DB 有、live 沒有」的已刪集合 → surgical 清兩張昂貴快取
                     '       (att_filenames/mail_simhash 之 DB 列 + 記憶體)，存活郵件的昂貴快取保留免重讀。
-                    '   (b) 便宜逐封表(basic/att_maillist/month_counts)整夾 nuke DB 死列；對應記憶體一併清/重建，
+                    '   (b) 便宜逐封表(basic/att_maillist/month_counts/year_counts)整夾 nuke DB 死列；對應記憶體一併清/重建，
                     '       否則尾端 SaveCachesToDB 會把舊鬼魂列寫回，使 nuke 失效。
                     Dim liveAll = Await GetMailInfoOOM(folder, needTopic:=False, cToken:=cToken, fPath:=fPath)
                     Dim liveSet As New HashSet(Of String)(liveAll.Select(Function(m) m.Mail.EntryID))
@@ -944,18 +944,22 @@ Partial Class Form1
                                Dim orphanEntryIds As New List(Of String)()
                                For Each s In stalePaths : orphanEntryIds.AddRange(DbGetFolderEntryIds(s)) : Next
 
-                               Dim dF, dB, dA, dM, dBasic, dSh As Integer
+                               Dim dF, dB, dA, dM, dBasic, dSh, dY As Integer
                                Using txn As SqliteTransaction = _dbCache.BeginTransaction()
                                    Using c1 As New SqliteCommand("DELETE FROM folder_info WHERE folder_path=@fp", _dbCache, txn),
                                        c2 As New SqliteCommand("DELETE FROM att_maillist WHERE folder_hash=@fh", _dbCache, txn),
                                        c4 As New SqliteCommand("DELETE FROM month_counts WHERE folder_hash=@fh", _dbCache, txn),
-                                       c5 As New SqliteCommand("DELETE FROM mail_info WHERE folder_hash=@fh", _dbCache, txn)
+                                       c5 As New SqliteCommand("DELETE FROM mail_info WHERE folder_hash=@fh", _dbCache, txn),
+                                       c6 As New SqliteCommand("DELETE FROM year_counts WHERE folder_hash=@fh", _dbCache, txn)
                                        ' 2026/06/21 by Simon/Claude: att_filenames 已搬至 OLAcacheMail.db(_dbMail)，跨檔獨立刪除(原 c3)，dA 由此累計
                                        ' c3 As New SqliteCommand("DELETE FROM att_filenames WHERE folder_hash=@fh", _dbCache, txn),
+                                       ' 2026/07/06 by Simon/Claude Fable 5: 補 c6 year_counts — 孤兒資料夾的年份列原本永遠留在 DB，
+                                       '   若日後同路徑資料夾重建(folder_hash 相同)，舊年份分佈會被 GetYearCount ② 原樣復活
 
                                        c1.Parameters.Add("@fp", SqliteType.Text)
                                        c2.Parameters.Add("@fh", SqliteType.Integer) ': c3.Parameters.Add("@fh", SqliteType.Integer)
                                        c4.Parameters.Add("@fh", SqliteType.Integer) : c5.Parameters.Add("@fh", SqliteType.Integer)
+                                       c6.Parameters.Add("@fh", SqliteType.Integer)
 
                                        For Each s In stalePaths
                                            Dim h = StringToXxHash64(s) ' 取得孤兒的 Hash
@@ -964,6 +968,7 @@ Partial Class Form1
                                            ' c3.Parameters("@fh").Value = h : dA += c3.ExecuteNonQuery()
                                            c4.Parameters("@fh").Value = h : dM += c4.ExecuteNonQuery()
                                            c5.Parameters("@fh").Value = h : dBasic += c5.ExecuteNonQuery()
+                                           c6.Parameters("@fh").Value = h : dY += c6.ExecuteNonQuery()
                                        Next
                                    End Using
                                    txn.Commit()
@@ -973,7 +978,7 @@ Partial Class Form1
                                ' 2026/06/22 by Simon/Claude: att_filenames 已由上行按 folder_hash 高效刪，故 includeAttFilenames:=False，僅補 mail_simhash + 兩記憶體快取
                                dSh = SimDbDeleteMailRowsByEntryIds(orphanEntryIds, includeAttFilenames:=False)
 
-                               _dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / folder_info:{dF} 行 / mail_info:{dBasic} 行 / att_maillist:{dB} 行 / att_filenames:{dA} 行 / mail_simhash:{dSh} 行 / month_counts:{dM} 行")
+                               _dbg("結束", $"孤兒路徑:{stalePaths.Count} 個 / folder_info:{dF} 行 / mail_info:{dBasic} 行 / att_maillist:{dB} 行 / att_filenames:{dA} 行 / mail_simhash:{dSh} 行 / month_counts:{dM} 行 / year_counts:{dY} 行")
 
                            Catch ex As System.Exception
                                _dbg("    ├ 錯誤", ex.Message) ' by Gemini, 2026/04/10
@@ -2183,16 +2188,19 @@ Partial Class Form1
     End Sub
     Private Sub DbPurgeFolderMailRows(fPath As String, Optional includeAttFilenames As Boolean = False)
         ' ---------------------------------------------------------------
-        ' DbPurgeFolderMailRows — 刪除單一資料夾在逐封郵件表的全部列 (mail_info/att_maillist/month_counts，選擇性含 att_filenames)。
+        ' DbPurgeFolderMailRows — 刪除單一資料夾在逐封郵件表的全部列 (mail_info/att_maillist/month_counts/year_counts，選擇性含 att_filenames)。
         '   用於「資料夾還在但內含郵件有增刪」時清掉死列(失效 entryID)，維持「同一資料夾的 basic/att 列共用單一 snap」不變量，根除讀取端混 snap 幽靈郵件。
         '   與 CleanupOrphanPath 的差異：那個是整夾消失才連 folder_info 全表一起刪；本函式只清逐封郵件列，不動 folder_info。
         ' 2026/06/20 by Simon/Claude: 取代原 RenewAttMailList 三路比對
+        ' 2026/07/06 by Simon/Claude Fable 5: 補 year_counts — 原本全專案沒有任何地方 DELETE year_counts(只進不出)，
+        '   而 GetYearCount ② DB lazy 無 snap 驗證，資料夾變動後記憶體清了、DB 舊列卻會被原樣撈回來復活。
+        '   各呼叫端本就有清 _cacheYearCounts 記憶體，補上 DB 端這一刀失效鏈才算閉合。
         ' ---------------------------------------------------------------
         If _dbCache Is Nothing Then Return
         Dim fh = FolderPathToHash64(fPath)
         Try
             Using txn As SqliteTransaction = _dbCache.BeginTransaction()
-                For Each tbl In {"mail_info", "att_maillist", "month_counts"}
+                For Each tbl In {"mail_info", "att_maillist", "month_counts", "year_counts"}
                     Using c As New SqliteCommand($"DELETE FROM {tbl} WHERE folder_hash=@fh", _dbCache, txn)
                         c.Parameters.AddWithValue("@fh", fh) : c.ExecuteNonQuery()
                     End Using

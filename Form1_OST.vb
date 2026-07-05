@@ -99,13 +99,12 @@ Partial Class Form1
             lv.Columns.Add("EntryID", 0) ' 隱藏欄位，對齊 Tab4
         Next
 
-        ' 2. 綁定事件
-        AddHandler LvOST.DoubleClick, AddressOf LvOST_DoubleClick
-        AddHandler LvPST.DoubleClick, AddressOf LvPST_DoubleClick
-        AddHandler LvOST.ColumnClick, AddressOf LvOST_ColumnClick
-        AddHandler LvPST.ColumnClick, AddressOf LvOST_ColumnClick
-        AddHandler LvOST.KeyDown, AddressOf LvOST_KeyDown
-        AddHandler LvPST.KeyDown, AddressOf LvPST_KeyDown
+        ' 2. 綁定事件 (2026/07/05 by Simon/Claude: OST/PST 改掛共用處理器，函式內依 sender 分派)
+        For Each lv In {LvOST, LvPST}
+            AddHandler lv.DoubleClick, AddressOf HandleLvOstPst_DoubleClick
+            AddHandler lv.ColumnClick, AddressOf HandleLvOstPst_ColumnClick
+            AddHandler lv.KeyDown, AddressOf HandleLvOstPst_KeyDown
+        Next
 
         ' 3. 綁定縮放事件 (實現上下各半)
         Dim parentTab = SimTreeOST.Parent
@@ -639,43 +638,35 @@ Partial Class Form1
 
     End Sub
 
-    ' ── ListView 事件處理 (Double Click / Enter) ───────────────────────────
-    ' by Gemini 3.0 Flash, 2026/04/23
-    Private Sub LvOST_DoubleClick(sender As Object, e As EventArgs)
-        _dbg("開始")
-        OpenSelectedOstMail()
+    ' ── ListView 事件處理 (Double Click / Enter) by Gemini 3.0 Flash, 2026/04/23 ───────────────────────────
+    ' 2026/07/05 by Simon/Claude: OST/PST 四個處理器合併為兩個共用版，依 sender 分派 (同 HandleLv3Lv4Lv5 模式)
+    Private Sub HandleLvOstPst_DoubleClick(sender As Object, e As EventArgs)
+        _dbg("開始", DirectCast(sender, ListView).Name)
+        If sender Is LvOST Then OpenSelectedOstMail()
+        If sender Is LvPST Then OpenSelectedPstMail()
     End Sub
-    Private Sub LvOST_KeyDown(sender As Object, e As KeyEventArgs)
+    Private Sub HandleLvOstPst_KeyDown(sender As Object, e As KeyEventArgs)
         If e.KeyCode = Keys.Enter Then
-            _dbg("開始", "Enter 觸發")
-            OpenSelectedOstMail()
+            _dbg("開始", $"Enter 觸發 ({DirectCast(sender, ListView).Name})")
+            If sender Is LvOST Then OpenSelectedOstMail()
+            If sender Is LvPST Then OpenSelectedPstMail()
             e.Handled = True
         End If
     End Sub
-    Private Sub LvPST_DoubleClick(sender As Object, e As EventArgs)
-        _dbg("ListViewPST_DoubleClick", "觸發")
-        OpenSelectedPstMail()
-    End Sub
-    Private Sub LvPST_KeyDown(sender As Object, e As KeyEventArgs)
-        If e.KeyCode = Keys.Enter Then
-            _dbg("ListViewPST_KeyDown", "Enter 觸發")
-            OpenSelectedPstMail()
-            e.Handled = True
-        End If
-    End Sub
-    Private Sub LvOST_ColumnClick(sender As Object, e As ColumnClickEventArgs)
+    Private Sub HandleLvOstPst_ColumnClick(sender As Object, e As ColumnClickEventArgs)
         ' by Gemini 3 Flash, 2026/04/24: 處理 Tab7 ListView 的欄位標題點選排序
+        ' 2026/07/05 by Simon/Claude: 排序方向切換改用共用 GetNewSortOrder，移除兩份手寫的三元邏輯
         Dim lv = DirectCast(sender, ListView)
-        _dbg("LvOST_ColumnClick", $"Column={e.Column}, ListView={lv.Name}")
+        _dbg("開始", $"Column={e.Column}, ListView={lv.Name}")
 
         ' 判斷是哪個 ListView 並更新其狀態
         Dim order As SortOrder
         If lv Is LvOST Then
-            _lvOstSortOrder = If(e.Column = _lvOstLastSortColumn AndAlso _lvOstSortOrder = SortOrder.Ascending, SortOrder.Descending, SortOrder.Ascending)
+            _lvOstSortOrder = GetNewSortOrder(e.Column, _lvOstLastSortColumn, _lvOstSortOrder)
             _lvOstLastSortColumn = e.Column
             order = _lvOstSortOrder
         ElseIf lv Is LvPST Then
-            _lvPstSortOrder = If(e.Column = _lvPstLastSortColumn AndAlso _lvPstSortOrder = SortOrder.Ascending, SortOrder.Descending, SortOrder.Ascending)
+            _lvPstSortOrder = GetNewSortOrder(e.Column, _lvPstLastSortColumn, _lvPstSortOrder)
             _lvPstLastSortColumn = e.Column
             order = _lvPstSortOrder
         Else

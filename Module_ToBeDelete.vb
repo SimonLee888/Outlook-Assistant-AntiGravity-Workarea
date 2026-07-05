@@ -159,22 +159,6 @@ Module Module_ToBeDelete
         'End If
 
     End Function
-    Private Async Function GetMailCountByLINQNew(folder As Outlook.Folder) As Task(Of Integer)
-        ' 使用 LINQ 來計算子資料夾的郵件數量
-        Dim subFolderTasks = folder.Folders.Cast(Of Outlook.Folder)().
-        Select(Function(subFolder) Task.Run(Function() GetMailCountByLINQNew(subFolder)))
-        ' 等待所有子資料夾的郵件數量計算完成
-        Dim subFolderMailCounts = Await Task.WhenAll(subFolderTasks)
-        Dim totalMailCount As Integer = subFolderMailCounts.Sum()
-        ' 最後再獲取選取文件夾自身的郵件數量
-        Try ' 改用MAPI table 的PR_CONTENT_COUNT屬性來getmailcount
-            Const PR_CONTENT_COUNT As String = "http://schemas.microsoft.com/mapi/proptag/0x36020003"
-            totalMailCount += folder.PropertyAccessor.GetProperty(PR_CONTENT_COUNT)
-        Catch
-        End Try
-        Return totalMailCount
-
-    End Function
     Private Async Function GetYearCountsAsync_CL(selectedFolder As Outlook.Folder, includeSubFolders As Boolean) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         '    ' ===============================
         '    ' 這個函數是整個統計流程的核心, 包含快取機制和遞迴處理子資料夾的邏輯

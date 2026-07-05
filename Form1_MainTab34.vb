@@ -45,17 +45,17 @@ Partial Class Form1
     '      策略: 導入「管線化處理 (Pipeline)」與「SOLID 分層 (Layer1/Layer2.5/Layer3)」，徹底解耦 MAPI、業務與 UI。
     '      分層:
     '        ├─ Layer1   (UI/流程層) : Bt3_Click, ShowLv3Result
-    '        ├─ Layer2   (商務過濾層): FilterBySize, FilterByAttachDetailsAsync
-    '        ├─ Layer2.5 (快取層)    : GetAttachMailList (_cacheAttachMailList / _cacheAttachFilename)
-    '        └─ Layer3   (MAPI操作層): GetAttachMailListOOM
+    '        ├─ Layer2   (商務過濾層): FilterBySize, FilterByAttDetailsAsync
+    '        ├─ Layer2.5 (快取層)    : GetAttMailList (_cacheAttMailList / _cacheAttFilename)
+    '        └─ Layer3   (MAPI操作層): GetAttMailListOOM
     '
     ' Bt3_Click 管線 (Pipeline) 步驟分解:
     '   Step 1. 前置驗證      → 檢查參數合法性 (UI)
     '   Step 2. BFS 遍歷      → GetSubtree，取得目標資料夾樹 (COM)
-    '   Step 3. 匯集資料全集  → 向 Layer2.5 索取候選郵件全集 (GetAttachMailList) → ① 記憶體 → ② DB (mail_basic) → ③ L3
+    '   Step 3. 匯集資料全集  → 向 Layer2.5 索取候選郵件全集 (GetAttMailList) → ① 記憶體 → ② DB (mail_basic) → ③ L3
     '   Step 4. 管線過濾 1    → 記憶體 LINQ 瞬間過濾大小限制 (FilterBySize)
-    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 Layer2.5 快取判定 (FilterByAttachDetailsAsync)
-    '                         → PreloadAttachmentCacheRDOAsync (RDO 平行預載) → GetAttachFilename → ① 記憶體 → ② DB (mail_attachments) → ③ L3
+    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 Layer2.5 快取判定 (FilterByAttDetailsAsync)
+    '                         → PreloadAttCacheRDOAsync (RDO 平行預載) → GetAttFilename → ① 記憶體 → ② DB (att_maillist ) → ③ L3
     '   Step 6. UI 映射與顯示 → 將資料封裝為介面項目並顯示，無縫銜接">0"或真實統計 (ShowLv3Result)
     ' ===========================================================================================
 #Region "  ├ Layer1 UI事件層"
@@ -125,7 +125,7 @@ Partial Class Form1
                     Dim processed As Integer = i + 1
                     ' 2026/04/16 by Gemini: 使用 Tuple 中的 .Folder 與預錄好的 fPaths(i)
                     ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple，眼物化移除——folder 由免-folder 多載延後到 ③ 才建
-                    Dim folderResult = Await GetAttachMailList(fPaths(i), folderList(i).eid, folderList(i).sid, progressPhase1, cToken:=cToken)
+                    Dim folderResult = Await GetAttMailList(fPaths(i), folderList(i).eid, folderList(i).sid, progressPhase1, cToken:=cToken)
                     targetMails.AddRange(folderResult)
                     Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii,
                                         Sub()
@@ -140,16 +140,16 @@ Partial Class Form1
                 _dbg(" ├ 中斷", $"Step 3 已中斷，結算目前已載入的 {targetMails.Count:N0} 封")
                 PgrsBar1.Text = "由使用者中斷"
             End Try
-            Dim tStep3_AttachMailLoop = swStep.Elapsed.TotalMilliseconds : swStep.Restart() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (GetAttachMailList Loop)
+            Dim tStep3_AttMailLoop = swStep.Elapsed.TotalMilliseconds : swStep.Restart() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (GetAttMailList Loop)
 
             ' ── Pipeline 過濾 1: 大小篩選 ──
             If CheckSize.Checked Then targetMails = FilterBySize(targetMails)   ' 這裡五萬筆資料只花<3ms
 
             ' ── Pipeline 過濾 2: 附件條件深層篩選 ──
-            Dim hasKeyword = CheckAttachName.Checked AndAlso TextBox3.Text.Trim.Length > 0
+            Dim hasKeyword = CheckAttName.Checked AndAlso TextBox3.Text.Trim.Length > 0
             If hasKeyword OrElse CheckAttCount.Checked Then
                 Dim progressPhase2 = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
-                targetMails = Await FilterByAttachDetailsAsync(targetMails, progressPhase2, cToken:=cToken)
+                targetMails = Await FilterByAttDetailsAsync(targetMails, progressPhase2, cToken:=cToken)
             End If
             Dim tStep5_DetailsFiltering = swStep.Elapsed.TotalMilliseconds : swStep.Stop() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (Details Filtering)
 
@@ -157,8 +157,8 @@ Partial Class Form1
             If _iLikeNoisy Then
                 _dbg("⌛ 效能 (1/4) - GetUniqueFolderList", $"{tStep2_UniqueList:F0}ms")
                 _dbg("⌛ 效能 (2/4) - GetMailCount", $"{tStep2_MailCountLoop:F0}ms")
-                _dbg("⌛ 效能 (3/4) - GetAttachMailList", $"{tStep3_AttachMailLoop:F0}ms")
-                _dbg("⌛ 效能 (4/4) - FilterByAttachDetailsAsync", $"{tStep5_DetailsFiltering:F0}ms")
+                _dbg("⌛ 效能 (3/4) - GetAttMailList", $"{tStep3_AttMailLoop:F0}ms")
+                _dbg("⌛ 效能 (4/4) - FilterByAttDetailsAsync", $"{tStep5_DetailsFiltering:F0}ms")
                 _dbg("⌛ 效能 (總計) - Total", $"{sw.Elapsed.TotalMilliseconds:F0}ms")
             End If
 
@@ -192,7 +192,7 @@ Partial Class Form1
         Dim mail = _lv3MailList(e.ItemIndex)
         Dim cachedFiles As List(Of String) = Nothing
         Dim displayName As String = ">0"
-        If _cacheAttachFilename.TryGetValue(mail.EntryID, cachedFiles) Then displayName = cachedFiles.Count.ToString()
+        If _cacheAttFilename.TryGetValue(mail.EntryID, cachedFiles) Then displayName = cachedFiles.Count.ToString()
 
         ' 暫時建立一個 Item 回報給系統進行繪製
         ' by Gemini 3.0 Flash, 2026/04/20: 郵件大小改為 KB, 日期格式統一 yyyy/MM/dd (補零+置中需求)
@@ -256,16 +256,16 @@ Partial Class Form1
         _dbg(" ├ 結束", $"篩選後剩下 {resultList.Count:N0} 封")
         Return resultList
     End Function
-    Private Async Function FilterByAttachDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of MailItemInfo))
-        ' Pipeline 過濾 2: 逐一讀取附件明細，利用 _cacheAttachFilename 大幅降低 COM 存取
+    Private Async Function FilterByAttDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of MailItemInfo))
+        ' Pipeline 過濾 2: 逐一讀取附件明細，利用 _cacheAttFilename 大幅降低 COM 存取
         _dbg(" ├ 開始", $"候選郵件: {sourceList.Count} 封")
 
         ' 2026/04/05 by Gemini: Layer2 業務層向 Layer2.5 請求平行預載快取。若 RDO 存在，便能在極短時間內把後續需要的資料全數載入記憶體快取供後續流程取用。
-        ' 2026/06/19 by Simon/Claude: 新增RdoPreloadAttach_3, 每執行緒獨立 RDOSession，繞過 _olNS 共用 session 序列化，跨 PST 真平行
+        ' 2026/06/19 by Simon/Claude: 新增RdoPreloadAtt_3, 每執行緒獨立 RDOSession，繞過 _olNS 共用 session 序列化，跨 PST 真平行
         ' 2025/06/23 by simon/Claude Opus 4.8: 正確導入Redemption獨立session加速附件檔名讀取, 直接高速讀取, 淘汰原有的PreLoad填充快取機制
-        'If RDO_Parallel1.Checked Then     : Await RdoPreloadAttach_1(sourceList, progress, cToken:=cToken) ' by Parellel.ForEach 來平行讀取附件資料，適合 CPU 密集型的 MAPI 存取
-        'ElseIf RDO_Parallel2.Checked Then : Await RdoPreloadAttach_2(sourceList, progress, cToken:=cToken) ' by Task.WhenAll 來平行讀取附件資料，適合 I/O 等待型的資料庫存取
-        'ElseIf RDO_Parallel3.Checked Then : Await RdoPreloadAttach_3(sourceList, progress, cToken:=cToken) ' 2026/06/19 by Simon/Claude: 每執行緒獨立 RDOSession，繞過 _olNS 共用 session 序列化，跨 PST 真平行
+        'If RDO_Parallel1.Checked Then     : Await RdoPreloadAtt_1(sourceList, progress, cToken:=cToken) ' by Parellel.ForEach 來平行讀取附件資料，適合 CPU 密集型的 MAPI 存取
+        'ElseIf RDO_Parallel2.Checked Then : Await RdoPreloadAtt_2(sourceList, progress, cToken:=cToken) ' by Task.WhenAll 來平行讀取附件資料，適合 I/O 等待型的資料庫存取
+        'ElseIf RDO_Parallel3.Checked Then : Await RdoPreloadAtt_3(sourceList, progress, cToken:=cToken) ' 2026/06/19 by Simon/Claude: 每執行緒獨立 RDOSession，繞過 _olNS 共用 session 序列化，跨 PST 真平行
         ' 假設您現在的流程是：「讀取大量郵件屬性 --> 與本地資料庫比對快取 --> 寫入資料庫」
         ' 1. 讀取 MAPI 資料 (CPU + 嚴格 Thread 限制)：適用 Parallel.ForEach。 → 因為您需要真實在多個核心上建立獨立的 RDOSession 來平行榨取硬碟與 MAPI 引擎的讀取速度
         ' 2. 查詢/寫入本地資料庫快取 (I/O 等待)：適用 Task.WhenAll + async。  → 如果您的底層資料庫驅動 (例如 SQLite-net 或 Entity Framework) 支援原生的非同步方法(ToListAsync, ExecuteAsync)
@@ -275,9 +275,9 @@ Partial Class Form1
         Dim swTotal As Stopwatch = Stopwatch.StartNew()     ' by Claude Sonnet 4.6, 2026/06/07
         Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
 
-        Dim mustCountAttach As Boolean = CheckAttCount.Checked
-        Dim minCount As Integer = If(mustCountAttach, CInt(CountMin.Value), 0)
-        Dim maxCount As Integer = If(mustCountAttach, CInt(CountMax.Value), Integer.MaxValue)
+        Dim mustCountAtt As Boolean = CheckAttCount.Checked
+        Dim minCount As Integer = If(mustCountAtt, CInt(CountMin.Value), 0)
+        Dim maxCount As Integer = If(mustCountAtt, CInt(CountMax.Value), Integer.MaxValue)
 
         ' todo: 要在這裡過濾 "_IRM_Protected" 資料夾?? 2026/6/23 by simon
         'sourceList = sourceList.Where(Function(c) Not c.FolderPath.EndsWith("\_IRM_Protected", StringComparison.OrdinalIgnoreCase)).ToList()
@@ -285,7 +285,7 @@ Partial Class Form1
 
         Dim processed As Integer = 0, total As Integer = sourceList.Count
         Dim resultList As New List(Of MailItemInfo)(1024)   ' 預分配容量為 1024，優化搜尋結果清單的填充速度 (by Gemini 3 Flash, 2026/05/04)
-        Dim keyword As String = If(CheckAttachName.Checked, TextBox3.Text.Trim.ToLower(), "")
+        Dim keyword As String = If(CheckAttName.Checked, TextBox3.Text.Trim.ToLower(), "")
         Try
             For curMail As Integer = 0 To sourceList.Count - 1
                 ' 2026/4/5, by Gemini: 將進度報告與 UI 釋放移至迴圈開頭，提早反饋處理進度
@@ -300,13 +300,13 @@ Partial Class Form1
                                           End Sub)
 
                 Dim currentMail As MailItemInfo = sourceList(curMail)
-                Dim cachedAttFilenames As List(Of String) = GetAttachFilename(currentMail, skipCache:=False)
+                Dim cachedAttFilenames As List(Of String) = GetAttFilename(currentMail, skipCache:=False)
 
                 ' ── Guard Clause 0: 沒附件資料就不受理 ──
                 If cachedAttFilenames Is Nothing Then Continue For
 
                 ' ── Guard Clause 1: 數量過濾 ──
-                If mustCountAttach AndAlso (cachedAttFilenames.Count < minCount OrElse cachedAttFilenames.Count > maxCount) Then Continue For
+                If mustCountAtt AndAlso (cachedAttFilenames.Count < minCount OrElse cachedAttFilenames.Count > maxCount) Then Continue For
 
                 ' ── Guard Clause 2: 檔名關鍵字過濾 (使用 LINQ Any 取代巢狀 For Each) ──
                 If keyword.Length > 0 AndAlso Not cachedAttFilenames.Any(Function(fn) fn IsNot Nothing AndAlso
@@ -316,7 +316,7 @@ Partial Class Form1
             Next
         Catch ex As OperationCanceledException
             ' by Gemini, 2026/04/12: 捕捉 ESC 中斷，回傳已比對到的部分結果
-            _dbg(" ├ 中斷", $"FilterByAttachDetailsAsync 已中斷，結算目前已符合的 {resultList.Count} 封")
+            _dbg(" ├ 中斷", $"FilterByAttDetailsAsync 已中斷，結算目前已符合的 {resultList.Count} 封")
         End Try
         _dbg(" ├ 結束", $"Phase 2 完成，篩選後共 {resultList.Count} 封")
         Return resultList
@@ -328,6 +328,10 @@ Partial Class Form1
         _lv3MailList = sourceList
         ListView3.VirtualListSize = _lv3MailList.Count
         ' ListView3.Invalidate() ' 2026/05/09 by Gemini 3 Flash: 移除冗餘 Invalidate，設定 VirtualListSize 本身已會觸發重繪，且 Invalidate 可能引發 redundant Resize 事件。
+
+        ' 2026/07/04 by Simon/Claude: 筆數變化會讓捲軸出現/消失 → ClientSize.Width 變but控制項 Width 不變 → 不會觸發 Resize 事件，
+        ' 欄寬需要主動重算一次；CalculateLvColumnSize 內建「ClientSize.Width 未變就直接返回」防線，這裡呼叫不會造成額外負擔 (同 RenderLv1 修法)
+        CalculateLvColumnSize(ListView3)
 
         '' by Gemini 2026/4/10, Listview3改virtual mode, 下面的實體項目建立邏輯已完全移除，改由 RetrieveVirtualItem 事件按需生成
         '' ListView3.Items.Clear()
@@ -341,7 +345,7 @@ Partial Class Form1
         ''         ' 如果快取區存有這封信真的附件數量，就顯示明確數量。如果沒有，代表完全沒有跑過 Phase 2，就顯示 ">0", 不需真的去讀COM物件確認，避免不必要的性能損耗
         ''         Dim cachedFiles As List(Of String) = Nothing
         ''         Dim displayName As String = ">0"
-        ''         If _cacheAttachFilename.TryGetValue(m.EntryID, cachedFiles) Then displayName = cachedFiles.Count.ToString()
+        ''         If _cacheAttFilename.TryGetValue(m.EntryID, cachedFiles) Then displayName = cachedFiles.Count.ToString()
         ''         items.Add(New ListViewItem({m.Subject,
         ''                                     m.Size.ToString("###,###,##0"),
         ''                                     m.RcvTime.ToShortDateString(),
@@ -426,43 +430,35 @@ Partial Class Form1
         _dbg("開始")
         Dim selCount As Integer = lv.SelectedIndices.Count
         If selCount = 0 Then Return
+        If Not ConfirmMailDelete(selCount) Then Return
 
-        If MessageBox.Show($"確定要將選中的 {selCount} 封郵件移到「刪除郵件」資料夾嗎？", "確認刪除",
-                           MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
-
-            ' 收集選取的 EntryID 與受影響資料夾路徑 (虛擬模式由 SelectedIndices 對應回 _lv3MailList)
-            Dim affectedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
-            Dim entryIDs As New List(Of String)(selCount)
-            Dim toRemove As New HashSet(Of String)(StringComparer.Ordinal)
-            For Each idx As Integer In lv.SelectedIndices
-                If idx >= 0 AndAlso idx < _lv3MailList.Count Then
-                    Dim info = _lv3MailList(idx)
-                    entryIDs.Add(info.EntryID) : toRemove.Add(info.EntryID)
-                    If Not String.IsNullOrEmpty(info.FolderPath) Then affectedPaths.Add(info.FolderPath)
-                End If
-            Next
-
-            If entryIDs.Count > 0 Then
-                _lv3MailList.RemoveAll(Function(m) toRemove.Contains(m.EntryID))   ' 從虛擬資料源移除
-
-                For Each fPath In affectedPaths
-                    InvalidateMailCache(fPath)     ' 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
-                    DbDeleteMailInfoByPath(fPath)  ' 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
-                Next
-
-                MoveMailsToRecycle(entryIDs)            ' 實體刪除 (移動到同 Store 的刪除郵件資料夾)
-                lv.SelectedIndices.Clear()              ' 清選取，避免殘留索引超出新 Size
-                lv.VirtualListSize = _lv3MailList.Count ' 設定 Size 即觸發重繪 (參照 ShowLv3Result)
-                PgrsBar2.Text = $"已移動 {selCount} 封郵件至刪除郵件資料夾"
+        ' 收集選取的 EntryID 與受影響資料夾路徑 (虛擬模式由 SelectedIndices 對應回 _lv3MailList)
+        Dim affectedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Dim entryIDs As New List(Of String)(selCount)
+        Dim toRemove As New HashSet(Of String)(StringComparer.Ordinal)
+        For Each idx As Integer In lv.SelectedIndices
+            If idx >= 0 AndAlso idx < _lv3MailList.Count Then
+                Dim info = _lv3MailList(idx)
+                entryIDs.Add(info.EntryID) : toRemove.Add(info.EntryID)
+                If Not String.IsNullOrEmpty(info.FolderPath) Then affectedPaths.Add(info.FolderPath)
             End If
+        Next
+
+        If entryIDs.Count > 0 Then
+            _lv3MailList.RemoveAll(Function(m) toRemove.Contains(m.EntryID))   ' 從虛擬資料源移除
+            DeleteByMailList(entryIDs, affectedPaths, selCount)
+
+            lv.SelectedIndices.Clear()              ' 清選取，避免殘留索引超出新 Size
+            lv.VirtualListSize = _lv3MailList.Count ' 設定 Size 即觸發重繪 (參照 ShowLv3Result)
+            CalculateLvColumnSize(lv)               ' 2026/07/04 by Simon/Claude: 刪除後筆數變化可能造成捲軸出現/消失，同 ShowLv3Result 修法
         End If
         _dbg("結束")
     End Sub
 #End Region
 #Region "  └ 輔助函數"
-    Private Function BuildFilterAttachment() As String
+    Private Function BuildAttFilter() As String
         ' 2026-03-16: 大小篩選移到 Bt3_Click Step3b 的 LINQ，
-        '   此函數保留但現在只回傳 hasattachment 基礎 filter (與 strFilterHasAttachment 一致)
+        '   此函數保留但現在只回傳 hasattachment 基礎 filter (與 filterHasAtt 一致)
         '   保留原有大小條件建構邏輯以備日後參考，但 Bt3_Click 已不呼叫此函數
         Dim q As String = Chr(34)
         Return "@SQL=" & q & "urn:schemas:httpmail:hasattachment" & q & " = True"
@@ -566,7 +562,7 @@ Partial Class Form1
                 fakeNodes.Add(New TreeNode() With {.Tag = f})
             Next
             Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, progress:=progress4, cToken:=cToken)
-            Await PreLoadMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mailinfo_list 一次拉入記憶體
+            Await PreLoadMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
 
             ' 2026/06/29 by Simon/Claude [Stage2]: 移除整批眼物化，直接走 id-tuple；folder 由免-folder 多載延後到 ③ 才建
             Dim processed As Integer = 0
@@ -835,8 +831,19 @@ Partial Class Form1
         Dim baseEntryID As String = If(baseItem.SubItems.Count > 5, baseItem.SubItems(5).Text, "")
         If String.IsNullOrEmpty(baseEntryID) Then Return
 
+        ' 2026/07/03 by Simon/Claude: 建 EntryID→FolderPath 查找表 — GetMailBody 帶 folderPath 才會分派到 GetMailBodyRdo(store-scoped 高速),
+        '   不帶就永遠掉 GetMailBodyOOM(慢,且 OOM .Body 撞漏網 IRM 信會跳隱形授權 modal 凍結)。資料來源 = Listview4 列的底層清單。
+        Dim pathById As New Dictionary(Of String, String)(StringComparer.Ordinal)
+        If _tv4SelectedTopicMailList IsNot Nothing Then
+            For Each m In _tv4SelectedTopicMailList
+                If Not String.IsNullOrEmpty(m.EntryID) Then pathById(m.EntryID) = If(m.FolderPath, "")
+            Next
+        End If
+        Dim basePath As String = Nothing
+        If Not pathById.TryGetValue(baseEntryID, basePath) Then basePath = ""
+
         ' 取得基準郵件正規化 Body（L2.5 快取優先）
-        Dim baseBody As String = GetMailBody(baseEntryID)
+        Dim baseBody As String = GetMailBody(baseEntryID, basePath)
         If String.IsNullOrEmpty(baseBody) Then Return
 
         ' 💡 關鍵修正 2：先同步標記全列表初始狀態（UI 執行緒批次寫入，不閃爍）
@@ -855,23 +862,13 @@ Partial Class Form1
         Try
             For Each chunk In lviCompareList.Chunk(BATCH_SIZE)
                 If token.IsCancellationRequested Then Return
-                Await ProcessLv4SimBatch(lv, chunk, baseBody, baseEntryID, token)
+                Await ProcessLv4SimBatch(lv, chunk, baseBody, baseEntryID, pathById, token)
             Next
         Catch ex As OperationCanceledException
             ' 正常取消，不需處理
         End Try
         _dbg("結束")
 
-    End Sub
-    Private Sub Lv4_KeyDown(sender As Object, e As KeyEventArgs) Handles Listview4.KeyDown
-        ' by Gemini 3.1 Pro, 2026/04/21: Tab4 專屬快捷鍵 (Delete)
-        ' 2026/06/14 by Simon/Claude Opus 4.8: F5 分支已移至共用 HandleLv3Lv4Lv5_KeyDown 統一分派，此處移除 (連帶移除 Async)
-        _dbg("開始", e.KeyCode.ToString())
-        If e.KeyCode = Keys.Delete Then
-            _dbg("快捷鍵", "偵測到 Delete (呼叫 HandleLv4Delete)")
-            HandleLv4Delete(DirectCast(sender, ListView))
-            e.Handled = True
-        End If
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
@@ -904,6 +901,9 @@ Partial Class Form1
         Lv4Topic.VirtualListSize = 0    ' 先歸零強制重置
         Lv4Topic.VirtualListSize = _lv4TopicList.Count
         Lv4Topic.EndUpdate()
+
+        ' 2026/07/04 by Simon/Claude: 同 ShowLv3Result — 筆數變化造成捲軸出現/消失不會觸發 Resize 事件，需主動重算欄寬一次
+        CalculateLvColumnSize(Lv4Topic)
 
         ' ── 切換顯示：Lv4Topic 上台，SimTree4 退後 ──
         SimTree4.Visible = False : Lv4Topic.Visible = True : Lv4Topic.Focus()
@@ -977,6 +977,9 @@ Partial Class Form1
         Listview4.Items.AddRange(itmToAdd.ToArray())
         Listview4.EndUpdate()
 
+        ' 2026/07/04 by Simon/Claude: 同 ShowLv3Result — 筆數變化造成捲軸出現/消失不會觸發 Resize 事件，需主動重算欄寬一次
+        CalculateLvColumnSize(Listview4)
+
         ' 4. 更新狀態列反饋 (by Gemini 3 Flash, 2026/04/20)
         PgrsBar2.Text = $"系列選中：共 {mailList.Count:N0} 封郵件"
         _dbg("結束")
@@ -987,38 +990,29 @@ Partial Class Form1
         _dbg("開始")
         Dim selCount As Integer = lv.SelectedItems.Count
         If selCount = 0 Then Return
+        If Not ConfirmMailDelete(selCount) Then Return
 
-        If MessageBox.Show($"確定要將選中的 {selCount} 封郵件移到「刪除郵件」資料夾嗎？", "確認刪除",
-                           MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
+        ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
+        Dim affectedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
 
-            ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
-            Dim affectedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Dim entryIDs As New List(Of String)(64) ' 預分配容量，優化批量刪除的 ID 收集 (by Gemini 3 Flash, 2026/05/04)
+        ' 2026/04/28 by Gemini 3.1 Pro: 改由 ListView 本身的 Tag 取回清單，並以 EntryID 作為刪除比對基準，避免 Structure 預設比對失敗
+        Dim mailList As List(Of MailItemInfo) = TryCast(lv.Tag, List(Of MailItemInfo))
+        If mailList IsNot Nothing Then
+            ' 先收集 ID 並從原始清單中移除
+            For Each item As ListViewItem In lv.SelectedItems
+                If TypeOf item.Tag Is MailItemInfo Then
+                    Dim info = DirectCast(item.Tag, MailItemInfo)
+                    entryIDs.Add(info.EntryID)
+                    mailList.RemoveAll(Function(m) m.EntryID = info.EntryID)
 
-            Dim entryIDs As New List(Of String)(64) ' 預分配容量，優化批量刪除的 ID 收集 (by Gemini 3 Flash, 2026/05/04)
-            ' 2026/04/28 by Gemini 3.1 Pro: 改由 ListView 本身的 Tag 取回清單，並以 EntryID 作為刪除比對基準，避免 Structure 預設比對失敗
-            Dim mailList As List(Of MailItemInfo) = TryCast(lv.Tag, List(Of MailItemInfo))
-            If mailList IsNot Nothing Then
-                ' 先收集 ID 並從原始清單中移除
-                For Each item As ListViewItem In lv.SelectedItems
-                    If TypeOf item.Tag Is MailItemInfo Then
-                        Dim info = DirectCast(item.Tag, MailItemInfo)
-                        entryIDs.Add(info.EntryID)
-                        mailList.RemoveAll(Function(m) m.EntryID = info.EntryID)
+                    ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
+                    If Not String.IsNullOrEmpty(info.FolderPath) Then affectedPaths.Add(info.FolderPath)
+                End If
+            Next
 
-                        ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
-                        If Not String.IsNullOrEmpty(info.FolderPath) Then affectedPaths.Add(info.FolderPath)
-                    End If
-                Next
-
-                For Each fPath In affectedPaths
-                    InvalidateMailCache(fPath)     ' 2026/5/11 by Simon: 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
-                    DbDeleteMailInfoByPath(fPath)  ' 2026/5/11 by Simon: 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
-                Next
-
-                MoveMailsToRecycle(entryIDs)            ' 實體刪除 (移動到預設刪除資料夾)
-                RenderLv4Result(mailList)               ' 重新整理 UI
-                PgrsBar2.Text = $"已移動 {selCount} 封郵件至刪除郵件資料夾"
-            End If
+            DeleteByMailList(entryIDs, affectedPaths, selCount)
+            RenderLv4Result(mailList)               ' 重新整理 UI
         End If
         _dbg("結束")
 
@@ -1063,7 +1057,7 @@ Partial Class Form1
         th.Start()
 
     End Sub
-    Private Async Function ProcessLv4SimBatch(lv As ListView, chunk As ListViewItem(), baseBody As String, baseEntryID As String, token As CancellationToken) As Task
+    Private Async Function ProcessLv4SimBatch(lv As ListView, chunk As ListViewItem(), baseBody As String, baseEntryID As String, pathById As Dictionary(Of String, String), token As CancellationToken) As Task
         ' ---------------------------------------------------------------
         ' ProcessLv4SimBatch — 處理單一批次的「讀 body → 平行算 Jaccard → 批次更新 UI」
         ' 2026/06/16 by Simon/Claude Opus 4.8: 自 Lv4_SelectedIndexChanged 抽出，三階段邏輯原樣不變，僅作用範圍縮為一批 (chunk)
@@ -1081,7 +1075,9 @@ Partial Class Form1
             Dim targetID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
             If targetID = baseEntryID OrElse String.IsNullOrEmpty(targetID) Then Continue For
 
-            Dim targetBody As String = GetMailBody(targetID)
+            Dim targetPath As String = Nothing   ' 2026/07/03 by Simon/Claude: 帶 folderPath 分派 RDO(查找表建於 Lv4_SelectedIndexChanged)
+            If Not pathById.TryGetValue(targetID, targetPath) Then targetPath = ""
+            Dim targetBody As String = GetMailBody(targetID, targetPath)
             If String.IsNullOrEmpty(targetBody) Then
                 item.SubItems(4).Text = "失敗" : Continue For
             End If
@@ -1131,7 +1127,7 @@ Partial Class Form1
             ' 2026/06/14 by Simon/Claude Opus 4.8: 改走共用核心 RefreshLviCore (依數量自動 A/B)，移除原逐封 GetItemFromID 內聯
             Dim targetList As New List(Of (lst As List(Of MailItemInfo), idx As Integer))(mailList.Count)
             For i As Integer = 0 To mailList.Count - 1 : targetList.Add((mailList, i)) : Next
-            Dim stats = Await RefreshLviCore(targetList, readAttachCount:=False, ct:=CancellationToken.None)
+            Dim stats = Await RefreshLviCore(targetList, flushAttFilenameCache:=False, ct:=CancellationToken.None)
 
             RenderLv4Result(mailList)   ' 重新填寫列表 (保留目前排序狀態，資料是原地更新)
             PgrsBar1.Text = $"已重新讀取 {stats.Updated} 封 (失效 {stats.NotFound}, 錯誤 {stats.Errored})。" : PgrsBar2.Text = ""

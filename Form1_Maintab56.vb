@@ -85,17 +85,6 @@ Partial Class Form1
         End Try
 
     End Sub
-    Private Sub Lv5_KeyDown(sender As Object, e As KeyEventArgs) Handles ListView5.KeyDown
-        ''' <summary>
-        ''' by Gemini 3 Flash, 2026/05/06: 處理 ListView5 的專屬快捷鍵 (Delete)
-        ''' </summary>
-        _dbg("開始", e.KeyCode.ToString())
-        If e.KeyCode = Keys.Delete Then
-            _dbg("快捷鍵", "偵測到 Delete (呼叫 HandleLv5Delete)")
-            HandleLv5Delete(DirectCast(sender, ListView))
-            e.Handled = True
-        End If
-    End Sub
     Private Sub Lv5_ColumnClick(sender As Object, e As ColumnClickEventArgs)
         ' 2026/05/10 by Simon/Claude: Tab5 群組感知排序
         ' 點擊同一欄 → 反向；點擊新欄 → 升冪
@@ -121,7 +110,7 @@ Partial Class Form1
         Dim swThrottle As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
         Dim swTotal As Stopwatch = Stopwatch.StartNew()     ' 2026/05/10 by Simon/Claude: 供 ETA 計算使用; refactored by Claude Sonnet 4.6, 2026/06/07
 
-        ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mailinfo_list 一次拉入記憶體
+        ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
         Await PreLoadMailCacheAsync(folderList, cToken)
 
         For i As Integer = 0 To folderList.Count - 1
@@ -293,6 +282,10 @@ Partial Class Form1
         Next
 
         ListView5.EndUpdate()
+
+        ' 2026/07/04 by Simon/Claude: 筆數變化造成捲軸出現/消失不會觸發 Resize 事件，需主動重算欄寬一次 (同 RenderLv1 修法)
+        CalculateLvColumnSize(ListView5)
+
         Return (groupID - 1, totalMails)
 
     End Function
@@ -307,62 +300,54 @@ Partial Class Form1
         _dbg("開始")
         Dim selCount As Integer = lv.SelectedItems.Count
         If selCount = 0 Then Return
+        If Not ConfirmMailDelete(selCount) Then Return
 
-        If MessageBox.Show($"確定要將選中的 {selCount} 封郵件移到「刪除郵件」資料夾嗎？", "確認刪除",
-                           MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
+        ' 取得快取的資料字典
+        Dim groupDict As Dictionary(Of String, List(Of MailItemInfo)) = _lv5PrevGroupResults
+        If groupDict Is Nothing Then Return
 
-            ' 取得快取的資料字典
-            Dim groupDict As Dictionary(Of String, List(Of MailItemInfo)) = _lv5PrevGroupResults
-            If groupDict Is Nothing Then Return
+        ' 2026/06/18 by Simon/Claude Opus 4.8: 刪除前固定「待移除的列」與游標錨點(最小選取索引)，供原地移除與游標還原
+        Dim selectedItems As ListViewItem() = lv.SelectedItems.Cast(Of ListViewItem)().ToArray()
+        Dim anchorIndex As Integer = lv.SelectedIndices.Cast(Of Integer)().Min()
 
-            ' 2026/06/18 by Simon/Claude Opus 4.8: 刪除前固定「待移除的列」與游標錨點(最小選取索引)，供原地移除與游標還原
-            Dim selectedItems As ListViewItem() = lv.SelectedItems.Cast(Of ListViewItem)().ToArray()
-            Dim anchorIndex As Integer = lv.SelectedIndices.Cast(Of Integer)().Min()
+        ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
+        Dim affectedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
 
-            ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
-            Dim affectedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        ' 收集選中項目的 EntryID 並從資料源中移除
+        Dim entryIDs As New List(Of String)(selCount)
+        For Each item As ListViewItem In selectedItems
+            If TypeOf item.Tag Is MailItemInfo Then
+                Dim info = DirectCast(item.Tag, MailItemInfo)
+                entryIDs.Add(info.EntryID)
 
-            ' 收集選中項目的 EntryID 並從資料源中移除
-            Dim entryIDs As New List(Of String)(selCount)
-            For Each item As ListViewItem In selectedItems
-                If TypeOf item.Tag Is MailItemInfo Then
-                    Dim info = DirectCast(item.Tag, MailItemInfo)
-                    entryIDs.Add(info.EntryID)
-
-                    ' 從 groupDict 中移除該封信 (遍歷所有群組尋找)
-                    For Each kvp In groupDict
-                        ' 找到並移除後，如果該群組只剩 1 封或 0 封，在重複郵件邏輯中視為不再重複，可選擇保留或由渲染器過濾
-                        If kvp.Value.RemoveAll(Function(m) m.EntryID = info.EntryID) > 0 Then
-                            ' 2026/06/18 by Simon/Claude Opus 4.8: 移除後該群其餘成員即「失去配對的另一封」→ 加入孤兒集合，由 DrawSubItem 標紅
-                            For Each other In kvp.Value : _lv5OrphanedList.Add(other.EntryID) : Next
-                            Exit For
-                        End If
-                    Next
-
-                    ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
-                    If Not String.IsNullOrEmpty(info.FolderPath) Then affectedPaths.Add(info.FolderPath)
-                End If
-            Next
-
-            If entryIDs.Count > 0 Then
-                For Each fPath In affectedPaths
-                    InvalidateMailCache(fPath)     ' 2026/5/11 by Simon: 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
-                    DbDeleteMailInfoByPath(fPath)  ' 2026/5/11 by Simon: 刪除後手動清理 DB 資料，避免殘留已刪除郵件的資訊
+                ' 從 groupDict 中移除該封信 (遍歷所有群組尋找)
+                For Each kvp In groupDict
+                    ' 找到並移除後，如果該群組只剩 1 封或 0 封，在重複郵件邏輯中視為不再重複，可選擇保留或由渲染器過濾
+                    If kvp.Value.RemoveAll(Function(m) m.EntryID = info.EntryID) > 0 Then
+                        ' 2026/06/18 by Simon/Claude Opus 4.8: 移除後該群其餘成員即「失去配對的另一封」→ 加入孤兒集合，由 DrawSubItem 標紅
+                        For Each other In kvp.Value : _lv5OrphanedList.Add(other.EntryID) : Next
+                        Exit For
+                    End If
                 Next
-                MoveMailsToRecycle(entryIDs)            ' 實體移動
 
-                ' 2026/06/18 by Simon/Claude Opus 4.8: 原地更新 UI(取代整表 RenderLv5Group)，保留捲動位置與其餘列
-                lv.BeginUpdate()
-                For Each it In selectedItems : lv.Items.Remove(it) : Next          ' ① 移除被刪列，其餘列原地不動
-                If lv.Items.Count > 0 Then                                         ' ② 游標留在原位(被刪列下一列)，不跳頂端
-                    Dim newIdx As Integer = Math.Min(anchorIndex, lv.Items.Count - 1)
-                    lv.Items(newIdx).Selected = True : lv.Items(newIdx).Focused = True : lv.Items(newIdx).EnsureVisible()
-                End If
-                lv.Invalidate()                                                    ' ③ 強制重繪→孤兒信經 DrawSubItem 上紅字(OwnerDraw 資料未變不會自動重畫)
-                lv.EndUpdate()
-
-                PgrsBar2.Text = $"已移動 {selCount} 封郵件至刪除郵件資料夾"
+                ' 2026/5/11 simon: 收集受影響的資料夾路徑，供後續清理快取與DB使用
+                If Not String.IsNullOrEmpty(info.FolderPath) Then affectedPaths.Add(info.FolderPath)
             End If
+        Next
+
+        If entryIDs.Count > 0 Then
+            DeleteByMailList(entryIDs, affectedPaths, selCount)
+
+            ' 2026/06/18 by Simon/Claude Opus 4.8: 原地更新 UI(取代整表 RenderLv5Group)，保留捲動位置與其餘列
+            lv.BeginUpdate()
+            For Each it In selectedItems : lv.Items.Remove(it) : Next          ' ① 移除被刪列，其餘列原地不動
+            If lv.Items.Count > 0 Then                                         ' ② 游標留在原位(被刪列下一列)，不跳頂端
+                Dim newIdx As Integer = Math.Min(anchorIndex, lv.Items.Count - 1)
+                lv.Items(newIdx).Selected = True : lv.Items(newIdx).Focused = True : lv.Items(newIdx).EnsureVisible()
+            End If
+            lv.Invalidate()                                                    ' ③ 強制重繪→孤兒信經 DrawSubItem 上紅字(OwnerDraw 資料未變不會自動重畫)
+            lv.EndUpdate()
+            CalculateLvColumnSize(lv)                                          ' 2026/07/04 by Simon/Claude: 刪除後筆數變化可能造成捲軸出現/消失，同 RenderLv1 修法
         End If
         _dbg("結束")
     End Sub
@@ -528,7 +513,9 @@ Partial Class Form1
                 If body Is Nothing Then
                     rdoFailed.Add(m)
                 Else
-                    Dim setB = BuildBigramSet(body)
+                    ' 2026/07/03 by Simon/Claude: 指紋必須用正規化 body 算 — 序列版(GetMailBodyRdo)與 OOM 補算路徑都先過 NormalizeMailBody,
+                    '   worker 若拿生 rm.Body 算,同一封信兩路徑指紋不一致,且會永久污染 OLAsimHash.db(Regex 為 Shared 預編譯實例,跨緒安全)
+                    Dim setB = BuildBigramSet(NormalizeMailBody(body))
                     Dim sh = ComputeSimHashFromSet(setB)
                     _cacheSimHash(m.EntryID) = (sh, setB.Count)
                     batch.Add((m.EntryID, sh, setB.Count))
@@ -565,6 +552,47 @@ Partial Class Form1
         End Try
     End Function
 
+    Private Async Function FilterCandidatesByJaccardAsync(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
+            As Task(Of (Pairs As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), Sets As Dictionary(Of String, HashSet(Of Integer))))
+        ' 只對通過 S4 的少數候選讀 body、建 bigram 集合、算精確 bigram Jaccard。集合回傳給 S6 算群代表分數，免重讀。
+        Dim sets As New Dictionary(Of String, HashSet(Of Integer))()
+        ' 2026/07/05 by Simon/Claude: 去重改保留整個 MailItemInfo(原本只留 EntryID) — GetMailBody 不帶 folderPath 會落 OOM 慢路徑,帶上才走 RDO 快路徑
+        Dim uniqueMails = candidates.SelectMany(Function(p) New MailItemInfo() {p.A, p.B}).
+            GroupBy(Function(m) m.EntryID).Select(Function(g) g.First()).ToList()
+
+        ' Phase1: 候選 body 讀取(COM, UI 執行緒, 少量) → bigram 集合。這裡走 GetMailBody(會快取這少數幾封)
+        Dim swEta As Stopwatch = Stopwatch.StartNew()  ' 2026/06/17 by Simon/Claude: 供進度速度與 ETA 計算
+        For k As Integer = 0 To uniqueMails.Count - 1
+            cToken.ThrowIfCancellationRequested()
+            Dim m = uniqueMails(k)
+            If Not sets.ContainsKey(m.EntryID) Then sets(m.EntryID) = BuildBigramSet(GetMailBody(m.EntryID, m.FolderPath))
+            If (k And 15) = 0 Then
+                ' 2026/06/17 by Simon/Claude: 加入速度與 ETA 顯示，對齊 Tab3/Tab4 做法
+                Dim eta = CalculateSpeedAndETA(uniqueMails.Count, k + 1, swEta.Elapsed.TotalSeconds)
+                progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文: {k + 1}/{uniqueMails.Count} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                Await Task.Delay(1, cToken)
+            End If
+        Next
+
+        ' Phase2: Jaccard 精算(純 CPU)。候選少，序列即可；日後量大可改 Parallel.For(對齊 Tab4)
+        Dim minShared As Integer = MinSharedBigramFor(targetT)   ' Q1 連動 2026/06/18 by Simon/Claude: S5 共有量下限改用檔位值
+        Dim pairs = Await Task.Run(
+            Function() As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double))
+                Dim r As New List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double))()
+                For Each p In candidates
+                    ' Q1-C 2026/06/18 by Simon/Claude Opus 4.8: 先取交集絕對數，不足門檻直接淘汰(擋短信比例 100% 假陽性)；達標再由 inter 導出 Jaccard，免重算交集
+                    Dim setA = sets(p.A.EntryID), setB = sets(p.B.EntryID)
+                    Dim inter As Integer = BigramIntersectionCount(setA, setB)
+                    If inter < minShared Then Continue For
+
+                    Dim union As Integer = setA.Count + setB.Count - inter
+                    Dim s As Double = If(union = 0, 0.0, inter / union)   ' size 1/T 界線 S4 已保證，此處不重複早退
+                    If s >= targetT Then r.Add((p.A, p.B, s))
+                Next
+                Return r
+            End Function, cToken)
+        Return (pairs, sets)
+    End Function
     Private Async Function GenerateFuzzyCandidatePairs(mails As List(Of MailItemInfo), targetT As Double, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
         ' size 1/T 滑動視窗收斂 O(n²) + Hamming 一階篩。純 CPU、無 COM → 放 Task.Run 不凍 UI。
         Dim hThr As Integer = HammingThresholdFor(targetT)
@@ -589,45 +617,6 @@ Partial Class Form1
                 Next
                 Return result
             End Function, cToken)
-    End Function
-    Private Async Function FilterCandidatesByJaccardAsync(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
-            As Task(Of (Pairs As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), Sets As Dictionary(Of String, HashSet(Of Integer))))
-        ' 只對通過 S4 的少數候選讀 body、建 bigram 集合、算精確 bigram Jaccard。集合回傳給 S6 算群代表分數，免重讀。
-        Dim sets As New Dictionary(Of String, HashSet(Of Integer))()
-        Dim uniqueIds = candidates.SelectMany(Function(p) New String() {p.A.EntryID, p.B.EntryID}).Distinct().ToList()
-
-        ' Phase1: 候選 body 讀取(COM, UI 執行緒, 少量) → bigram 集合。這裡走 GetMailBody(會快取這少數幾封)
-        Dim swEta As Stopwatch = Stopwatch.StartNew()  ' 2026/06/17 by Simon/Claude: 供進度速度與 ETA 計算
-        For k As Integer = 0 To uniqueIds.Count - 1
-            cToken.ThrowIfCancellationRequested()
-            Dim id = uniqueIds(k)
-            If Not sets.ContainsKey(id) Then sets(id) = BuildBigramSet(GetMailBody(id))
-            If (k And 15) = 0 Then
-                ' 2026/06/17 by Simon/Claude: 加入速度與 ETA 顯示，對齊 Tab3/Tab4 做法
-                Dim eta = CalculateSpeedAndETA(uniqueIds.Count, k + 1, swEta.Elapsed.TotalSeconds)
-                progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文: {k + 1}/{uniqueIds.Count} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
-                Await Task.Delay(1, cToken)
-            End If
-        Next
-
-        ' Phase2: Jaccard 精算(純 CPU)。候選少，序列即可；日後量大可改 Parallel.For(對齊 Tab4)
-        Dim minShared As Integer = MinSharedBigramFor(targetT)   ' Q1 連動 2026/06/18 by Simon/Claude: S5 共有量下限改用檔位值
-        Dim pairs = Await Task.Run(
-            Function() As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double))
-                Dim r As New List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double))()
-                For Each p In candidates
-                    ' Q1-C 2026/06/18 by Simon/Claude Opus 4.8: 先取交集絕對數，不足門檻直接淘汰(擋短信比例 100% 假陽性)；達標再由 inter 導出 Jaccard，免重算交集
-                    Dim setA = sets(p.A.EntryID), setB = sets(p.B.EntryID)
-                    Dim inter As Integer = BigramIntersectionCount(setA, setB)
-                    If inter < minShared Then Continue For
-
-                    Dim union As Integer = setA.Count + setB.Count - inter
-                    Dim s As Double = If(union = 0, 0.0, inter / union)   ' size 1/T 界線 S4 已保證，此處不重複早退
-                    If s >= targetT Then r.Add((p.A, p.B, s))
-                Next
-                Return r
-            End Function, cToken)
-        Return (pairs, sets)
     End Function
     Private Function BuildFuzzyGroups(similar As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), sets As Dictionary(Of String, HashSet(Of Integer))) _
             As (GroupDict As Dictionary(Of String, List(Of MailItemInfo)), ScoreMap As Dictionary(Of String, Double))
@@ -792,6 +781,26 @@ Partial Class Form1
     ' 理由: Tab3 與 Tab4 的 ListView 皆為「搜尋結果」，行為高度一致 (Enter/雙擊/連動與路徑顯示)。
     ' 整合後可減少冗餘代碼，並確保滑鼠與熱鍵行為絕對一致。
     ' --------------------------------------------------------------
+    Private Function ConfirmMailDelete(selCount As Integer) As Boolean
+        ' 2026/07/05 by Simon/Claude: 從 HandleLv3/4/5Delete 抽出的共用確認對話框
+        Return MessageBox.Show($"確定要將選中的 {selCount} 封郵件移到「刪除郵件」資料夾嗎？", "確認刪除",
+                               MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes
+    End Function
+    Private Sub DeleteByMailList(entryIDs As List(Of String), affectedPaths As HashSet(Of String), selCount As Integer)
+        ' 2026/07/05 by Simon/Claude: 從 HandleLv3/4/5Delete 抽出的共用刪除中段 — 清快取/DB、實體刪除、狀態列訊息
+        For Each fPath In affectedPaths
+            InvalidateMailCache(fPath)     ' 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
+            ' 2026/07/06 by Simon/Claude Fable 5: 原 DbDeleteMailInfoByPath 只清 mail_info 一張表 —
+            '   att_maillist 的 snap 比對是「att 列 snap vs folder_info.mc」兩邊同一次 SaveCache 寫入、同源必相等，
+            '   year/month_counts 更是完全無驗證，三張表都會把已刪郵件從 DB lazy 原樣復活。改走統一失效入口一次清乾淨。
+            DbPurgeFolderMailRows(fPath)
+        Next
+        ' 2026/07/06 by Simon/Claude Fable 5: 昂貴表 surgical — 刪除當下手上就有確切 entryID 清單，
+        '   順手清 mail_simhash/att_filenames 對應列(含記憶體)，否則重複郵件/附件搜尋殘留幽靈要等下次 RenewCache 才消
+        SimDbDeleteMailRowsByEntryIds(entryIDs, includeAttFilenames:=True)
+        MoveMailsToRecycle(entryIDs)       ' 實體刪除 (移動到同 Store 的刪除郵件資料夾)
+        PgrsBar2.Text = $"已移動 {selCount} 封郵件至刪除郵件資料夾"
+    End Sub
     Private Sub InitLv3Lv4Lv5ContextMenu()
         ' 2026/06/15 by Simon/Claude Opus 4.8: Lv3/4/5 共用右鍵選單；冪等，重複呼叫只建一次 (確保三個 LV 共用同一實例)
         If ctxMenuLv3Lv4Lv5 IsNot Nothing Then Return Else ctxMenuLv3Lv4Lv5 = New ContextMenuStrip()
@@ -947,6 +956,13 @@ Partial Class Form1
             OpenMailByEntryID(GetSelectedEntryIDs(lv))
             e.Handled = True : e.SuppressKeyPress = True
 
+        ElseIf e.KeyCode = Keys.Delete Then
+            ' 2026/07/05 by Simon/Claude Opus 4.8: 整合自 Lv3/Lv4/Lv5 原本各自獨立的 Delete 按鍵處理 (Lv3 原本沒有此快捷鍵，一併補上)
+            If lv Is ListView3 Then HandleLv3Delete(lv)
+            If lv Is Listview4 Then HandleLv4Delete(lv)
+            If lv Is ListView5 Then HandleLv5Delete(lv)
+            e.Handled = True
+
         ElseIf e.KeyCode = Keys.Escape Then
             If lv.VirtualMode Then lv.SelectedIndices.Clear() Else lv.SelectedItems.Clear()
             ' 對應不同的 TreeView 給予控制權
@@ -966,8 +982,6 @@ Partial Class Form1
             ElseIf lv Is Listview4 Then
                 Await RefreshLv4Result(lv)      ' Lv4 沿用：重讀目前系列郵件
             End If
-        ElseIf e.Control AndAlso e.KeyCode = Keys.A Then
-            LviSelectAll(lv, e)
         End If
     End Sub
 
@@ -975,7 +989,7 @@ Partial Class Form1
     ' ==============================================================
     ' 功能：
     '   (A) Lv3/Lv5 按 F5 → 強制刷新「目前顯示清單」內所有郵件的實體資訊 (Subject/Size/RcvTime/SenderName)
-    '   (B) Lv3/Lv4/Lv5 右鍵選單「強制刷新選取的郵件」→ 只刷選取項，並額外更新 AttachCount
+    '   (B) Lv3/Lv4/Lv5 右鍵選單「強制刷新選取的郵件」→ 只刷選取項
     '
     ' 設計重點：
     '   1. 跳過所有 cache (_cacheXXX / SSD)，直接打 COM 讀真值；讀完寫回顯示清單，並 patch 記憶體 cache。
@@ -983,23 +997,27 @@ Partial Class Form1
     '        targetList.Count <  REFRESH_BATCH_THRESHOLD(42) → 方法A：逐封 RefreshMailInfo
     '        targetList.Count >= 門檻                        → 方法B：依資料夾 GetTable+GetArray 批次
     '   3. 只刷「已在記憶體中的項目」：顯示清單 + 已含該 EntryID 的 cache；
-    '      尚未 lazy load 的欄位 (附件數/檔名) 不主動額外讀取 (全體 F5 一律略過 AttachCount)。
-    '   4. AttachCount 由「操作別」決定 (readAttachCount)：全體F5=False、右鍵刷新=True；
-    '      但方法B 結構上讀不到附件數 → 即使右鍵選 >=42 封，該批 AttachCount 也不會更新 (效能優先的邊界取捨)。
+    '      尚未 lazy load 的欄位 (附件數/檔名) 不主動額外讀取。
+    '   4. AttCount 不再由這個流程讀取(全體F5/右鍵刷新一律不讀)：2026/07/04 探針證實 MAPI 無訊息層級批次欄位、
+    '      逐封枚舉又是 Tab3 篩選路徑用不到的死碼(Tab3 實際讀 GetAttFilename().Count)。
+    '      唯一保留的「操作別」訊號是 flushAttFilenameCache：右鍵單筆刷新時，順便清掉該筆過期的附件檔名快取
+    '      (_cacheAttFilename)，讓 Tab3 下次查詢時重讀真值；全體 F5 / 批次 B 路徑不做這件事(避免大量失效過度昂貴)。
     '   5. SSD 不在此逐封碎寫，交給正常存檔流程；snapshot 計數不動 (沒有增減郵件)。
-    '   6. 失效郵件 (EntryID 找不到) 目前一律「保留舊資料 + 記錄」；日後若要移除/標記，只需改呼叫端政策。
+    '   6. 失效郵件 (EntryID 找不到) 顯示清單一律「保留舊資料 + 記錄」不動；
+    '      但會觸發 SelfHealDeadEntryId(該資料夾) 毒化 DB snapshot，逼下次 RenewCache 對該夾強制全量重讀 + entry_id 清理
+    '      (典型成因：PST 壓縮換 entry_id，或 copy→改→放回→刪原始 等 RenewCache 雙訊號都巧合沒變的邊界案例)。2026/07/04
     ' 2026/06/14 by Simon/Claude Opus 4.8
     ' ==============================================================
     Private Async Function RefreshSelectedLvItems(lv As ListView) As Task
-        ' 2026/06/14 by Simon/Claude Opus 4.8: 右鍵單筆/複數刷新 (Lv3/4/5) — 只刷選取項 (readAttachCount:=True 更新附件數)
-        '   注意：選取 >=42 會落到方法B，方法B讀不到附件數 → 該批 AttachCount 不更新 (效能優先的邊界取捨)
+        ' 2026/06/14 by Simon/Claude Opus 4.8: 右鍵單筆/複數刷新 (Lv3/4/5) — 只刷選取項
+        ' 2026/07/04 by Simon/Claude: flushAttFilenameCache:=True — 順便清掉附件檔名快取(與 AttCount 讀取脫鉤)
         _dbg("開始")
         Dim target = GetLviMailTarget(lv)
         If target.Count = 0 Then Return
 
         _isUserBusy = True : Cursor = Cursors.WaitCursor
         Try
-            Dim stats = Await RefreshLviCore(target, readAttachCount:=True, ct:=CancellationToken.None)
+            Dim stats = Await RefreshLviCore(target, flushAttFilenameCache:=True, ct:=CancellationToken.None)
             If lv Is ListView3 Then ListView3.Invalidate()
             If lv Is Listview4 Then RenderLv4Result(_tv4SelectedTopicMailList)
             If lv Is ListView5 Then RenderLv5Group(_lv5PrevGroupResults, _tv5PrevSearchMode)
@@ -1014,7 +1032,7 @@ Partial Class Form1
         End Try
     End Function
     Private Async Function RefreshAllLvItems(lv As ListView) As Task
-        ' 2026/06/14 by Simon/Claude Opus 4.8: 全體 F5 (Lv3/Lv5) — 蒐集底層所有郵件成 targetList，呼叫核心 (readAttachCount:=False，全體不讀附件數)
+        ' 2026/06/14 by Simon/Claude Opus 4.8: 全體 F5 (Lv3/Lv5) — 蒐集底層所有郵件成 targetList，呼叫核心 (flushAttFilenameCache:=False)
         _dbg("開始")
         Dim targetList As New List(Of (lst As List(Of MailItemInfo), idx As Integer))
         If lv Is ListView3 Then
@@ -1032,7 +1050,7 @@ Partial Class Form1
 
         _isUserBusy = True : Cursor = Cursors.WaitCursor
         Try
-            Dim stats = Await RefreshLviCore(targetList, readAttachCount:=False, ct:=CancellationToken.None)
+            Dim stats = Await RefreshLviCore(targetList, flushAttFilenameCache:=False, ct:=CancellationToken.None)
             If lv Is ListView3 Then ListView3.Invalidate() Else RenderLv5Group(_lv5PrevGroupResults, _tv5PrevSearchMode)
             PgrsBar1.Text = $"已刷新 {stats.Updated} 封 (失效 {stats.NotFound}, 錯誤 {stats.Errored})。" : PgrsBar2.Text = ""
         Catch ex As OperationCanceledException
@@ -1044,15 +1062,18 @@ Partial Class Form1
             _dbg("結束")
         End Try
     End Function
-    Private Async Function RefreshLviCore(target As List(Of (lst As List(Of MailItemInfo), idx As Integer)), readAttachCount As Boolean, ct As CancellationToken) As Task(Of RefreshStats)
+    Private Async Function RefreshLviCore(target As List(Of (lst As List(Of MailItemInfo), idx As Integer)), flushAttFilenameCache As Boolean, ct As CancellationToken) As Task(Of RefreshStats)
         ' 2026/06/14 by Simon/Claude Opus 4.8: 刷新核心分派器 — 給定一組 (清單,索引) targetList，依數量選 A/B 重讀 COM 並寫回 + patch 記憶體 cache
-        '   count <  門檻 → 方法A：逐封 RefreshMailInfo (readAttachCount 決定是否讀附件數)
-        '   count >= 門檻 → 方法B：依資料夾 GetTable+GetArray 批次 (讀不到附件數，一律略過)
+        '   count <  門檻 → 方法A：逐封 RefreshMailInfo
+        '   count >= 門檻 → 方法B：依資料夾 GetTable+GetArray 批次
+        ' 2026/07/04 by Simon/Claude: 移除 readAttachCount(全體F5/右鍵刷新統一不讀附件數)；flushAttFilenameCache 純粹控制要不要順便清附件檔名快取，跟 AttCount 讀取無關。
         Dim stats As New RefreshStats
         If target Is Nothing OrElse target.Count = 0 Then Return stats
 
         Dim swThrottle As Stopwatch = Stopwatch.StartNew()
         Dim total As Integer = target.Count
+        ' 2026/07/04 by Simon/Claude Fable 5: 每個資料夾在這趟刷新中只自癒一次 (SelfHealDeadEntryId 有 DB UPDATE，避免同夾多個 NotFound 重複打)
+        Dim healedPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
 
         If total < REFRESH_BATCH_THRESHOLD Then
             ' ── 方法A：逐封開信 ──
@@ -1060,9 +1081,11 @@ Partial Class Form1
                 ct.ThrowIfCancellationRequested()
                 Dim s = target(i)
                 Dim m As MailItemInfo = s.lst(s.idx)
-                Select Case RefreshMailInfo(m, readAttachCount)
-                    Case RefreshResult.Updated : s.lst(s.idx) = m : UpdateMailCaches(m, readAttachCount) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude Opus 4.8: 標記為已刷新
-                    Case RefreshResult.NotFound : stats.NotFound += 1   ' 保留舊資料不動 (移除政策由呼叫端日後決定)
+                Select Case RefreshMailInfo(m)
+                    Case RefreshResult.Updated : s.lst(s.idx) = m : UpdateMailCaches(m, flushAttFilenameCache) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude Opus 4.8: 標記為已刷新
+                    Case RefreshResult.NotFound   ' 保留舊資料不動；2026/07/04: 觸發該資料夾自癒 (毒化 DB snapshot，逼下次 RenewCache 強制重讀)
+                        stats.NotFound += 1
+                        If healedPaths.Add(m.FolderPath) Then SelfHealDeadEntryId(m.FolderPath)
                     Case Else : stats.Errored += 1
                 End Select
                 Await SmartThrottle(swThrottle, ct, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (逐封): {i + 1} / {total}...")
@@ -1079,9 +1102,11 @@ Partial Class Form1
                     For Each s In grp
                         ct.ThrowIfCancellationRequested()
                         Dim m As MailItemInfo = s.lst(s.idx)
-                        Select Case RefreshMailInfo(m, readAttachCount)
-                            Case RefreshResult.Updated : s.lst(s.idx) = m : UpdateMailCaches(m, readAttachCount) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude Opus 4.8: 標記為已刷新
-                            Case RefreshResult.NotFound : stats.NotFound += 1
+                        Select Case RefreshMailInfo(m)
+                            Case RefreshResult.Updated : s.lst(s.idx) = m : UpdateMailCaches(m, flushAttFilenameCache) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude Opus 4.8: 標記為已刷新
+                            Case RefreshResult.NotFound
+                                stats.NotFound += 1
+                                If healedPaths.Add(m.FolderPath) Then SelfHealDeadEntryId(m.FolderPath)   ' 2026/07/04 by Simon/Claude Fable 5
                             Case Else : stats.Errored += 1
                         End Select
                         done += 1
@@ -1094,11 +1119,12 @@ Partial Class Form1
                     Dim m As MailItemInfo = s.lst(s.idx)
                     Dim fresh As MailItemInfo = Nothing
                     If fieldDict.TryGetValue(m.EntryID, fresh) Then
-                        ' 只搬基本欄位，保留既有 AttachCount (方法B不碰附件數)
+                        ' 只搬基本欄位
                         m.Subject = fresh.Subject : m.Size = fresh.Size : m.RcvTime = fresh.RcvTime : m.SenderName = fresh.SenderName
-                        s.lst(s.idx) = m : UpdateMailCaches(m, readAttachCount:=False) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude: 標記為已刷新
+                        s.lst(s.idx) = m : UpdateMailCaches(m, flushAttFilenameCache:=False) : stats.Updated += 1 : _refreshedList.Add(m.EntryID)  ' 2026/06/15 by Simon/Claude: 標記為已刷新 (方法B一律不清附件檔名快取)
                     Else
-                        stats.NotFound += 1   ' 該 EntryID 已不在資料夾 (移動/刪除)
+                        stats.NotFound += 1   ' 該 EntryID 已不在資料夾 (移動/刪除)；2026/07/04: 整批用同一個 grp.Key，資料夾層級自癒一次即可
+                        If healedPaths.Add(grp.Key) Then SelfHealDeadEntryId(grp.Key)
                     End If
                     done += 1
                 Next
@@ -1142,46 +1168,6 @@ Partial Class Form1
         End If
         Return targetList
     End Function
-    Private Sub UpdateMailCaches(mail As MailItemInfo, readAttachCount As Boolean)
-        ' 2026/06/14 by Simon/Claude Opus 4.8: 只 patch「現有 in-memory cache 中已含此 EntryID」的項目；絕不新建 key、不觸發掃描/lazy load
-        '   內層 List 是參考型別，原地改元素即可，dict 與 snapshot 不動
-        ' 2026/07/03 by Simon/Claude Fable 5: 原地 patch 不會經過 _cacheMailInfo(fPath)=... / _cacheAttachMailList(fPath)=... 這種
-        '   「整格重新賦值」的 dirty 追蹤標記點，SaveCache 的 dirty 過濾會因此漏掉這裡的異動。必須在此手動補標記，
-        '   否則 F5 逐封刷新改到的 Subject/Size/SenderName 等欄位永遠不會被寫回 SQLite。
-        MarkMailFolderDirty(mail.FolderPath)
-
-        ' ① Tab3 附件清單快取
-        Dim t3 As FolderCacheTab3 = Nothing
-        If _cacheAttachMailList.TryGetValue(mail.FolderPath, t3) AndAlso t3.AttachMailList IsNot Nothing Then
-            Dim lst = t3.AttachMailList
-            Dim j As Integer = lst.FindIndex(Function(x) x.EntryID = mail.EntryID)
-            If j >= 0 Then
-                Dim c = lst(j)
-                c.Subject = mail.Subject : c.Size = mail.Size : c.RcvTime = mail.RcvTime : c.SenderName = mail.SenderName
-                If readAttachCount Then c.AttachCount = mail.AttachCount   ' 只有逐封(方法A)才有可信附件數
-                lst(j) = c
-            End If
-        End If
-
-        ' ② Tab4 基本資訊快取 (Mails 是 List(Of (Mail, Topic)))
-        Dim t4 As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long) = Nothing
-        If _cacheMailInfo.TryGetValue(mail.FolderPath, t4) AndAlso t4.Mails IsNot Nothing Then
-            Dim lst = t4.Mails
-            Dim j As Integer = lst.FindIndex(Function(x) x.Mail.EntryID = mail.EntryID)
-            If j >= 0 Then
-                Dim e = lst(j)
-                e.Mail.Subject = mail.Subject : e.Mail.Size = mail.Size : e.Mail.RcvTime = mail.RcvTime : e.Mail.SenderName = mail.SenderName
-                If readAttachCount Then e.Mail.AttachCount = mail.AttachCount
-                lst(j) = e
-            End If
-        End If
-
-        ' ③ 附件檔名快取：只在逐封(readAttachCount=True)時失效該筆，避免日後拿到過時檔名 (不主動重讀)
-        If readAttachCount Then
-            Dim dummy As List(Of String) = Nothing
-            _cacheAttachFilename.TryRemove(mail.EntryID, dummy)
-        End If
-    End Sub
     Private Function GetNewSortOrder(clickedColumn As Integer, lastColumn As Integer, currentOrder As SortOrder) As SortOrder
         ''' <summary>
         ''' 共用排序方向切換邏輯
@@ -1200,18 +1186,157 @@ Partial Class Form1
             Case 1 : Return If(order = SortOrder.Ascending, sourceList.OrderBy(Function(x) x.Size).ToList(), sourceList.OrderByDescending(Function(x) x.Size).ToList())                 ' 大小
             Case 2 : Return If(order = SortOrder.Ascending, sourceList.OrderBy(Function(x) x.RcvTime).ToList(), sourceList.OrderByDescending(Function(x) x.RcvTime).ToList()) ' 收到日期
             Case 3 : Return If(order = SortOrder.Ascending, sourceList.OrderBy(Function(x) x.SenderName).ToList(), sourceList.OrderByDescending(Function(x) x.SenderName).ToList())     ' 寄件者
-            Case 4 : Return If(order = SortOrder.Ascending, sourceList.OrderBy(Function(x)  ' 附件數 (Tab3 專用，依賴全域 _cacheAttachFilename)
+            Case 4 : Return If(order = SortOrder.Ascending, sourceList.OrderBy(Function(x)  ' 附件數 (Tab3 專用，依賴全域 _cacheAttFilename)
                                                                                    Dim files As List(Of String) = Nothing
-                                                                                   Return If(_cacheAttachFilename.TryGetValue(x.EntryID, files), files.Count, 0)
+                                                                                   Return If(_cacheAttFilename.TryGetValue(x.EntryID, files), files.Count, 0)
                                                                                End Function).ToList(),
                                                             sourceList.OrderByDescending(Function(x)
                                                                                              Dim files As List(Of String) = Nothing
-                                                                                             Return If(_cacheAttachFilename.TryGetValue(x.EntryID, files), files.Count, 0)
+                                                                                             Return If(_cacheAttFilename.TryGetValue(x.EntryID, files), files.Count, 0)
                                                                                          End Function).ToList())
             Case Else
                 Return sourceList
         End Select
     End Function
+    Private Sub UpdateMailCaches(mail As MailItemInfo, flushAttFilenameCache As Boolean)
+        ' 2026/06/14 by Simon/Claude Opus 4.8: 只 patch「現有 in-memory cache 中已含此 EntryID」的項目；絕不新建 key、不觸發掃描/lazy load
+        '   內層 List 是參考型別，原地改元素即可，dict 與 snapshot 不動
+        ' 2026/07/03 by Simon/Claude Fable 5: 原地 patch 不會經過 _cacheMailInfo(fPath)=... / _cacheAttMailList(fPath)=... 這種
+        '   「整格重新賦值」的 dirty 追蹤標記點，SaveCache 的 dirty 過濾會因此漏掉這裡的異動。必須在此手動補標記，
+        '   否則 F5 逐封刷新改到的 Subject/Size/SenderName 等欄位永遠不會被寫回 SQLite。
+        ' 2026/07/04 by Simon/Claude: 移除 AttCount 回填(探針證實 Tab3 篩選路徑不讀這個欄位，逐封枚舉是死碼)。
+        '   flushAttFilenameCache 改為獨立參數，只負責③附件檔名快取失效，跟 AttCount 讀取脫鉤。
+        MarkMailFolderDirty(mail.FolderPath)
+
+        ' ① Tab3 附件清單快取
+        Dim t3 As FolderCacheTab3 = Nothing
+        If _cacheAttMailList.TryGetValue(mail.FolderPath, t3) AndAlso t3.AttMailList IsNot Nothing Then
+            Dim lst = t3.AttMailList
+            Dim j As Integer = lst.FindIndex(Function(x) x.EntryID = mail.EntryID)
+            If j >= 0 Then
+                Dim c = lst(j)
+                c.Subject = mail.Subject : c.Size = mail.Size : c.RcvTime = mail.RcvTime : c.SenderName = mail.SenderName
+                lst(j) = c
+            End If
+        End If
+
+        ' ② Tab4 基本資訊快取 (Mails 是 List(Of (Mail, Topic)))
+        Dim t4 As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long) = Nothing
+        If _cacheMailInfo.TryGetValue(mail.FolderPath, t4) AndAlso t4.Mails IsNot Nothing Then
+            Dim lst = t4.Mails
+            Dim j As Integer = lst.FindIndex(Function(x) x.Mail.EntryID = mail.EntryID)
+            If j >= 0 Then
+                Dim e = lst(j)
+                e.Mail.Subject = mail.Subject : e.Mail.Size = mail.Size : e.Mail.RcvTime = mail.RcvTime : e.Mail.SenderName = mail.SenderName
+                lst(j) = e
+            End If
+        End If
+
+        ' ③ 附件檔名快取：只在右鍵單筆刷新(flushAttFilenameCache=True)時失效該筆，避免日後拿到過期檔名 (不主動重讀)
+        If flushAttFilenameCache Then
+            Dim dummy As List(Of String) = Nothing
+            _cacheAttFilename.TryRemove(mail.EntryID, dummy)
+        End If
+    End Sub
+    Private Sub InvalidateFolderTreeCache(fPath As String)
+        ' ---------------------------------------------------------------
+        ' InvalidateFolderTreeCache — 宣告指定路徑的記憶體快取失效 (Layer 2.5)
+        ' 目的: 隱藏快取鍵值的命名細節 (如 "|True", "|False")，避免 UI 層過度耦合
+        ' 2026/5/31 by Simon/Gemini 3.1 Pro
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then Return
+
+        Dim isInSub = Function(k As String) k = fPath OrElse k.StartsWith(fPath & "\") OrElse k.StartsWith(fPath & "|")
+        Dim dummyFolderList As List(Of Folder) = Nothing
+        Dim dL As Long
+
+        ' 1. 清除該資料夾與其所有子資料夾的快取
+        For Each key In _cacheFolderTree.Keys.Where(isInSub).ToList() : _cacheFolderTree.TryRemove(key, dummyFolderList) : Next
+        For Each key In _cacheMailCountAll.Keys.Where(isInSub).ToList() : _cacheMailCountAll.TryRemove(key, dL) : Next
+        For Each key In _cacheFolderCountAll.Keys.Where(isInSub).ToList() : _cacheFolderCountAll.TryRemove(key, dL) : Next
+        For Each key In _cacheMailCount.Keys.Where(isInSub).ToList() : _cacheMailCount.TryRemove(key, dL) : Next
+        For Each key In _cacheFolderCount.Keys.Where(isInSub).ToList() : _cacheFolderCount.TryRemove(key, dL) : Next
+
+        ' 【修復關鍵 2】補上身分證字典的清理, 2026/6/1 by Simon/Gemini 3.1 Pro (2026/07/03: _cacheIsMailFolder 已併入 _cacheFolderIDs，移除獨立清理)
+        Dim dummyId As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
+        For Each key In _cacheFolderIDs.Keys.Where(isInSub).ToList() : _cacheFolderIDs.TryRemove(key, dummyId) : Next
+
+        ' 2. 清除祖先節點的快取 (因為子節點異動，祖先的「包含子目錄」加總也會跟著變)
+        For Each ancestor In GetAncestors(fPath)
+            For Each sfx In {"", "|True", "|False"}
+                _cacheMailCountAll.TryRemove(ancestor & sfx, dL)
+                _cacheFolderCountAll.TryRemove(ancestor & sfx, dL)
+                _cacheFolderSizeAll.TryRemove(ancestor & sfx, dL)
+            Next
+        Next
+
+        _dbg("快取清除", $"已清除 {fPath} 相關之記憶體快取")
+    End Sub
+    Private Sub InvalidateMailCache(fPath As String)
+        ' ---------------------------------------------------------------
+        ' InvalidateMailCache — 刪除郵件後，主動清除指定 fPath 的記憶體快取
+        ' 只清 _cacheMailInfo 和 _cacheMailCount 兩個 key，不影響其他資料夾
+        ' 配合 DbDeleteMailInfoByPath 一起呼叫，確保記憶體與 DB 兩層同步失效
+        ' 2026/05/11 by Claude Sonnet 4.6
+        ' 2026/05/12 by Simon/Claude: 擴充清除範圍至所有受影響的快取
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then Return
+
+        ' ── 層次一：該資料夾本身 ──────────────────────────────────────
+        Dim dummy1 As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long) = Nothing
+        _cacheMailInfo.TryRemove(fPath, dummy1)
+
+        Dim dummy2 As Long
+        _cacheMailCount.TryRemove(fPath, dummy2)
+        _cacheMailCountAll.TryRemove(fPath, dummy2)
+        _cacheMailCountAll.TryRemove(fPath & "|True", dummy2)
+        _cacheMailCountAll.TryRemove(fPath & "|False", dummy2)
+
+        _cacheFolderSize.TryRemove(fPath, dummy2)
+        _cacheFolderSizeAll.TryRemove(fPath, dummy2)
+        _cacheFolderCommitMax.TryRemove(fPath, dummy2)   ' 2026/07/06 by Simon/Claude Fable 5: commit 基準一併失效，否則 SaveCache 的 COALESCE 會拿記憶體舊值把 PoisonFolderSnapDb 清掉的 commit_max 寫回
+
+        _cacheYearCounts.TryRemove(fPath, Nothing)
+
+        ' month_counts key 格式為 "fPath_YYYY"，不知道是哪年，清所有匹配的
+        For Each mk In _cacheMonthCounts.Keys.Where(Function(k) k.StartsWith(fPath & "_")).ToList()
+            _cacheMonthCounts.TryRemove(mk, Nothing)
+        Next
+
+        _cacheAttMailList.TryRemove(fPath, Nothing)
+
+        ' ── 層次二：所有祖先路徑的聚合快取 ──────────────────────────
+        For Each ancestor In GetAncestors(fPath)
+            _cacheMailCountAll.TryRemove(ancestor, dummy2)
+            _cacheMailCountAll.TryRemove(ancestor & "|True", dummy2)
+            _cacheMailCountAll.TryRemove(ancestor & "|False", dummy2)
+            _cacheFolderSizeAll.TryRemove(ancestor, dummy2)
+        Next
+
+        _dbg("結束", ExtractFolderName(fPath))
+    End Sub
+    Private Sub SelfHealDeadEntryId(fPath As String)
+        ' ---------------------------------------------------------------
+        ' SelfHealDeadEntryId — 快取 entry_id 對 GetItemFromID/RDO GetMessageFromID 解析失敗 (NotFound) 時呼叫
+        ' 清記憶體 (InvalidateMailCache) + 毒化 DB snapshot (PoisonFolderSnapDb)，
+        ' 逼下次 RenewCache 對此資料夾強制全量重讀 + surgical entry_id 清理，不必等數量/commit_max 剛好變動才觸發。
+        ' 涵蓋 RenewCacheToDB 雙訊號 (count+commit_max) 都巧合沒變的邊界案例，典型成因：純 PST 壓縮換 entry_id。
+        ' 不在此同步重讀 —— 呼叫端多半在逐封/批次迴圈中途，同步重掃整夾太貴；統計欄位交給下次 RenewCache 狀況A。
+        ' 2026/07/04 by Simon/Claude Fable 5
+        ' 2026/07/06 by Simon/Claude Fable 5: 光「清記憶體+毒化」擋不住 DB-lazy 立即復活死列 —— GetMailInfo ② 的
+        '   比對是 mail_info.pr_count_snap vs GetMailCount(免-folder)=folder_info.mail_count，兩邊同一次 SaveCache
+        '   寫入、同源必相等(壓縮不改 count)；且毒化寫的是 pr_count_snap 欄、免-folder ② 讀的是 mail_count 欄，
+        '   整條 lazy 路徑根本讀不到毒。所以直接把整夾可疑 DB 列清掉：先撈 entryID 做兩張昂貴表 surgical
+        '   (mail_info 一刪就再也查不到 folder→entryID 對應，順序不能反)，再 nuke 便宜表；
+        '   下次 lazy 讀取 DB miss → RDO ms 級重建全新列，死 ID 立即絕跡，不必苦等 RenewCache。
+        '   成本與 RenewCache 狀況A 的 surgical 步驟同級，且 healedPaths 保證每夾每趟只跑一次。
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(fPath) Then Return
+        InvalidateMailCache(fPath)
+        PoisonFolderSnapDb(fPath)
+        SimDbDeleteMailRowsByEntryIds(DbGetFolderEntryIds(fPath), includeAttFilenames:=True)
+        DbPurgeFolderMailRows(fPath)
+    End Sub
 #End Region
 #End Region
 
@@ -1224,7 +1349,7 @@ Partial Class Form1
     Private Async Sub LoadCache_Click(sender As Object, e As EventArgs) Handles LoadCache.Click
         Await LoadCachesFromDB()
         Dim st = GetDBSummary()
-        PgrsBar2.Text = $"DB 統計 — folder_stats:{st.fc} 筆 / attach_maillist:{st.mb} 筆 / attach_filenames:{st.at} 筆 / year_counts:{st.yc} 筆 / month_counts:{st.mc} 筆 / {st.kb} KB"
+        PgrsBar2.Text = $"DB 統計 — folder_info:{st.fc} 筆 / att_maillist:{st.mb} 筆 / att_filenames:{st.at} 筆 / year_counts:{st.yc} 筆 / month_counts:{st.mc} 筆 / {st.kb} KB"
 
     End Sub
     Private Async Sub ClearCache_Click(sender As Object, e As EventArgs) Handles ClearCache.Click
@@ -1361,8 +1486,8 @@ Partial Class Form1
             AddLv6StatLine("_cacheFolderCountAll", _cacheFolderCountAll.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheYearCounts", _cacheYearCounts.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheMonthCounts", _cacheMonthCounts.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheAttachMailList", _cacheAttachMailList.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheAttachFilename", _cacheAttachFilename.Count.ToString("N0") & " 筆")
+            AddLv6StatLine("_cacheAttMailList", _cacheAttMailList.Count.ToString("N0") & " 筆")
+            AddLv6StatLine("_cacheAttFilename", _cacheAttFilename.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheFolderSize", _cacheFolderSize.Count.ToString("N0") & " 筆")
             AddLv6StatLine("_cacheFolderSizeAll", _cacheFolderSizeAll.Count.ToString("N0") & " 筆")
             AddLv6StatLine("", "", isHeader:=False) ' 間隔
@@ -1377,14 +1502,14 @@ Partial Class Form1
             ' 2026/06/21 by Simon/Claude: DB 檔案大小改雙檔並列；下方依 db 分組(順序不變，OLAcacheMail.db 的兩張表移到區塊末)
             AddLv6StatLine("DB 檔案大小", $"{ (st.kb / 1024.0).ToString(If(st.kb < 10240, "F1", "F0")) } + { (st.kbMail / 1024.0).ToString(If(st.kbMail < 10240, "F1", "F0")) } MB")
             AddLv6StatLine("──── OLAcache.db ────", "", True)
-            AddLv6StatLine("folder_stats", st.fc.ToString("N0") & " 筆")
+            AddLv6StatLine("folder_info", st.fc.ToString("N0") & " 筆")
             AddLv6StatLine("senders", st.senders.ToString("N0") & " 筆")         ' 2026/06/14 by Simon/Claude Opus 4.8: 補上 senders，與 DbShowDbFileStat 順序一致
-            AddLv6StatLine("mailinfo_list", st.basic.ToString("N0") & " 筆")    ' by Gemini 3 Flash, 2026/04/22
+            AddLv6StatLine("mail_info", st.basic.ToString("N0") & " 筆")    ' by Gemini 3 Flash, 2026/04/22
             AddLv6StatLine("year_counts", st.yc.ToString("N0") & " 筆")
             AddLv6StatLine("month_counts", st.mc.ToString("N0") & " 筆")
-            AddLv6StatLine("attach_maillist", st.mb.ToString("N0") & " 筆")
-            AddLv6StatLine("──── OLAcacheMail.db ────", "", True)   ' 2026/06/21 by Simon/Claude: attach_filenames/mail_simhash 住此檔
-            AddLv6StatLine("attach_filenames", st.at.ToString("N0") & " 筆")
+            AddLv6StatLine("att_maillist", st.mb.ToString("N0") & " 筆")
+            AddLv6StatLine("──── OLAcacheMail.db ────", "", True)   ' 2026/06/21 by Simon/Claude: att_filenames/mail_simhash 住此檔
+            AddLv6StatLine("att_filenames", st.at.ToString("N0") & " 筆")
             AddLv6StatLine("mail_simhash", st.sh.ToString("N0") & " 筆")   ' 2026/06/21 by Simon/Claude: 新增
             AddLv6StatLine("最後更新日期", datePart)
             AddLv6StatLine("最後更新時間", timePart)
@@ -1422,14 +1547,14 @@ Partial Class Form1
             Dim targetTableName As String = ""
             If selectedLabel = "DB 檔案大小" Then               ' 2026/06/13 by Simon/Claude Opus 4.8: 新增對 DB 檔案大小 的特殊識別，觸發專門的空間分布分析
                 Dim unused = DbShowDbFileStat()                 ' 明確的 fire-and-forget，編譯器知道你是故意的
-            ElseIf selectedLabel.Contains("folder_stats") Then  ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
-                targetTableName = "folder_stats"
-            ElseIf selectedLabel.Contains("mailinfo_list") Then
-                targetTableName = "mailinfo_list"
-            ElseIf selectedLabel.Contains("attach_maillist") Then
-                targetTableName = "attach_maillist"
-            ElseIf selectedLabel.Contains("attach_filenames") Then
-                targetTableName = "attach_filenames"
+            ElseIf selectedLabel.Contains("folder_info") Then  ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
+                targetTableName = "folder_info"
+            ElseIf selectedLabel.Contains("mail_info") Then
+                targetTableName = "mail_info"
+            ElseIf selectedLabel.Contains("att_maillist") Then
+                targetTableName = "att_maillist"
+            ElseIf selectedLabel.Contains("att_filenames") Then
+                targetTableName = "att_filenames"
             ElseIf selectedLabel.Contains("year_counts") Then   ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
                 targetTableName = "year_counts"
             ElseIf selectedLabel.Contains("month_counts") Then  ' 2026/06/12 by Simon/Claude Opus 4.8: 修正 typo (month_stats → month_counts)
@@ -1514,29 +1639,6 @@ Partial Class Form1
 #Region "  ├ Debug 測試區"
     Private Async Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
 
-        ' 2026/07/03 by Simon/Claude: PROBE_HIERCNT 已驗證通過並上線(GetSubtreeRdoBatch 加 PR_CONTENT_COUNT)，探針區塊整段刪除。
-
-        '' todo: 使用RDO ExecSQL 是否能直接過濾出含有特定附檔名的信件???
-        '' 測試 DASL 是否能在 GetTable 直接濾出含有特定附檔名的信件
-        'Dim folder As Folder = TryCast(SimTree3.SelectedNode.Tag, Folder) : Dim keyword As String = "2025" ' 測試關鍵字
-        'If folder Is Nothing Then MessageBox.Show("請先選擇資料夾") : Return
-        '' 寫法 A: 使用 LIKE (不支援索引的情況)
-        'Dim filterLike As String = $"@SQL=""urn:schemas:httpmail:attachmentfilename"" LIKE '%{keyword}%'"
-        '' 寫法 B: 使用 CI_PHRASEMATCH (依賴 Windows Search 索引，速度極快)
-        'Dim filterCI As String = $"@SQL=""urn:schemas:httpmail:attachmentfilename"" CI_PHRASEMATCH '{keyword}'"
-        '' 這裡您可切換 filterLike 或 filterCI 測試
-        'Dim table As Outlook.Table = Nothing
-        'Try
-        '    table = folder.GetTable(filterLike)
-        '    MessageBox.Show($"測試成功！GetTable 直接過濾出 {table.GetRowCount()} 筆包含 {keyword} 的郵件。")
-        '    ' 印出前幾筆的主旨驗證
-        '    table.Columns.RemoveAll() : table.Columns.Add("Subject") : Dim count As Integer = 0
-        '    While Not table.EndOfTable AndAlso count < 5
-        '        Dim row As Outlook.Row = table.GetNextRow() : _dbg($"郵件: {row("Subject")}") : count += 1
-        '    End While
-        'Catch ex As System.Exception : MessageBox.Show($"DASL 過濾失敗: {ex.Message}")
-        'Finally : If table IsNot Nothing Then Marshal.ReleaseComObject(table)
-        'End Try
 
 
     End Sub

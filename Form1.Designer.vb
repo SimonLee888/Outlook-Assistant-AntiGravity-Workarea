@@ -67,7 +67,7 @@ Partial Class Form1
         ColumnHeader36 = New ColumnHeader()
         GroupBox1 = New GroupBox()
         TextBox3 = New TextBox()
-        CheckAttachName = New CheckBox()
+        CheckAttName = New CheckBox()
         GroupBox2 = New GroupBox()
         UnitMax = New ComboBox()
         UnitMin = New ComboBox()
@@ -565,7 +565,7 @@ Partial Class Form1
         ' GroupBox1
         ' 
         GroupBox1.Controls.Add(TextBox3)
-        GroupBox1.Controls.Add(CheckAttachName)
+        GroupBox1.Controls.Add(CheckAttName)
         GroupBox1.FlatStyle = FlatStyle.Flat
         GroupBox1.Font = New Font("Microsoft JhengHei UI", 9.5F)
         GroupBox1.Location = New Point(4, 4)
@@ -587,18 +587,18 @@ Partial Class Form1
         TextBox3.TabIndex = 13
         TextBox3.Text = "pdf"
         ' 
-        ' CheckAttachName
+        ' CheckAttName
         ' 
-        CheckAttachName.AutoSize = True
-        CheckAttachName.FlatStyle = FlatStyle.System
-        CheckAttachName.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        CheckAttachName.Location = New Point(8, 28)
-        CheckAttachName.Margin = New Padding(4)
-        CheckAttachName.Name = "CheckAttachName"
-        CheckAttachName.Size = New Size(150, 25)
-        CheckAttachName.TabIndex = 12
-        CheckAttachName.Text = "附件名稱 (最慢)"
-        CheckAttachName.UseVisualStyleBackColor = True
+        CheckAttName.AutoSize = True
+        CheckAttName.FlatStyle = FlatStyle.System
+        CheckAttName.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        CheckAttName.Location = New Point(8, 28)
+        CheckAttName.Margin = New Padding(4)
+        CheckAttName.Name = "CheckAttachName"
+        CheckAttName.Size = New Size(150, 25)
+        CheckAttName.TabIndex = 12
+        CheckAttName.Text = "附件名稱 (最慢)"
+        CheckAttName.UseVisualStyleBackColor = True
         ' 
         ' GroupBox2
         ' 
@@ -1373,7 +1373,7 @@ Partial Class Form1
     Friend WithEvents CountMax As NumericUpDown
     Friend WithEvents CountMin As NumericUpDown
     Friend WithEvents CheckAttCount As CheckBox
-    Friend WithEvents CheckAttachName As CheckBox
+    Friend WithEvents CheckAttName As CheckBox
     Friend WithEvents CheckSubFolder3 As CheckBox
     Friend WithEvents Label3 As Label
     Friend WithEvents TextBox3 As TextBox

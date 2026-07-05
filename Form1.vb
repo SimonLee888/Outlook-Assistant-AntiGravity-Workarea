@@ -330,8 +330,14 @@ Partial Class Form1
         _isClosing = True
         timerSaveCache.Enabled = False
 
-        PgrsBar1.Text = "正在儲存快取，準備關閉程式..."
-        Await SaveCachesToDB()
+        ' 2026/07/06 by Simon/Claude: 有 timerSaveCache 每 60 秒自動存檔後，關閉時通常已無 dirty 資料夾，
+        '   跳過整段 SaveCachesToDB()(folder_info 全量重寫 + 孤兒掃描固定成本 1~2 秒)。
+        '   代價：folder_info 的 size/count 若剛好在最後不到 60 秒內變動且未觸發 dirty，會漏存；
+        '   下次啟動時該資料夾照常會被當作需重掃，成本遠低於每次關閉多等 1~2 秒，可接受。
+        If Not _dirtyMailFolders.IsEmpty Then
+            PgrsBar1.Text = "正在儲存快取，準備關閉程式..."
+            Await SaveCachesToDB()
+        End If
         ClearMemoryCachesCore() ' by Gemini, 2026/04/10: 關閉前顯式呼叫記憶體清理，確保資源釋放
         Me.Close()                  ' 觸發第二次進入此函式，執行上方釋放資源的區塊
 
@@ -621,9 +627,9 @@ Partial Class Form1
                                              ev.SuppressKeyPress = True
                                          End If
                                      End Sub
-        AddHandler CheckAttachName.CheckedChanged, Sub()
-                                                       TextBox3.Enabled = CheckAttachName.Checked
-                                                       If CheckAttachName.Checked Then
+        AddHandler CheckAttName.CheckedChanged, Sub()
+                                                       TextBox3.Enabled = CheckAttName.Checked
+                                                       If CheckAttName.Checked Then
                                                            TextBox3.Focus() : TextBox3.SelectAll()
                                                        End If
                                                    End Sub
@@ -1747,7 +1753,7 @@ Partial Class Form1
         '
         ' 2026/05/13 by Claude Sonnet 4.6
         ' 2026/05/17 by Simon/Claude: ⑤ 改回 FireAfterSelect，解決 ListView 未更新的問題
-        '   原本直接呼叫 ComputeTab1FolderStats + RenderLv1 的方式繞過了 SimTree 標準流程，
+        '   原本直接呼叫 CollectTab1FolderInfo + RenderLv1 的方式繞過了 SimTree 標準流程，
         '   導致 AfterSelect 沒有被觸發，ListView 顯示內容不對應選取的資料夾。
         ' ─────────────────────────────────────────────────────────────────────
         ' 2026/05/25 by Simon/Claude: 再度重構使用呼叫simTree內部方法
@@ -1877,9 +1883,12 @@ Partial Class Form1
         If lv.Columns.Count = 0 OrElse lv.Width <= 0 Then Return
 
         ' 2026/05/09 by Gemini 3 Flash: 終極防線 — 若寬度未變，絕不執行昂貴的 UI 重算與 _dbg 輸出
+        ' 2026/07/04 by Simon/Claude: 防線改比對 ClientSize.Width (而非 Width) ——
+        '   捲軸出現/消失時 lv.Width (外框) 不變但 ClientSize.Width (扣掉捲軸) 會變，
+        '   下方實際計算也是用 ClientSize.Width，防線比對基準必須一致，否則捲軸切換時會被誤判「寬度未變」而跳過重算。
         Static lastProcessedWidths As New Dictionary(Of String, Integer)
         Dim value As Integer = Nothing
-        If lastProcessedWidths.TryGetValue(lv.Name, value) AndAlso value = lv.Width Then Return
+        If lastProcessedWidths.TryGetValue(lv.Name, value) AndAlso value = lv.ClientSize.Width Then Return
 
         _dbg("開始", lv.Name)
         _isResizingLv = True    ' ✅ 2026/05/09 by Gemini 3 Flash: 開啟旗標，暫停 DrawSubItem 繪製
@@ -1967,7 +1976,8 @@ Partial Class Form1
             Next
 
             ' ✅ by Gemini 3.1 Pro, 2026/05/27: 將防線記錄移至賦值成功後，避免 ClientSize=0 時鎖死防線
-            lastProcessedWidths(lv.Name) = lv.Width
+            ' 2026/07/04 by Simon/Claude: 記錄基準改為 ClientSize.Width，與上方防線比對基準一致
+            lastProcessedWidths(lv.Name) = lv.ClientSize.Width
 
             lv.Invalidate()         ' 強制刷新
         Finally
@@ -2177,8 +2187,8 @@ Partial Class Form1
 
         _cacheYearCounts.Clear()
         _cacheMonthCounts.Clear()
-        _cacheAttachMailList.Clear()
-        _cacheAttachFilename.Clear()
+        _cacheAttMailList.Clear()
+        _cacheAttFilename.Clear()
 
         _cacheFolderTree.Clear()
         _cacheSubTreeList.Clear()

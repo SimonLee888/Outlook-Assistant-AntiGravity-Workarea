@@ -176,7 +176,14 @@ Partial Class Form1
             Dim allItems As List(Of ListViewItem) = Await CollectTab1FolderInfo(deDupedNodes, cToken)
 
             If _tab1SelectSeq <> mySeq Then Return  ' 序號機制配對：在 Await 回來後，若使用者已點擊其他節點，則放棄渲染
-            RenderLv1(allItems)            ' ── 執行渲染 (UI 呈現) ──
+            RenderLv1(allItems)                     ' ── 執行渲染 (UI 呈現) ──
+
+            ' 2026/07/06 by Simon/Claude: 這是啟動後第一次完整顯示 Tab1 (資料夾樹 + ListView1 統計數字都已呈現)，
+            '   在此停下從 Form1_Load 開始跑的啟動計時，取代舊版「Me.Show() 後就停錶」的過早計時。
+            If _startupStopwatch IsNot Nothing AndAlso _startupStopwatch.IsRunning Then
+                _startupStopwatch.Stop()
+                _startupElapsedMsg = "啟動花費 " & _startupStopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+            End If
 
             ' 2026/07/03 by Simon/Claude: 與 EnterSelectedFolder 統一行為 — 單選時自動算子資料夾大小。
             '   GetSubtree 骨架整合後 ComputeFolderSize 明顯變快，單層子資料夾即使亂點也能承受；

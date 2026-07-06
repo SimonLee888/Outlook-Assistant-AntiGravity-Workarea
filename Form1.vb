@@ -86,6 +86,11 @@ Partial Class Form1
     ' Private _cancelRequested As Boolean = False        ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
     ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
     Private _cts As CancellationTokenSource             ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
+    ' 2026/07/06 by Simon/Claude: 「啟動花費」計時改為量到 Tab1 完整顯示(SimTree1_AfterSelect 首次 RenderLv1 完成)為止，
+    '   不再只量到 Me.Show() 視窗容器出現那一刻。_startupElapsedMsg 由 SimTree1_AfterSelect 寫入，Form1_Shown 收尾時讀取顯示。
+    Private _startupStopwatch As Stopwatch = Nothing
+    Private _startupElapsedMsg As String = ""
+    Private _inSizeMove As Boolean = False              ' 2026/06/19 by Simon/Claude: 是否處於拖曳 size/move modal loop；供 Form1_Resize 區分「拖曳縮放」與「瞬間頂天/最大化」
 
     ' ── 全域勾選狀態變數 (by Gemini, 2026/04/10: 優化效能，避免頻繁讀取 UI) ──
     '2026/3/10重構時停止使用全域變數來記錄遞迴過程中的資料, 改用傳遞參數以避免多線程或重入呼叫時資料被改寫的問題
@@ -99,8 +104,6 @@ Partial Class Form1
     Private _lastHoveredPointIndex As Integer = -1      ' 記住上一個 hover 的點，-1 表示沒有
     'Private _lastHoveredTreeNode As TreeNode = Nothing ' 2026/5/14 by simon/Gemini: 將mouse hover作成內建功能
     Private _lastHoveredLvItem As ListViewItem = Nothing
-
-    Private _inSizeMove As Boolean = False              ' 2026/06/19 by Simon/Claude: 是否處於拖曳 size/move modal loop；供 Form1_Resize 區分「拖曳縮放」與「瞬間頂天/最大化」
     Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
     Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
     Private _lvResizePending As ListView = Nothing
@@ -150,7 +153,7 @@ Partial Class Form1
         '   期間背景執行緒 log 全數消失)。從 UI 執行緒先建立預設實例並登記，訊息就會累積在真實例的佇列，待顯示時流出。
         If _isDebugMode Then DebugForm.ActiveInstance = DebugForm
         _dbg("開始") ' debugForm 開始計時
-        Dim stopwatch As Stopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
+        _startupStopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
 
         InitLookAndFeel()       ' 設計程式外觀
         InitPgrsBarEvents()      ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
@@ -163,8 +166,8 @@ Partial Class Form1
         Me.BringToFront()       ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
         Me.Show()
 
-        stopwatch.Stop() : Cursor = Cursors.Default ' 啟動完成, 停止計時, 顯示總共花費的時間
-        PgrsBar1.Text = "啟動花費 " & stopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
+        Cursor = Cursors.Default ' 視窗容器已顯示，但 Tab1 資料尚未載入完成，計時繼續跑，交給 SimTree1_AfterSelect 首次完成時停錶
+        PgrsBar1.Text = "正在載入..." ' 蓋掉 Designer 預設的 "ProgressBar1"，實際啟動秒數待 Tab1 完整顯示後才寫入
         PgrsBar2.Text = ""
         _dbg("結束")
 
@@ -294,9 +297,14 @@ Partial Class Form1
         End If
         _dbg("結束", "全部 Tab 背景載入完畢") ' by Gemini, 2026/04/11: UI 頂層 Level 0
 
-        ' added by Gemini 3.1 Pro, 2026/04/12: 在所有的背景預載跟 Tab 初始化完成後，把一開始被蓋掉的啟動時間訊息重新顯示到 ProgressBar 上
-        Dim firstMsgItem = _statusHistory.FirstOrDefault(Function(x) x.Source = "PB1")
-        If Not String.IsNullOrEmpty(firstMsgItem.Message) Then PgrsBar1.Text = firstMsgItem.Message
+        ' 2026/07/06 by Simon/Claude: 在所有的背景預載跟 Tab 初始化完成後，把啟動計時訊息顯示到 ProgressBar 上
+        '   正常情況下 _startupElapsedMsg 已在 SimTree1_AfterSelect 首次 RenderLv1 完成時寫入；
+        '   萬一 Tab1 找不到預設收件匣 (GotoDefaultInbox 提前 Return) 導致從未觸發，這裡當作備援，就地停錶顯示。
+        If _startupStopwatch IsNot Nothing AndAlso _startupStopwatch.IsRunning Then
+            _startupStopwatch.Stop()
+            _startupElapsedMsg = "啟動花費 " & _startupStopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。(備援計時，Tab1 未觸發預設選取)"
+        End If
+        If Not String.IsNullOrEmpty(_startupElapsedMsg) Then PgrsBar1.Text = _startupElapsedMsg
 
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing

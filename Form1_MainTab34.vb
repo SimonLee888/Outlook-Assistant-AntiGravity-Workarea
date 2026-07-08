@@ -27,9 +27,9 @@ Partial Class Form1
     Private _tv4PrevSelection As New List(Of Folder)(32)        ' ✅ 2026/04/21 by Gemini 3.0 flash: 記憶最後一次搜尋的多個資料夾  ' 預分配容量為 32，足以涵蓋多數搜尋路徑結構，減少陣列頻繁 Resize 開銷 (by Gemini 3 Flash, 2026/05/04)
     Private _tv4SelectedTopicMailList As List(Of MailItemInfo) = Nothing    ' 2026/5/29 by Simon/Claude: 將SimTree4的雙重模式拆分，取代 SimTree4.SelectedNode.Tag 作為跨函數的資料橋樑, 供 F6 快速切換使用
     ' 2026/5/31 by Gemini/Simon: 徹底大掃除：清除所有 F6 與 Group 的殘留
-    'Private _tv4GroupSortByCount As Boolean = True              ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記錄排序方式 (True=數量, False=主旨)
-    'Private _lv4GroupSortByCount As Boolean = False             ' by Gemini 3 Flash, 2026/04/20: 記錄 Tab4 Listview4 分組排序模式 (False:按主旨, True:按數量)
-    'Private _tv4PrevTopicResults As Dictionary(Of String, List(Of MailItemInfo)) = Nothing  ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記憶搜尋結果，供 F6 操作使用
+    'Private _tv4GroupSortByCount As Boolean = True             ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記錄排序方式 (True=數量, False=主旨)
+    'Private _lv4GroupSortByCount As Boolean = False            ' by Gemini 3 Flash, 2026/04/20: 記錄 Tab4 Listview4 分組排序模式 (False:按主旨, True:按數量)
+    'Private _tv4PrevTopicResults As Dictionary(Of String, List(Of MailItemInfo)) = Nothing     ' ✅ 2026/04/20 by Gemini 2.0 Flash: 記憶搜尋結果，供 F6 操作使用
     Private _lv4TopicList As New List(Of KeyValuePair(Of String, List(Of MailItemInfo)))(4096)  ' 2026/5/30 by Gemini, Lv4Topic 虛擬模式的資料來源
 #End Region
 
@@ -45,7 +45,7 @@ Partial Class Form1
     '      策略: 導入「管線化處理 (Pipeline)」與「SOLID 分層 (Layer1/Layer2.5/Layer3)」，徹底解耦 MAPI、業務與 UI。
     '      分層:
     '        ├─ Layer1   (UI/流程層) : Bt3_Click, ShowLv3Result
-    '        ├─ Layer2   (商務過濾層): FilterBySize, FilterByAttDetailsAsync
+    '        ├─ Layer2   (商務過濾層): FilterBySize, FilterByAttDetails
     '        ├─ Layer2.5 (快取層)    : GetAttMailList (_cacheAttMailList / _cacheAttFilename)
     '        └─ Layer3   (MAPI操作層): GetAttMailListOOM
     '
@@ -54,7 +54,7 @@ Partial Class Form1
     '   Step 2. BFS 遍歷      → GetSubtree，取得目標資料夾樹 (COM)
     '   Step 3. 匯集資料全集  → 向 Layer2.5 索取候選郵件全集 (GetAttMailList) → ① 記憶體 → ② DB (mail_basic) → ③ L3
     '   Step 4. 管線過濾 1    → 記憶體 LINQ 瞬間過濾大小限制 (FilterBySize)
-    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 Layer2.5 快取判定 (FilterByAttDetailsAsync)
+    '   Step 5. 管線過濾 2    → 依據關鍵字與數量條件深層過濾，配合 Layer2.5 快取判定 (FilterByAttDetails)
     '                         → PreloadAttCacheRDOAsync (RDO 平行預載) → GetAttFilename → ① 記憶體 → ② DB (att_maillist ) → ③ L3
     '   Step 6. UI 映射與顯示 → 將資料封裝為介面項目並顯示，無縫銜接">0"或真實統計 (ShowLv3Result)
     ' ===========================================================================================
@@ -88,7 +88,8 @@ Partial Class Form1
                 End If
             End If
 
-            ' ── Step 2: 收集目標資料夾清單 (支援多選防重複) ── ' high: 第一耗時, 52000筆資料花360ms
+            ' ── Step 2: 收集目標資料夾清單 (支援多選防重複) ──
+            ' ' 改用GetSubTreeRdo 及 folder-free 多載之後, 快取掃瞄 789 個資料夾耗時從 360ms 降至 36ms
             Dim swStep As Stopwatch = Stopwatch.StartNew() ' by Gemini 3.0 flash, 2026/04/16: 暫時加入分段測速
             Dim progressTree = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             Dim folderList = Await GetUniqueFolderList(selectedNodes, _includeSubTab3, cToken:=cToken, progress:=progressTree) ' 導入 HashSet(Of String) 來過濾跨父子節點重複選擇的資料夾
@@ -149,18 +150,16 @@ Partial Class Form1
             Dim hasKeyword = CheckAttName.Checked AndAlso TextBox3.Text.Trim.Length > 0
             If hasKeyword OrElse CheckAttCount.Checked Then
                 Dim progressPhase2 = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
-                targetMails = Await FilterByAttDetailsAsync(targetMails, progressPhase2, cToken:=cToken)
+                targetMails = Await FilterByAttDetails(targetMails, progressPhase2, cToken:=cToken)
             End If
             Dim tStep5_DetailsFiltering = swStep.Elapsed.TotalMilliseconds : swStep.Stop() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (Details Filtering)
 
             sw.Stop() ' ── 終極 Mapping 與顯示結果 ── ' by Gemini 3.0 flash, 2026/04/16: 將分段耗時拆分為多列顯示於 Debug ListView
-            If _iLikeNoisy Then
-                _dbg("⌛ 效能 (1/4) - GetUniqueFolderList", $"{tStep2_UniqueList:F0}ms")
-                _dbg("⌛ 效能 (2/4) - GetMailCount", $"{tStep2_MailCountLoop:F0}ms")
-                _dbg("⌛ 效能 (3/4) - GetAttMailList", $"{tStep3_AttMailLoop:F0}ms")
-                _dbg("⌛ 效能 (4/4) - FilterByAttDetailsAsync", $"{tStep5_DetailsFiltering:F0}ms")
-                _dbg("⌛ 效能 (總計) - Total", $"{sw.Elapsed.TotalMilliseconds:F0}ms")
-            End If
+            _dbg("⌛ 效能 (1/4) - GetUniqueFolderList", $"{tStep2_UniqueList:F0}ms")
+            _dbg("⌛ 效能 (2/4) - GetMailCount", $"{tStep2_MailCountLoop:F0}ms")
+            _dbg("⌛ 效能 (3/4) - GetAttMailList", $"{tStep3_AttMailLoop:F0}ms")
+            _dbg("⌛ 效能 (4/4) - FilterByAttDetailsAsync", $"{tStep5_DetailsFiltering:F0}ms")
+            _dbg("⌛ 效能 (總計) - Total", $"{sw.Elapsed.TotalMilliseconds:F0}ms")
 
             ShowLv3Result(targetMails, sw.Elapsed.TotalSeconds)
         Catch ex As OperationCanceledException
@@ -171,6 +170,7 @@ Partial Class Form1
             _dbg("       ├ 錯誤", ex.Message) ' by Gemini, 2026/04/11: Level 3
         Finally
             ' ── 無論如何都解鎖 UI ──
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
             SimTree3.Enabled = True : Button3.Enabled = True
             layoutPanel3.Enabled = True : Cursor = Cursors.Default
             _dbg("結束") ' by Gemini, 2026/04/11: 修正對應開始層級 Level 0
@@ -256,7 +256,7 @@ Partial Class Form1
         _dbg(" ├ 結束", $"篩選後剩下 {resultList.Count:N0} 封")
         Return resultList
     End Function
-    Private Async Function FilterByAttDetailsAsync(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of MailItemInfo))
+    Private Async Function FilterByAttDetails(sourceList As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of MailItemInfo))
         ' Pipeline 過濾 2: 逐一讀取附件明細，利用 _cacheAttFilename 大幅降低 COM 存取
         _dbg(" ├ 開始", $"候選郵件: {sourceList.Count} 封")
 
@@ -293,11 +293,11 @@ Partial Class Form1
                 processed = curMail + 1
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
                 Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                          Sub()
-                                              Dim eta = CalculateSpeedAndETA(total, processed, swTotal.Elapsed.TotalSeconds)
-                                              progress?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
+                                    Sub()
+                                        Dim eta = CalculateSpeedAndETA(total, processed, swTotal.Elapsed.TotalSeconds)
+                                        progress?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
                                                                                         .Message = $"Phase 2 (開始逐一開啟郵件讀取附件名稱): {processed} / {total}，已符合 {resultList.Count} 封 ({eta.Speed:F0} 封/秒{eta.EtaString})"})
-                                          End Sub)
+                                    End Sub)
 
                 Dim currentMail As MailItemInfo = sourceList(curMail)
                 Dim cachedAttFilenames As List(Of String) = GetAttFilename(currentMail, skipCache:=False)
@@ -324,40 +324,15 @@ Partial Class Form1
     End Function
     Private Sub ShowLv3Result(sourceList As List(Of MailItemInfo), elapsedSeconds As Double)
         _dbg("開始", sourceList.Count)
+        '' by Gemini 2026/4/10, Listview3改virtual mode, 實體項目建立邏輯已完全移除，改由 RetrieveVirtualItem 事件按需生成
         ' by Gemini, 2026/04/10: 虛擬模式下僅需同步資料與設定 Size，完全不需建立物件
         _lv3MailList = sourceList
         ListView3.VirtualListSize = _lv3MailList.Count
         ' ListView3.Invalidate() ' 2026/05/09 by Gemini 3 Flash: 移除冗餘 Invalidate，設定 VirtualListSize 本身已會觸發重繪，且 Invalidate 可能引發 redundant Resize 事件。
 
-        ' 2026/07/04 by Simon/Claude: 筆數變化會讓捲軸出現/消失 → ClientSize.Width 變but控制項 Width 不變 → 不會觸發 Resize 事件，
-        ' 欄寬需要主動重算一次；CalculateLvColumnSize 內建「ClientSize.Width 未變就直接返回」防線，這裡呼叫不會造成額外負擔 (同 RenderLv1 修法)
+        ' 2026/07/04 by Simon/Claude: 筆數變化會讓捲軸出現/消失 → ClientSize.Width 變but控制項 Width 不變 → 不會觸發 Resize 事件，欄寬需要主動重算一次；
+        ' CalculateLvColumnSize 內建「ClientSize.Width 未變就直接返回」防線，這裡呼叫不會造成額外負擔 (同 RenderLv1 修法)
         CalculateLvColumnSize(ListView3)
-
-        '' by Gemini 2026/4/10, Listview3改virtual mode, 下面的實體項目建立邏輯已完全移除，改由 RetrieveVirtualItem 事件按需生成
-        '' ListView3.Items.Clear()
-        '' ' 先告訴 ListView 總共會有幾筆，讓它一次配置好記憶體，不要每次 Add 都 realloc
-        '' Dim lviCount As Integer = sourceList.Count
-        '' If lviCount > 50 Then SendMessage(ListView3.Handle, LVM_SETITEMCOUNT, New IntPtr(lviCount), IntPtr.Zero)
-        '' If lviCount > 10 Then ListView3.BeginUpdate()
-        '' If lviCount > 0 Then
-        ''     Dim items As New List(Of ListViewItem)(lviCount)
-        ''     For Each m As MailItemInfo In sourceList
-        ''         ' 如果快取區存有這封信真的附件數量，就顯示明確數量。如果沒有，代表完全沒有跑過 Phase 2，就顯示 ">0", 不需真的去讀COM物件確認，避免不必要的性能損耗
-        ''         Dim cachedFiles As List(Of String) = Nothing
-        ''         Dim displayName As String = ">0"
-        ''         If _cacheAttFilename.TryGetValue(m.EntryID, cachedFiles) Then displayName = cachedFiles.Count.ToString()
-        ''         items.Add(New ListViewItem({m.Subject,
-        ''                                     m.Size.ToString("###,###,##0"),
-        ''                                     m.RcvTime.ToShortDateString(),
-        ''                                     m.SenderName,
-        ''                                     displayName,
-        ''                                     m.EntryID}))
-        ''     Next
-        ''     ListView3.Items.AddRange(items.ToArray())
-        '' Else
-        ''     ListView3.Items.Add("找不到符合條件的郵件")
-        '' End If
-        '' ListView3.EndUpdate()
 
         ' lviCount 避免除以零
         Dim lviCount As Integer = sourceList.Count
@@ -368,7 +343,7 @@ Partial Class Form1
         _dbg("結束", $"{lviCount} 封 | {elapsedSeconds:0.00}s")
 
     End Sub
-    Private Sub OpenMailByEntryID(entryIDs As List(Of String))
+    Private Sub OpenMailByEntryID(entryIDs As List(Of String), Optional skipConfirm As Boolean = False)
         ' 2026/3/20, by Claude.ai, 建立獨立執行緒fire-and-forget
         ' 讓作業系統跟outlook.exe 自己去做它們的事, 我們不用等它開啟完畢, 可以直接回到自己的程式介面
 
@@ -377,11 +352,15 @@ Partial Class Form1
 
         ' 2026/04/16 by Gemini 3.1 Pro: 處理多選開啟郵件，超過 10 封需確認 (避免彈出過多視窗)
         ' ✅ 2026/04/21 by Gemini 3.0 flash: 整合多選開啟確認邏輯，避免視窗爆炸
-        If entryIDs.Count > 10 Then
+        ' 2026/07/07 by Simon/Claude: skipConfirm 供 OpenSelectedMailsWithPreviewOffer 用 —— 它自己已經問過(且問法更聰明，會順便提供改用快速預覽的選項)，這裡不用再問一次
+        If Not skipConfirm AndAlso entryIDs.Count > 10 Then
             If MessageBox.Show($"確定要同時開啟 {entryIDs.Count:N0} 封郵件嗎？" & vbCrLf & "(一次開啟過多郵件可能會導致 Outlook 暫時無回應)",
                                "大量開啟確認", MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.No Then Return
         End If
 
+        ' 2026/07/07 by Simon/Claude: 原 todo「用 RDO 自己的 inspector 預覽避開 WordMail」已實測證偽 ——
+        '   RDOMail.Display() 官方文件證實一律呼叫真正的 MAPI form(WordMail Inspector)，20封37.9s 跟這裡的 OOM Display() 同一量級，無捷徑。
+        '   真正的快速預覽路徑是 ShowMailQuickPreview(HTMLBody+WebView2，完全繞開 Display())，詳見 project_rdo_display_no_lightweight_alt 備忘。
         _dbg("開始", $"準備批次開啟 {entryIDs.Count} 封郵件")
         Dim nThread As New Thread(Sub()
                                       Dim nSpace As Outlook.NameSpace = Nothing
@@ -424,6 +403,207 @@ Partial Class Form1
         nThread.IsBackground = True
         nThread.Start()
 
+    End Sub
+    Private Sub OpenSelectedMailsWithPreviewOffer(lv As ListView)
+        ''' <summary>
+        ''' 「開啟選取項目」共用入口 (一般 Enter 鍵、右鍵選單「開啟選取項目」皆呼叫此)。
+        ''' 超過 10 封時改問「要不要改用快速預覽」而非單純的開啟確認；來源若已經是「快速預覽」則不會走到這裡，不受此數量限制。
+        ''' </summary>
+        ' 2026/07/07 by Simon/Claude: 依 Simon 要求，把「開啟」路徑的大量確認改成順便提供快速預覽選項
+        Dim entryIDs = GetSelectedEntryIDs(lv)
+        If entryIDs.Count = 0 Then Return
+
+        If entryIDs.Count > 10 Then
+            Dim choice = MessageBox.Show(
+                $"選取了 {entryIDs.Count:N0} 封郵件，一次全部開啟容易讓 Outlook 暫時無回應。" & vbCrLf & vbCrLf &
+                "「是」= 改用快速預覽　「否」= 仍然全部開啟　「取消」= 不做任何事",
+                "大量開啟確認", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question)
+            Select Case choice
+                Case DialogResult.Yes
+                    ShowMailQuickPreview(GetSelectedMailInfos(lv))
+                    Return
+                Case DialogResult.Cancel
+                    Return
+            End Select
+            ' DialogResult.No → 使用者堅持全部開啟，往下走 (skipConfirm:=True 避免 OpenMailByEntryID 內部再問一次同樣的事)
+        End If
+
+        OpenMailByEntryID(entryIDs, skipConfirm:=True)
+    End Sub
+    Private Async Sub ShowMailQuickPreview(mailInfos As List(Of MailItemInfo))
+        ''' <summary>
+        ''' 快速預覽選取郵件：HTMLBody + WebView2，視覺上仿 Outlook 閱讀窗格(寄件人資訊列 + 回覆/轉寄工具列)，
+        ''' 但完全繞開 Outlook Inspector(WordMail 引擎 + 增益集 NewInspector 掛鉤)，只讀資料自己畫視窗(ms 等級 vs Display() 秒級)
+        ''' </summary>
+        ' 2026/07/07 by Simon/Claude: 從 Tab6 Debug 區的 POC_TestWebViewPreview 提升為正式函數，
+        '   供右鍵選單「快速預覽選取項目」與 Ctrl/Shift+Enter 呼叫；WebView2 是 UI 控制項須留在 UI 執行緒，故整體為 Async Sub fire-and-forget
+        ' 2026/07/07 by Simon/Claude: 移除原本的 >10 封數量確認 —— 快速預覽夠快，不需要這道關卡；
+        '   數量門檻改移到「開啟選取項目」那條路徑(OpenSelectedMailsWithPreviewOffer)，由它決定要不要轉呼叫這裡
+        If mailInfos Is Nothing OrElse mailInfos.Count = 0 Then Return
+
+        Dim sw As Stopwatch = Stopwatch.StartNew()
+        For Each mi In mailInfos
+            Dim details = GetMailPreviewDetails(mi.EntryID, mi.FolderPath)
+            Dim frm As New Form With {
+                .Text = mi.Subject,
+                .Width = 1200,
+                .Height = 900,
+                .StartPosition = FormStartPosition.CenterScreen,
+                .Icon = Me.Icon
+            }
+
+            ' 工具列 (仿 Outlook 閱讀窗格上方的快速動作，回覆/轉寄走真正的 Outlook 撰寫視窗，這是使用者主動撰寫才會觸發的少量操作)
+            Dim toolbar As New Panel With {.Dock = DockStyle.Top, .Height = 36, .BackColor = Color.FromArgb(243, 242, 241)}
+            Dim btnReply As New Button With {.Text = "回覆", .FlatStyle = FlatStyle.Flat, .Width = 70, .Height = 26, .Location = New Point(8, 5)}
+            Dim btnReplyAll As New Button With {.Text = "全部回覆", .FlatStyle = FlatStyle.Flat, .Width = 80, .Height = 26, .Location = New Point(82, 5)}
+            Dim btnForward As New Button With {.Text = "轉寄", .FlatStyle = FlatStyle.Flat, .Width = 70, .Height = 26, .Location = New Point(166, 5)}
+            For Each b In {btnReply, btnReplyAll, btnForward}
+                b.FlatAppearance.BorderColor = Color.FromArgb(200, 200, 200)
+            Next
+            AddHandler btnReply.Click, Sub() ReplyOrForwardMail(mi.EntryID, "Reply")
+            AddHandler btnReplyAll.Click, Sub() ReplyOrForwardMail(mi.EntryID, "ReplyAll")
+            AddHandler btnForward.Click, Sub() ReplyOrForwardMail(mi.EntryID, "Forward")
+            toolbar.Controls.AddRange({btnReply, btnReplyAll, btnForward})
+
+            ' 寄件人資訊列 (仿 Outlook 閱讀窗格頭部：主旨 + 頭像圓圈 + 姓名<信箱> + 收件者 + 日期 + 附件膠囊列)
+            Dim hasAtt = details.Attachments IsNot Nothing AndAlso details.Attachments.Count > 0
+            Dim infoPanel As New Panel With {.Dock = DockStyle.Top, .Height = If(hasAtt, 142, 106), .BackColor = Color.White}
+            Dim lblSubject As New Label With {.Text = If(mi.Subject, ""), .Location = New Point(12, 8), .AutoSize = False, .Height = 26, .AutoEllipsis = True, .Font = New Font("Segoe UI Semibold", 13)}
+            Dim avatar As New Panel With {.Size = New Size(40, 40), .Location = New Point(12, 42)}
+            Dim initials = If(String.IsNullOrEmpty(mi.SenderName), "?", mi.SenderName.Substring(0, 1))
+            Dim avatarColor = PickAvatarColor(mi.SenderName)
+            AddHandler avatar.Paint, Sub(s, e)
+                                         Dim g = e.Graphics
+                                         g.SmoothingMode = Drawing.Drawing2D.SmoothingMode.AntiAlias
+                                         Using brush As New SolidBrush(avatarColor) : g.FillEllipse(brush, 0, 0, 39, 39) : End Using
+                                         Using f As New Font("Segoe UI", 14)
+                                             Dim sz = g.MeasureString(initials, f)
+                                             g.DrawString(initials, f, Brushes.White, (40 - sz.Width) / 2, (40 - sz.Height) / 2)
+                                         End Using
+                                     End Sub
+            Dim senderEmail = If(String.IsNullOrEmpty(details.SenderEmail), mi.SenderEmail, details.SenderEmail)
+            Dim lblName As New Label With {.Text = If(mi.SenderName, ""), .Location = New Point(60, 42), .AutoSize = True, .Font = New Font("Segoe UI Semibold", 10)}
+            Dim lblEmail As New Label With {.Text = If(String.IsNullOrEmpty(senderEmail), "", $"<{senderEmail}>"), .AutoSize = True, .ForeColor = Color.Gray, .Font = New Font("Segoe UI", 9)}
+            Dim lblTo As New Label With {.Text = $"收件者  {If(details.ToRecipients, "")}", .Location = New Point(60, 64), .AutoSize = False, .Height = 32, .AutoEllipsis = True, .ForeColor = Color.Gray, .Font = New Font("Segoe UI", 8.5F)}
+            Dim lblDate As New Label With {.Text = mi.RcvTime.ToString("yyyy/MM/dd (ddd) tt hh:mm"), .AutoSize = True, .ForeColor = Color.Gray, .Font = New Font("Segoe UI", 8.5F)}
+
+            ' 附件膠囊列 (檔名 + 大小，仿原生附件 chip，供判斷該不該刪信)
+            Dim attFlow As FlowLayoutPanel = Nothing
+            If hasAtt Then
+                attFlow = New FlowLayoutPanel With {.Location = New Point(60, 102), .Height = 34, .AutoScroll = False, .WrapContents = False, .BackColor = Color.White}
+                For Each att In details.Attachments
+                    Dim chip As New Label With {
+                        .Text = $"  {att.Name}   {FormatFileSize(att.Size)}  ",
+                        .AutoSize = True,
+                        .Padding = New Padding(4, 6, 4, 6),
+                        .Margin = New Padding(0, 0, 8, 0),
+                        .BackColor = Color.FromArgb(245, 245, 245),
+                        .BorderStyle = BorderStyle.FixedSingle,
+                        .Font = New Font("Segoe UI", 8.5F)
+                    }
+                    attFlow.Controls.Add(chip)
+                Next
+            End If
+
+            AddHandler infoPanel.Resize, Sub()
+                                             lblEmail.Location = New Point(lblName.Right + 4, 44)
+                                             lblDate.Location = New Point(infoPanel.Width - lblDate.Width - 12, 44)
+                                             lblSubject.Width = Math.Max(0, infoPanel.Width - 24)
+                                             lblTo.Width = Math.Max(0, infoPanel.Width - 72)
+                                             If attFlow IsNot Nothing Then attFlow.Width = Math.Max(0, infoPanel.Width - 72)
+                                         End Sub
+            infoPanel.Controls.AddRange({lblSubject, avatar, lblName, lblEmail, lblTo, lblDate})
+            If attFlow IsNot Nothing Then infoPanel.Controls.Add(attFlow)
+
+            Dim web As New Microsoft.Web.WebView2.WinForms.WebView2 With {.Dock = DockStyle.Fill, .BackColor = Color.White, .DefaultBackgroundColor = Color.White}
+
+            frm.Controls.Add(web)
+            frm.Controls.Add(infoPanel)
+            frm.Controls.Add(toolbar)
+            frm.Show() ' 非模態，先開窗，內容非同步初始化完再灌進去
+
+            Try
+                Await web.EnsureCoreWebView2Async()
+                ' 2026/07/07 by Simon/Claude: 防止 WebView2 依作業系統深色模式自動反色(Chromium auto-dark 對假設淺色背景的 HTML 郵件常反出詭異結果)
+                '   PreferredColorScheme 在部分執行階段版本仍不可靠(MicrosoftEdge/WebView2Feedback #5392)，故加上 CSS 強制淺色作雙保險
+                web.CoreWebView2.Profile.PreferredColorScheme = Microsoft.Web.WebView2.Core.CoreWebView2PreferredColorScheme.Light
+                web.CoreWebView2.NavigateToString(ForceLightHtml(details.Html))
+            Catch ex As System.Exception
+                _dbg("錯誤", $"WebView2 初始化失敗 (ID: {mi.EntryID}): {ex.Message}")
+            End Try
+        Next
+        sw.Stop()
+        _dbg("結束", $"快速預覽 | {mailInfos.Count} 封 | {sw.ElapsedMilliseconds} ms")
+    End Sub
+    Private Function ForceLightHtml(html As String) As String
+        ''' <summary>
+        ''' 強制淺色 CSS 注入，防止 WebView2 自動深色模式把 HTML 郵件反色成看不清楚的樣子
+        ''' </summary>
+        Dim injected = "<meta name=""color-scheme"" content=""light""><style>html,body{background:#ffffff !important;color:#000000 !important;}</style>"
+        If String.IsNullOrEmpty(html) Then Return $"<html><head>{injected}</head><body>(無法讀取內文)</body></html>"
+
+        Dim headIdx = html.IndexOf("<head>", StringComparison.OrdinalIgnoreCase)
+        If headIdx >= 0 Then Return html.Insert(headIdx + 6, injected)
+
+        Dim htmlIdx = html.IndexOf("<html", StringComparison.OrdinalIgnoreCase)
+        If htmlIdx >= 0 Then
+            Dim tagEnd = html.IndexOf(">"c, htmlIdx)
+            If tagEnd >= 0 Then Return html.Insert(tagEnd + 1, $"<head>{injected}</head>")
+        End If
+
+        Return $"<html><head>{injected}</head><body>{html}</body></html>"
+    End Function
+    Private Function FormatFileSize(bytes As Long) As String
+        ''' <summary>
+        ''' 附件大小顯示格式：<1MB 顯示 KB，>=1MB 顯示 MB (仿原生 Outlook 附件 chip 的「357 KB」樣式)
+        ''' </summary>
+        If bytes < 1048576L Then Return $"{Math.Max(1L, bytes \ 1024L):N0} KB"
+        Return $"{bytes / 1048576.0:0.#} MB"
+    End Function
+    Private Function PickAvatarColor(senderName As String) As Color
+        ''' <summary>
+        ''' 依寄件人姓名雜湊挑一個固定色，讓不同寄件人的頭像顏色不同(仿 Outlook 聯絡人頭像配色)
+        ''' </summary>
+        Static palette As Color() = {
+            Color.FromArgb(0, 120, 212), Color.FromArgb(16, 124, 16), Color.FromArgb(196, 49, 75),
+            Color.FromArgb(138, 88, 193), Color.FromArgb(202, 80, 16), Color.FromArgb(0, 153, 153)
+        }
+        If String.IsNullOrEmpty(senderName) Then Return palette(0)
+        Dim idx = (senderName.GetHashCode() And &H7FFFFFFF) Mod palette.Length
+        Return palette(idx)
+    End Function
+    Private Sub ReplyOrForwardMail(entryID As String, mode As String)
+        ''' <summary>
+        ''' 快速預覽視窗的回覆/全部回覆/轉寄按鈕：走 OOM 開真正的 Outlook 撰寫視窗
+        ''' (使用者主動要撰寫時才觸發的少量操作，這裡走 Display() 慢一點可接受，不影響「瀏覽多封」的主要快速路徑)
+        ''' </summary>
+        Dim nThread As New Thread(Sub()
+                                      Dim nSpace As Outlook.NameSpace = Nothing
+                                      Dim olItem As Object = Nothing
+                                      Dim resultItem As Object = Nothing
+                                      Try
+                                          nSpace = _olApp.GetNamespace("MAPI")
+                                          olItem = nSpace.GetItemFromID(entryID)
+                                          Dim mail = TryCast(olItem, Outlook.MailItem)
+                                          If mail IsNot Nothing Then
+                                              Select Case mode
+                                                  Case "Reply" : resultItem = mail.Reply()
+                                                  Case "ReplyAll" : resultItem = mail.ReplyAll()
+                                                  Case "Forward" : resultItem = mail.Forward()
+                                              End Select
+                                              If resultItem IsNot Nothing Then Microsoft.VisualBasic.Interaction.CallByName(resultItem, "Display", CallType.Method)
+                                          End If
+                                      Catch ex As System.Exception
+                                          _dbg("錯誤", $"回覆/轉寄失敗 (ID: {entryID}, 模式: {mode}): {ex.Message}")
+                                      Finally
+                                          TryMarshalRelease(resultItem)
+                                          TryMarshalRelease(olItem)
+                                          TryMarshalRelease(nSpace)
+                                      End Try
+                                  End Sub)
+        nThread.SetApartmentState(ApartmentState.STA)
+        nThread.IsBackground = True
+        nThread.Start()
     End Sub
     Private Sub HandleLv3Delete(lv As ListView)
         ' 2026/06/21 by Simon/Claude Opus 4.8: Tab3 虛擬模式刪除 (行為仿照 HandleLv4Delete，但操作 _lv3MailList + VirtualListSize)
@@ -473,6 +653,14 @@ Partial Class Form1
             Case Else : Return 1
         End Select
     End Function
+    Private Function GetItemFromPoint(pt As System.Drawing.Point) As MailItemInfo?
+        ' 輔助方法：從點座標找出虛擬項目的資料
+        Dim item = ListView3.GetItemAt(pt.X, pt.Y)
+        If item IsNot Nothing AndAlso item.Index >= 0 AndAlso item.Index < _lv3MailList.Count Then
+            Return _lv3MailList(item.Index)
+        End If
+        Return Nothing
+    End Function
     Private Function GetSelectedEntryIDs(lv As ListView) As List(Of String)
         ''' <summary>
         ''' 取得目前選取節點的 EntryID 清單 (自動判斷 VirtualMode)
@@ -492,13 +680,22 @@ Partial Class Form1
         Return ids
 
     End Function
-    Private Function GetItemFromPoint(pt As System.Drawing.Point) As MailItemInfo?
-        ' 輔助方法：從點座標找出虛擬項目的資料
-        Dim item = ListView3.GetItemAt(pt.X, pt.Y)
-        If item IsNot Nothing AndAlso item.Index >= 0 AndAlso item.Index < _lv3MailList.Count Then
-            Return _lv3MailList(item.Index)
+    Private Function GetSelectedMailInfos(lv As ListView) As List(Of MailItemInfo)
+        ''' <summary>
+        ''' 取得目前選取節點的 MailItemInfo 清單 (自動判斷 VirtualMode)；與 GetSelectedEntryIDs 邏輯相同，但連 Subject/SenderName/FolderPath 等欄位一併取出，供快速預覽視窗使用
+        ''' </summary>
+        ' 2026/07/07 by Simon/Claude: 從 POC_GetSelectedMailInfos 提升為正式函數 (供 ShowMailQuickPreview 的右鍵選單/快捷鍵入口共用)
+        Dim result As New List(Of MailItemInfo)(32)
+        If lv.VirtualMode Then
+            For Each idx As Integer In lv.SelectedIndices
+                If idx >= 0 AndAlso idx < _lv3MailList.Count Then result.Add(_lv3MailList(idx))
+            Next
+        Else
+            For Each item As ListViewItem In lv.SelectedItems
+                If TypeOf item.Tag Is MailItemInfo Then result.Add(DirectCast(item.Tag, MailItemInfo))
+            Next
         End If
-        Return Nothing
+        Return result
     End Function
     Private Function CalculateSpeedAndETA(totalItems As Integer, processedItems As Integer, elapsedSec As Double) As (Speed As Double, EtaString As String)
         ''' <summary>
@@ -526,10 +723,9 @@ Partial Class Form1
 #Region "■ 07 Tab4: 系列郵件"
 #Region "  ├ Layer1 UI事件層"
     Private Async Sub Bt4_Click(sender As Object, e As EventArgs) Handles Button4.Click
-        ' by Gemini 3 Flash, 2026/04/20: 修改搜尋來源為 Tab4 專屬的 SimTree4
         _dbg("開始")
 
-        Dim cToken As CancellationToken = OkayNowYouHaveToken()
+        ' 2026/07/07 by Simon/Claude: token 取用時機由此下移到早退檢查之後(見下方)，避免早退路徑殘留沒人歸還的 _cts
         Dim selectedFolders As New List(Of Folder)(32)
         For Each node In SimTree4.SelectedNodes
             Dim f = TryCast(node.Tag, Folder)
@@ -541,7 +737,6 @@ Partial Class Form1
             selectedFolders.AddRange(_tv4PrevSelection)
             _dbg("F5 刷新模式：引用歷史資料夾清單", selectedFolders.Count & " 個資料夾")
         End If
-
         If selectedFolders.Count = 0 Then Return
 
         Button4.Enabled = False : Cursor = Cursors.WaitCursor
@@ -554,6 +749,7 @@ Partial Class Form1
         Dim topicDict As New Dictionary(Of String, List(Of MailItemInfo))(StringComparer.OrdinalIgnoreCase)
         Dim progress4 As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
 
+        Dim cToken As CancellationToken = OkayNowYouHaveToken()   ' ✅ 取得新 Token，同時取消上一次未完成的操作 (2026/07/07 由函式開頭移到早退檢查後)
         Try
             ' ✅ 2026/04/21 by Gemini 3.0 flash: 呼叫共用核心 GetUniqueFolderList (內含路徑去重與子資料夾展開)
             ' 2026/04/22 by Gemini 3.1 Pro: 如果在結果模式刷新，SelectedNodes裝的是話題不是Folder。用偽造的 TreeNode 清單包裝歷史 Folder 傳交給底層。
@@ -597,6 +793,7 @@ Partial Class Form1
             _dbg("結束", "ESC 中斷")
             PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = ""
         Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
             Button4.Enabled = True
             Cursor = Cursors.Default
             _dbg("結束")
@@ -605,9 +802,7 @@ Partial Class Form1
     End Sub
     ' Tv4_AfterSelect, Tv4_KeyDown, RenderLv4Group() — 舊版資料夾樹選取連動事件全數移除
     '   因 SimTree4 雙軌模式拆分，結果選取已由 Lv4Topic 專職負責。點擊 SimTree4 只作搜尋參考。
-    '   此事件已無業務邏輯需求，故整段註解保留，以備日後參考。
-    ' 2026/05/29 by Claude Sonnet 4.6:
-    ' ---------------------------------------------------------------------------------------------------------
+    '   此事件已無業務邏輯需求，故整段註解保留，以備日後參考。    ' 2026/05/29 by Claude Sonnet 4.6:
 
     Private Sub Lv4Topic_SelectedIndexChanged(sender As Object, e As EventArgs) Handles Lv4Topic.SelectedIndexChanged
         ' ---------------------------------------------------------------
@@ -694,14 +889,7 @@ Partial Class Form1
                 Button4.PerformClick()
                 e.Handled = True
 
-            ' 2026/05/31 by Gemini/Simon: 徹底大掃除：清除所有 F6 與 Group 的殘留
-            'Case Keys.F6
-                'If _isTv4ResultMode AndAlso _tv4PrevTopicResults IsNot Nothing Then
-                '    _tv4GroupSortByCount = Not _tv4GroupSortByCount
-                '    RenderLv4Group(_tv4PrevTopicResults)
-                '    _dbg("F6 按下：切換排序為", If(_tv4GroupSortByCount, "數量", "主旨"))
-                '    e.Handled = True
-                'End If
+            'Case Keys.F6   ' 2026/05/31 by Gemini/Simon: 徹底大掃除：清除所有 F6切換排序 與 Group 的殘留
 
             Case Keys.Escape
                 ' 按下 ESC：從結果模式恢復為資料夾模式
@@ -735,13 +923,11 @@ Partial Class Form1
             ' 2. 直接對底層資料源進行 LINQ 排序 (結構不同，保持獨立寫法)
             Select Case e.Column
                 Case 0 ' 主旨 (Key)
-                    _lv4TopicList = If(_lv4TSortOrder = SortOrder.Ascending,
-                                       _lv4TopicList.OrderBy(Function(x) x.Key).ToList(),
-                                       _lv4TopicList.OrderByDescending(Function(x) x.Key).ToList())
+                    _lv4TopicList = If(_lv4TSortOrder = SortOrder.Ascending, _lv4TopicList.OrderBy(Function(x) x.Key).ToList(),
+                                                                             _lv4TopicList.OrderByDescending(Function(x) x.Key).ToList())
                 Case 1 ' 數量 (Value.Count)
-                    _lv4TopicList = If(_lv4TSortOrder = SortOrder.Ascending,
-                                       _lv4TopicList.OrderBy(Function(x) x.Value.Count).ThenBy(Function(x) x.Key).ToList(),
-                                       _lv4TopicList.OrderByDescending(Function(x) x.Value.Count).ThenBy(Function(x) x.Key).ToList())
+                    _lv4TopicList = If(_lv4TSortOrder = SortOrder.Ascending, _lv4TopicList.OrderBy(Function(x) x.Value.Count).ThenBy(Function(x) x.Key).ToList(),
+                                                                             _lv4TopicList.OrderByDescending(Function(x) x.Value.Count).ThenBy(Function(x) x.Key).ToList())
             End Select
 
             ' 3. 排序後，原本的選取索引會指錯資料，建議清空選取並重新選定第一筆
@@ -766,7 +952,6 @@ Partial Class Form1
         End If
     End Sub
     Private Sub Lv4_ColumnClick(sender As Object, e As ColumnClickEventArgs) Handles Listview4.ColumnClick
-
         ' by Gemini 3 Flash, 2026/04/19: Listview4 欄位排序 (實體模式，參考 ListView3 的虛擬模式做法)
         ' by Gemini 3.5 Flash, 2026/05/29: Phase 1 — 加入 Lv4Topic.Visible 防禦性 Guard，只在結果模式下啟用排序
         If Lv4Topic.Visible = False Then Return
@@ -944,16 +1129,16 @@ Partial Class Form1
         ' 1. 直接對整包 mailList 進行「全域排序」(徹底捨棄 GroupBy 邏輯)
         Dim sortedItems As IEnumerable(Of MailItemInfo) = mailList
         Select Case _lv4LastSortColumn
-            Case 0          ' 主旨
-                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.Subject), sortedItems.OrderByDescending(Function(m) m.Subject))
-            Case 1          ' 郵件大小
-                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.Size), sortedItems.OrderByDescending(Function(m) m.Size))
-            Case 2          ' 收到日期
-                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.RcvTime), sortedItems.OrderByDescending(Function(m) m.RcvTime))
-            Case 3          ' 寄件者
-                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.SenderName), sortedItems.OrderByDescending(Function(m) m.SenderName))
-            Case Else       ' 預設 (或點擊其他無效欄位時)
-                sortedItems = sortedItems.OrderByDescending(Function(m) m.RcvTime)
+            Case 0
+                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.Subject), sortedItems.OrderByDescending(Function(m) m.Subject))         ' 主旨
+            Case 1
+                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.Size), sortedItems.OrderByDescending(Function(m) m.Size))               ' 郵件大小
+            Case 2
+                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.RcvTime), sortedItems.OrderByDescending(Function(m) m.RcvTime))         ' 收到日期
+            Case 3
+                sortedItems = If(_lv4SortOrder = SortOrder.Ascending, sortedItems.OrderBy(Function(m) m.SenderName), sortedItems.OrderByDescending(Function(m) m.SenderName))   ' 寄件者
+            Case Else
+                sortedItems = sortedItems.OrderByDescending(Function(m) m.RcvTime)      ' 預設 (或點擊其他無效欄位時)
         End Select
 
         ' 收集該組的所有項目，再一次性 AddRange (by Gemini 3.0 flash, 2026/04/21)
@@ -968,7 +1153,6 @@ Partial Class Form1
                                          mailItem.RcvTime.ToString("yyyy/MM/dd HH:mm:ss"),
                                          mailItem.SenderName, " - ",
                                          mailItem.EntryID})
-            'lvi.Group = lvGroup
             lvi.Tag = mailItem ' by Gemini 3.0 flash, 2026/04/21: 直接存入物件避開 Index 錯位問題
             itmToAdd.Add(lvi)
         Next
@@ -1022,11 +1206,8 @@ Partial Class Form1
         ' 建立背景執行緒執行移動，避免 UI 卡死
 
         ' 2026/04/30 by Simon/Claude: 修正跨 Store 移動失敗的問題
-        '   原本使用 ns.GetDefaultFolder(olFolderDeletedItems) 取得預設帳號的刪除資料夾，
-        '   但在多 PST 環境下，非主 Store 的郵件跨 Store Move() 會靜默失敗。
-        '   修正：改用 m.Delete() 自動移入同一 Store 的刪除郵件資料夾，
-        '   行為與 Outlook UI 按 Delete 鍵一致，跨 Store 問題徹底消除。
-
+        '   原本使用 ns.GetDefaultFolder(olFolderDeletedItems) 取得預設帳號的刪除資料夾，但在多 PST 環境下，非主 Store 的郵件跨 Store Move() 會靜默失敗。
+        '   修正：改用 m.Delete() 自動移入同一 Store 的刪除郵件資料夾，行為與 Outlook UI 按 Delete 鍵一致，跨 Store 問題徹底消除。
         ' 2026/05/06 by Gemini 3 Flash: 放寬型別限制，改用 Object 以支援 RSS (PostItem), 會議, 草稿等各種項目
         _dbg("開始")
         Dim th As New Thread(Sub()
@@ -1081,6 +1262,7 @@ Partial Class Form1
             If String.IsNullOrEmpty(targetBody) Then
                 item.SubItems(4).Text = "失敗" : Continue For
             End If
+
             mBodyList.Add((item, targetBody))
             processedCount += 1
             If processedCount Mod 10 = 0 Then Await PreciseDelay(1) ' 每 10 封釋放一次 UI 執行緒，兼顧流暢度與效率 (by Gemini 3.0 flash, 2026/05/09)
@@ -1171,9 +1353,9 @@ Partial Class Form1
         Next
 
         ' 3. 統計範圍擴大：
-        ' - ASCII 區段 (0 ~ 255): 包含英文、數字、常用符號
-        ' - CJK 中日韓區段 (&H2E80 ~ &H9FBF): 包含繁簡中、日文、韓文
-        ' 註：若要極致精準可掃描全表 (0 To 65535)，但掃描特定區段效能更好
+        '   - ASCII 區段 (0 ~ 255): 包含英文、數字、常用符號
+        '   - CJK 中日韓區段 (&H2E80 ~ &H9FBF): 包含繁簡中、日文、韓文
+        '   註：若要極致精準可掃描全表 (0 To 65535)，但掃描特定區段效能更好
         For i As Integer = 0 To 255 : lSum(charTable(i)) += 1 : Next            ' 統計 ASCII
         For i As Integer = &H2E80 To &H9FBF : lSum(charTable(i)) += 1 : Next    ' 統計 CJK
 
@@ -1235,7 +1417,6 @@ Partial Class Form1
         End Try
     End Function
     Private Function JaccardSimilarity(strA As String, strB As String) As Double
-
         ' ---------------------------------------------------------------
         ' JaccardSimilarity — 字元集 Jaccard 相似度（Charles Wu 算法現代化版）
         ' 2026/04/28 by Simon/Claude: 基於 GetSimRate_New (2006/06/22 Algorithm by Charles Wu)
@@ -1269,10 +1450,8 @@ Partial Class Form1
         '   因為這裡根本不需要修改 setA，只需要計數，原始迴圈反而是更精準的選擇
         '   IntersectWith() 的優勢是語意清楚、後續可直接使用縮減後的集合，但在純計數場景下並無好處。
 
-        ' 找出較小的集合來走迴圈，性能更好
-        If setA.Count > setB.Count Then
-            Dim temp = setA : setA = setB : setB = temp
-        End If
+        ' 找出二者之中較小的集合來走迴圈，性能更好
+        If setA.Count > setB.Count Then Dim temp = setA : setA = setB : setB = temp
 
         Dim intersectCount As Integer = 0
         For Each c In setA

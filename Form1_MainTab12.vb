@@ -194,18 +194,22 @@ Partial Class Form1
             _dbg("結束", "ESC 中斷") : PgrsBar1.Text = "由使用者中斷。" : Return
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
+        Finally
+            OkeyNowByeByeToken(cToken)                      ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化(見 OkayNowYouHaveToken/OkeyNowByeByeToken)
+            Cursor = Cursors.Default : _isUserBusy = False  ' 2026/07/07: 移入 Finally，ESC 中斷路徑(上方 Return)也要復原
         End Try
 
         sw.Stop()
         PgrsBar1.Text = "統計花費 " & sw.Elapsed.TotalSeconds.ToString("0.00") & " 秒。"
-        Cursor = Cursors.Default : _isUserBusy = False : If Me.ActiveControl Is SimTree1 Then SimTree1.Focus()
+        If Me.ActiveControl Is SimTree1 Then SimTree1.Focus()
         _dbg("結束")
     End Sub
     Private Async Sub Lv1_KeyDown(sender As Object, e As KeyEventArgs) Handles ListView1.KeyDown
         ''' <summary>
         ''' ListView1: 資料夾導覽 (2026/04/16 by Gemini 3.1 Pro: 從 HandleListViewKeyPress 拆分回歸)
         ''' </summary>
-        Dim cToken As CancellationToken = OkayNowYouHaveToken()
+        ' 2026/07/07 by Simon/Claude: 原本在此處每次按鍵都 OkayNowYouHaveToken()，但只有「退上一層」分支真正用到 —
+        '   token 化的運算中判定上線後，按鍵搶 token 會讓 _cts 殘留(沒人歸還)。改移入實際用到的分支內取用+歸還。
         Dim lv As ListView = DirectCast(sender, ListView)
 
         _dbg("開始", $"鍵值: {e.KeyCode}")
@@ -242,23 +246,28 @@ Partial Class Form1
 
             Dim currentNode As TreeNode = SimTree1.SelectedNode     ' 2026/04/13 by Simon/Claude: Tab1 改用 SimTree1
             If currentNode IsNot Nothing AndAlso currentNode.Parent IsNot Nothing Then
-                ' 記下當前 Folder 物件，用於回到上層後在 ListView1 定位游標
-                Dim currentFolder As Folder = TryCast(currentNode.Tag, Folder)
-                Dim parentNode As TreeNode = currentNode.Parent
+                Dim cToken As CancellationToken = OkayNowYouHaveToken()   ' 2026/07/07 by Simon/Claude: 從函式開頭移入本分支(唯一用到 token 的地方)
+                Try
+                    ' 記下當前 Folder 物件，用於回到上層後在 ListView1 定位游標
+                    Dim currentFolder As Folder = TryCast(currentNode.Tag, Folder)
+                    Dim parentNode As TreeNode = currentNode.Parent
 
-                ' 用 SimTree1 正確選取父節點 (不呼叫 FireAfterSelect，避免與下方手動計算重複觸發)
-                SimTree1.ClearSelectedNodes()
-                SimTree1.AddSelectedNode(parentNode)
+                    ' 用 SimTree1 正確選取父節點 (不呼叫 FireAfterSelect，避免與下方手動計算重複觸發)
+                    SimTree1.ClearSelectedNodes()
+                    SimTree1.AddSelectedNode(parentNode)
 
-                ' 手動計算統計並渲染 (等同 SimTree1_AfterSelect 的流程)
-                Dim dedupedNodes As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
-                Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken)
-                RenderLv1(items)
+                    ' 手動計算統計並渲染 (等同 SimTree1_AfterSelect 的流程)
+                    Dim dedupedNodes As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
+                    Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken)
+                    RenderLv1(items)
 
-                ' 在 ListView1 中找到代表「剛才那個資料夾」的列並移去高亮
-                ' by Gemini 3.5 Flash, 2026/05/27: 將此巢狀尋找高亮邏輯重構抽離至獨立的輔助子程序，簡化事件代碼並強化型別轉型保護
-                SelectFolderInListView(lv, currentFolder)
-                lv.Focus()
+                    ' 在 ListView1 中找到代表「剛才那個資料夾」的列並移去高亮
+                    ' by Gemini 3.5 Flash, 2026/05/27: 將此巢狀尋找高亮邏輯重構抽離至獨立的輔助子程序，簡化事件代碼並強化型別轉型保護
+                    SelectFolderInListView(lv, currentFolder)
+                    lv.Focus()
+                Finally
+                    OkeyNowByeByeToken(cToken)              ' 2026/07/07 by Simon/Claude: 歸還 token
+                End Try
             ElseIf e.KeyCode = Keys.Escape Then             ' 2026/06/27 新增 by simon：Backspace 只會退到最頂層，要ESC才會退回左側資料夾樹
                 SimTree1.Focus()                            ' 2026/05/30 新增：若已在最頂層，則退回左側資料夾樹
             End If
@@ -358,13 +367,12 @@ Partial Class Form1
         ' v5: 原有的百行巨型函數已被依「單一職責原則」拆分為五個子函數，確保各步驟隔離互不干擾。
         '
         ' 拆分後的五個步驟 (Steps):
-        '   Step 1. BuildBfsFolderTree          : GetSubtree 骨架一次展開 + 記憶體剪枝(2026/07/02 骨架整合)；若快取命中(非root)則剪枝。
-        '   Step 2. FetchDirectMailCountsAsync  : 對未快取節點逐一呼叫 GetMailCount() 取本層郵件數。
-        '                                         處理 progress 報告並支援 _cancelRequested 中斷。
+        '   Step 1. BuildBfsFolderTree      : GetSubtree 骨架一次展開 + 記憶體剪枝(2026/07/02 骨架整合)；若快取命中(非root)則剪枝。
+        '   Step 2. FetchDirectMailCounts   : 對未快取節點逐一呼叫 GetMailCount() 取本層郵件數。(處理 progress 報告並支援 _cancelRequested 中斷。)
         '   Step 3. SumUpSubTreeBottomUp    : 利用 BFS「父索引 < 子索引」特性，從陣列尾端往前掃一次完成加總。
-        '   Step 4. UpdateFolderInfoCache      : 將最新結果寫入 Layer2.5 的 _cacheMailCountAll 等字典。
-        '   Step 5. GetBfsResult                : 從陣列中挑出 root 與直屬子資料夾 (ParentIndex=0) 並補讀快取。
-        '…
+        '   Step 4. UpdateFolderInfoCache   : 將最新結果寫入 Layer2.5 的 _cacheMailCountAll 等字典。
+        '   Step 5. GetBfsResult            : 從陣列中挑出 root 與直屬子資料夾 (ParentIndex=0) 並補讀快取。
+        '
         ' 架構與效能考量:
         '   - allEntries 是 Reference Type，在此作為狀態載體在各子函數間傳遞，避免不必要的陣列複製。
         '   - 為防 BFS 索引錯亂，以 IReadOnlyList 宣告參數，確保子函數不可改變 allEntries 長度或顛倒內部順序。
@@ -374,25 +382,17 @@ Partial Class Form1
         _dbg(" ├ 開始", rName)
 
         ' ── Step 1: 負責展開樹狀結構與初步快取剪枝 (by Gemini, 2026/04/05 改為非同步以提升響應)
-        ' pending B: 舊版(自走樹)占30~35%；2026/07/02 骨架整合後改吃 GetSubtree，冷啟動走 RDO 批次，請以新 PROBE_TIMING 數字重新評估
-        Dim swP As Stopwatch = Stopwatch.StartNew()   ' PROBE_TIMING
         Dim allEntries As List(Of FolderBfsEntry) = Await BuildBfsFolderTree(rootFolder, cToken:=cToken, progress:=progress)
-        Dim t1 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()    ' PROBE_TIMING
 
-        ' ── Step 2: 負責與 COM 溝通，取得基本數據 
-        ' pending A. 目前第一耗時, 占55~65%
-        Await FetchDirectMailCountsAsync(allEntries, progress, cToken:=cToken)
-        Dim t2 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()    ' PROBE_TIMING
+        ' ── Step 2: 負責與 COM 溝通，取得基本數據
+        Await FetchDirectMailCounts(allEntries, progress, cToken:=cToken)
 
         ' ── Step 3 & 4: 純記憶體運算與快取更新
         SumUpSubTreeBottomUp(allEntries)
         UpdateFolderInfoCache(allEntries)
-        Dim t34 As Double = swP.Elapsed.TotalMilliseconds : swP.Restart()   ' PROBE_TIMING
 
         ' ── Step 5: 提取 UI 所需的結果並回報最終進度
-        Dim res = GetBfsResult(allEntries, progress)        ' PROBE_TIMING
-        Dim t5 As Double = swP.Elapsed.TotalMilliseconds    ' PROBE_TIMING
-        _dbg("PROBE_TIMING " & rName, $"夾數={allEntries.Count} | S1={t1:F0} S2={t2:F0} S34={t34:F0} S5={t5:F0} ms")   ' PROBE_TIMING
+        Dim res = GetBfsResult(allEntries, progress)
         _dbg(" ├ 結束", rName)
         Return res
 
@@ -445,15 +445,15 @@ Partial Class Form1
     ' 以下為 CollectFolderInfoByBFS 專用的拆分子函數 (Steps 1~5)
     Private Async Function BuildBfsFolderTree(rootFolder As Folder, cToken As CancellationToken, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of List(Of FolderBfsEntry))
         ' 負責: 展開整棵子樹 + 依 Layer2.5 快取字典剪枝，產出「父索引 < 子索引」的 FolderBfsEntry 陣列。
-        ' 2026/07/02 by Simon/Claude [骨架整合]: 不再自己逐節點走樹(原: 每節點 DbGetOrderedSubFolderIDs 查一次 DB + 未知節點退 COM 物化)。
+        ' 2026/07/02 by Simon/Claude [骨架整合]: 不再自己逐節點走樹(原: 每節點 LazyGetOrderedSubFolderIDs 查一次 DB + 未知節點退 COM 物化)。
         '   改為一次呼叫 GetSubtree(L2.5) 取完整骨架: ①記憶體 _cacheSubTreeList → ②DB 一條 LIKE → ③RDO 批次(GetSubtreeRdo) → ④OOM BFS。
         '   Tab1 從此與 Tab2-5 共用同一份骨架快取；冷啟動由 RDO 批次/OOM 全樹掃接手，
         '   原 selfKnownToDb 冷啟動特判(2026/07/01)與 GetSortedSubFolderIDs 的 ③ COM 物化退路從此不再需要。
         '   保留的既有語意 (只是搬到記憶體樹上執行):
         '     - 剪枝規則: 非 root 節點 mca/fca 雙快取命中才剪枝；root 永遠展開直屬子夾(v4 bug fix)。
-        '     - DB lazy: 未命中節點 DbGetFolderInfo + FillCacheFromDbRow(skipAggregates:=True) 只填本層欄位，不驗 snapshot(原樣)。
-        '     - 模式過濾: 骨架為完整全集，套 FilterSubtreeByMode 對齊原 DbGetOrderedSubFolderIDs 的 is_mail 過濾。
-        '     - 顯示排序: 比照 DbGetOrderedSubFolderIDs 的 ORDER BY has_chinese ASC, folder_path ASC，在記憶體對每層子夾排序，
+        '     - DB lazy: 未命中節點 LazyGetFolderInfo + FillCacheFromDbRow(skipAggregates:=True) 只填本層欄位，不驗 snapshot(原樣)。
+        '     - 模式過濾: 骨架為完整全集，套 FilterSubtreeByMode 對齊原 LazyGetOrderedSubFolderIDs 的 is_mail 過濾。
+        '     - 顯示排序: 比照 LazyGetOrderedSubFolderIDs 的 ORDER BY has_chinese ASC, folder_path ASC，在記憶體對每層子夾排序，
         '                 確保 GetBfsResult 取 ParentIndex=0 的顯示順序不變。
         If _iLikeNoisy Then _dbg("    ├ 開始", rootFolder.Name)
         Dim swP As Stopwatch = Stopwatch.StartNew()     ' PROBE_TIMING
@@ -479,7 +479,7 @@ Partial Class Form1
                 End If
             End If
         Next
-        For Each kv In childrenOf   ' 英文優先排序，對齊 DbGetOrderedSubFolderIDs 的 SQL ORDER BY (has_chinese ASC, folder_path ASC)
+        For Each kv In childrenOf   ' 英文優先排序，對齊 LazyGetOrderedSubFolderIDs 的 SQL ORDER BY (has_chinese ASC, folder_path ASC)
             kv.Value.Sort(Function(a, b)
                               Dim ha As Integer = If(TextHasChineseChar(ExtractFolderName(a.fPath)), 1, 0)
                               Dim hb As Integer = If(TextHasChineseChar(ExtractFolderName(b.fPath)), 1, 0)
@@ -521,13 +521,13 @@ Partial Class Form1
                     '   skipAggregates:=True → FillCacheFromDbRow 只填 mc/fc/fs 等本層無模式語意的欄位，
                     '   isHit 保持 False → BFS 繼續展開子資料夾，自行重算 mca/fca，重算結果透過 UpdateFolderInfoCache 寫入記憶體，下次同模式點選從記憶體命中（①）。
                     '   效能代價：每次切換或重啟後第一次統計需完整展開（不能 DB 剪枝），可接受。
-                    '   (2026/07/02 骨架整合註記: 此處每節點一次 DbGetFolderInfo 點查詢原本被刻意保留，目的是預熱 _cacheMailCount，
+                    '   (2026/07/02 骨架整合註記: 此處每節點一次 LazyGetFolderInfo 點查詢原本被刻意保留，目的是預熱 _cacheMailCount，
                     '    讓 Step2 的 GetMailCount 走 ① 記憶體命中而不觸發「DB lazy + snapshot 驗證」的逐夾 COM 讀取。
                     '   2026/07/03 by Simon/Claude [PROBE_HIERCNT 通過後]: mc/fc 現在已由 Step①的 GetSubtree(RDO 批次)免費回填,
                     '    只剩 fs 仍無免費來源。三者都已在記憶體時這次點查詢已無新資訊可拿，跳過(FillCacheFromDbRow 是 TryAdd 語意本就不覆寫，
                     '    此處只是省掉白做工的 SQL 往返，行為不變)。任一者仍缺才照原樣查 DB。
                     If Not _cacheMailCount.ContainsKey(fPath) OrElse Not _cacheFolderCount.ContainsKey(fPath) OrElse Not _cacheFolderSize.ContainsKey(fPath) Then
-                        Dim row = DbGetFolderInfo(fPath)
+                        Dim row = LazyGetFolderInfo(fPath)
                         If row IsNot Nothing Then FillCacheFromDbRow(fPath, row, skipAggregates:=True)   ' 只填本層欄位，不填 mca/fca/fsa
                     End If
                 End If
@@ -561,10 +561,10 @@ Partial Class Form1
         Return allEntries
 
     End Function
-    Private Async Function FetchDirectMailCountsAsync(allEntries As IReadOnlyList(Of FolderBfsEntry), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+    Private Async Function FetchDirectMailCounts(allEntries As IReadOnlyList(Of FolderBfsEntry), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
         ' 負責: 對未快取節點打 COM (呼叫 GetMailCount)，並負責 UI 節流 (Task.Yield) 與 ESC 中斷檢查。
         ' 2026/04/11 by Claude: 回傳值從 Task(Of Boolean) 改為 Task，原本的 Return True/False 均改為 re-throw。
-        '   理由: 呼叫端 Await FetchDirectMailCountsAsync(...) 完全丟棄了 Task(Of Boolean) 的回傳值，
+        '   理由: 呼叫端 Await FetchDirectMailCounts(...) 完全丟棄了 Task(Of Boolean) 的回傳值，
         '         等同 Return True 無效，ESC 後上層照樣執行 UpdateFolderInfoCache 污染快取。
         '         改為 Throw 後，OperationCanceledException 直接傳到 TreeView1_AfterSelect 的 catch 攔截。
 
@@ -659,7 +659,7 @@ Partial Class Form1
         ' 2026/5/6 by Claude Sonnet 4.6, GetBfsResult 內，建立 result 清單後，預載 fsa
         For Each e In allEntries
             If Not _cacheFolderSizeAll.ContainsKey(e.FolderPath) Then
-                Dim row = DbGetFolderInfo(e.FolderPath)
+                Dim row = LazyGetFolderInfo(e.FolderPath)
                 If row IsNot Nothing AndAlso row.fsa >= 0 Then _cacheFolderSizeAll.TryAdd(e.FolderPath, row.fsa)
             End If
         Next
@@ -734,9 +734,9 @@ Partial Class Form1
         '   2. 防止切邊：斜體時字串結尾補一格空白。
         ' 2026/05/27 by Simon/Claude: 改用 FormatFolderSizeStr 取代重複邏輯，fPath 直接用 .FolderPath
         ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_TAB1E2E 拆帳後,去物化配套]:
-        '   - isMail 改查 _cacheFolderIDs(骨架展開時已回填;原 IsMailFolder(folder) 無 fPath → SafeGetPath 每列 1 次 COM)。
-        '     查無時: BFS 路徑依「查無預設視為 mail」慣例(不斜體);F5 路徑 .Folder 在,照舊走 IsMailFolder(帶 fPath 免 COM)。
-        '   - 名稱改取自 FolderPath 尾段(原 .Folder.Name 每列 1 次 COM)。兩者合計原本 ≈112ms/輪(26 store 全選)。
+        '   1. isMail 改查 _cacheFolderIDs(骨架展開時已回填;原 IsMailFolder(folder) 無 fPath → SafeGetPath 每列 1 次 COM)。
+        '   2. 查無時: BFS 路徑依「查無預設視為 mail」慣例(不斜體);F5 路徑 .Folder 在,照舊走 IsMailFolder(帶 fPath 免 COM)。
+        '   3. 名稱改取自 FolderPath 尾段(原 .Folder.Name 每列 1 次 COM)。兩者合計原本 ≈112ms/輪(26 store 全選)。
         Dim isItalicFolder As Boolean = False
         Dim fInfo As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
         If _cacheFolderIDs.TryGetValue(entry.FolderPath, fInfo) Then
@@ -758,10 +758,9 @@ Partial Class Form1
 
         ' 欄位順序: 名稱 / 郵件數量 / 資料夾數量 / 郵件總計 / 大小
         Dim lvi As New ListViewItem({displayName, directMailStr, totalSubStr, totalMailStr, sizeStr})
-        ' by Gemini, 2026/03/29: 特殊顯示非郵件資料夾 (斜體 + 灰色)
         If isItalicFolder Then
-            lvi.ForeColor = Color.DarkGray
-            lvi.Font = New Font(ListView1.Font, _fontItalic)
+            ' by Gemini, 2026/03/29: 特殊顯示非郵件資料夾 (斜體 + 灰色)
+            lvi.ForeColor = Color.DarkGray : lvi.Font = New Font(ListView1.Font, _fontItalic)
         End If
 
         ' 2026/04/13 by Simon/Claude: Tag 改為 ValueTuple，ComputeFolderSize 與 EnterSelectedFolder 同步更新
@@ -796,13 +795,10 @@ Partial Class Form1
     Private Async Function ForceLv1Refresh() As Task
         ' ── F5 強制刷新 ListView1 ──────────────────────────────────────────────
         ' 職責: 完全繞過記憶體快取與 DB，直接呼叫 GetMailCountAllOOM / GetFolderCountAllOOM 取得真實值
-        '       讀完後同時寫入記憶體快取（_cacheXXX）並更新 DB。
-        '       Size 重算僅針對目前 column 4 != "- " 的 ListViewItem。
-        '
+        '       讀完後同時寫入記憶體快取（_cacheXXX）並更新 DB。Size 重算僅針對目前 column 4 != "- " 的 ListViewItem。
         ' 效能原理：有 RDO → GetMailCountAllOOM 內部呼叫 _rdo.TotalItemCount（單次 MAPI 屬性讀取）
         '           整體複雜度 O(M)，M = 直屬子資料夾數；相較 BFS O(N) 大幅節省
         '           無 RDO → 內部 BFS，與原架構同等 O(N)
-        '
         ' 2026/05/13 by Claude Sonnet 4.6
         ' ─────────────────────────────────────────────────────────────────────
         _dbg("開始")
@@ -871,15 +867,14 @@ Partial Class Form1
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
         Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
             Cursor = Cursors.Default : _isUserBusy = False : _dbg("結束")
         End Try
     End Function
 
     ' ── ListView1 OwnerDraw handlers (2026/04/13 by Simon/Claude) ──────────────────
-    ' 問題根因: Windows 在 ListView 的 hover/select 狀態下會覆蓋自訂 BackColor，
-    '   導致群組標題行的淡藍底在滑鼠移上去或點擊後消失。
-    ' 解法: ListView.OwnerDraw = True，只對 Tag=Nothing 的行自訂繪製，其餘一律 DrawDefault=True。
-    '   該方式不影響一般資料列的外觀和排序等功能。
+    ' 問題根因: Windows 在 ListView 的 hover/select 狀態下會覆蓋自訂 BackColor，導致群組標題行的淡藍底在滑鼠移上去或點擊後消失。
+    ' 解法: ListView.OwnerDraw = True，只對 Tag=Nothing 的行自訂繪製，其餘一律 DrawDefault=True。該方式不影響一般資料列的外觀和排序等功能。
     Private Sub Lv1_DrawColumnHeader(sender As Object, e As DrawListViewColumnHeaderEventArgs) Handles ListView1.DrawColumnHeader
         e.DrawDefault = True   ' 欄位標頭用預設繪製
     End Sub
@@ -900,61 +895,56 @@ Partial Class Form1
         End If
     End Sub
     Private Sub Lv1_DrawSubItem(sender As Object, e As DrawListViewSubItemEventArgs) Handles ListView1.DrawSubItem
-        ' Tag=Nothing (群組標題行 / 合計列)：自訂繪製，防止 OS hover/select 顏色覆蓋我們設定的 BackColor
         ' 2026/05/09 by Gemini 3 Flash: Resize 期間暫停繪製
-        'If _isResizingLv Then Return
-        ' 其餘一般列： DrawDefault=True 不影響任何現有功能
-        '
-        ' 2026/04/14 對齊修正: 原本 textRect.Inflate(-3, 0) 兩側各縮 3px，
-        '   導致右對齊欄位比 DrawDefault 多偏左 3px，與一般列數字不對齊。
-        '   修正為：右對齊欄位直接用 e.Bounds，trailing " " 本身就是視覺間距，不額外 Inflate。
-        '   第一欄 (左對齊) 僅加左側 3px padding 避免文字貼邊。
-        If e.Item.Tag Is Nothing Then
-            Using bgBrush As New SolidBrush(e.Item.BackColor)
-                e.Graphics.FillRectangle(bgBrush, e.Bounds)
-            End Using
+        ' If _isResizingLv Then Return
 
+        ' ==========================================
+        ' 1. 狀態判定：決定是否接管繪製與使用什麼背景色
+        '   Tag = Nothing (群組標題行 / 合計列)：自訂繪製，防止 OS hover/select 顏色覆蓋我們設定的 BackColor
+        ' ==========================================
+        Dim needCustomDraw As Boolean = False
+        Dim bgColor As Color
+        If e.Item.Tag Is Nothing Then
+            needCustomDraw = True : bgColor = e.Item.BackColor          ' 群組標題行 / 合計列
+        ElseIf e.Item Is _lastHoveredLvItem AndAlso Not e.Item.Selected Then
+            needCustomDraw = True : bgColor = ThemeColors.MercuryGray   ' Hover 項目且未選取
+        End If
+
+        ' ==========================================
+        ' 2. 執行繪製
+        ' ==========================================
+        ' 將不變的排版設定提取為 Const，避免每次宣告重複計算
+        ' by Claude Sonnet 4.6, 2026/05/22: 加入 NoPrefix，防止資料夾名稱含 & 時在 hover 狀態下被當作快捷鍵前綴吃掉而消失
+        Const baseFlags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.SingleLine Or
+                                             TextFormatFlags.EndEllipsis Or TextFormatFlags.NoPrefix
+        If needCustomDraw Then
+            ' --- A. 繪製背景 ---
+            ' 2026/04/14 by Gemini 3.1 Pro: 為了避免修改 BackColor 觸發版面重算效能異常，我們手動為 Hover 項目自訂繪製底色
+            Using bgBrush As New SolidBrush(bgColor) : e.Graphics.FillRectangle(bgBrush, e.Bounds) : End Using
+
+            ' --- B. 決定文字位置與對齊參數 ---
             Dim textRect As Rectangle = e.Bounds
-            Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine Or TextFormatFlags.NoPrefix
+            Dim alignFlags As TextFormatFlags
             If e.ColumnIndex = 0 Then
-                textRect.X += 2 : textRect.Width -= 2   ' 第一欄左側加 3px padding，避免文字貼欄邊
-                flags = flags Or TextFormatFlags.Left
+                textRect.X += 2 : textRect.Width -= 2
+                alignFlags = TextFormatFlags.Left       ' 第一欄：微調 Padding 消除系統預設位移感，並靠左
             Else
-                flags = flags Or TextFormatFlags.Right
+                alignFlags = TextFormatFlags.Right      ' 其餘欄位：靠右 (trailing space 本身就是視覺間距，不額外 Inflate)
             End If
 
+            ' --- C. 繪製文字 ---
             ' 2026/04/14 fix by Gemini 3.1 Pro: 捨棄 GDI+ (e.Graphics.DrawString) 造成的測量位移與空白吃斷，
             ' 全面回歸使用與原生系統 (DrawDefault) 一致的 Win32 GDI 引擎 (TextRenderer.DrawText)。
-            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, e.Item.ForeColor, flags)
-
-        ElseIf e.Item Is _lastHoveredLvItem AndAlso Not e.Item.Selected Then
-            ' 2026/04/14 by Gemini 3.1 Pro: 為了避免修改 BackColor 觸發版面重算效能異常，我們手動為 Hover 項目自訂繪製底色
-            Using bgBrush As New SolidBrush(ThemeColors.MercuryGray)
-                e.Graphics.FillRectangle(bgBrush, e.Bounds)
-            End Using
-
-            Dim textRect As Rectangle = e.Bounds
-            ' by Claude Sonnet 4.6, 2026/05/22: 加入 NoPrefix，防止資料夾名稱含 & 時在 hover 狀態下被當作快捷鍵前綴吃掉而消失
-            Dim flags As TextFormatFlags = TextFormatFlags.VerticalCenter Or TextFormatFlags.EndEllipsis Or TextFormatFlags.SingleLine Or TextFormatFlags.NoPrefix
-            If e.ColumnIndex = 0 Then
-                textRect.X += 2 : textRect.Width -= 2   ' by simon, 2026/04/19: 從 3 改成 2，對齊 OS DrawDefault 的預設左內縮，消除 hover 切換時的像素移位感
-                flags = flags Or TextFormatFlags.Left
-            Else
-                flags = flags Or TextFormatFlags.Right
-            End If
-
-            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, e.Item.ForeColor, flags)
-
+            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, textRect, e.Item.ForeColor, baseFlags Or alignFlags)
         Else
+            ' 其餘一般列：交由作業系統原生處理
             e.DrawDefault = True
         End If
     End Sub
     Private Sub Lv1_ItemSelectionChanged(sender As Object, e As ListViewItemSelectionChangedEventArgs) Handles ListView1.ItemSelectionChanged
         ' 群組標題行 / 合計列不可被選取，選中即強制取消。
         ' 進一步防止 OS 在取消選取時再覆蓋一次我們的 BackColor。
-        If e.Item.Tag Is Nothing AndAlso e.IsSelected Then
-            e.Item.Selected = False
-        End If
+        If e.Item.Tag Is Nothing AndAlso e.IsSelected Then e.Item.Selected = False
     End Sub
 #End Region
 #Region "  └ 輔助函數"
@@ -1015,6 +1005,7 @@ Partial Class Form1
         _isUserBusy = True
         _dbg(" ├ 開始", $"選取項目數: {ListView1.SelectedItems.Count}")
 
+        Dim cToken As CancellationToken = Nothing   ' 2026/07/07 by Simon/Claude: 宣告提到 Try 外供 Finally 歸還(未取用時為 None，OkeyNowByeByeToken 對 None 不動作)
         Try
             Dim stopwatch As Stopwatch = Stopwatch.StartNew()
 
@@ -1027,7 +1018,7 @@ Partial Class Form1
             End If
 
             If targetItems.Count > 0 Then
-                Dim cToken As CancellationToken = OkayNowYouHaveToken()
+                cToken = OkayNowYouHaveToken()      ' 2026/07/07 by Simon/Claude: 宣告移至 Try 外，取用時機不變
                 For Each s As ListViewItem In targetItems
                     If s.Tag Is Nothing Then Continue For ' 排除標題列或合計列
                     If s.SubItems.Count > 4 Then s.SubItems(4).Text = "計算中..." Else s.SubItems.Add("計算中...")
@@ -1079,6 +1070,7 @@ Partial Class Form1
             PgrsBar2.Text = "發生錯誤: " & ex.Message
             _dbg(" ├ 錯誤", ex.Message)
         Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
             _isUserBusy = False
             _dbg("結束")
         End Try
@@ -1162,8 +1154,13 @@ Partial Class Form1
         SimTree1.AddSelectedNode(foundNode)
 
         Dim deduped As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
-        Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(deduped, OkayNowYouHaveToken())
-        RenderLv1(items)
+        Dim cToken As CancellationToken = OkayNowYouHaveToken()   ' 2026/07/07 by Simon/Claude: 行內取用改具名，才能在 Finally 歸還(運算中判定 token 化)
+        Try
+            Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(deduped, cToken)
+            RenderLv1(items)
+        Finally
+            OkeyNowByeByeToken(cToken)
+        End Try
 
         ' by Gemini 3.5 Flash, 2026/06/27: 進入資料夾後，自動呼叫 ComputeFolderSize 計算該層各個子資料夾的大小
         ComputeFolderSize(Nothing, Nothing)
@@ -1243,7 +1240,6 @@ Partial Class Form1
 
         ' 序號機制: 每次點選遞增；計算完成後若序號已變，代表有更新的點選，丟棄本次結果
         Dim mySeq As Integer = System.Threading.Interlocked.Increment(_tab2SelectSeq)
-        Dim cToken As CancellationToken = OkayNowYouHaveToken()  ' ✅ 取得新 Token，同時取消上一次未完成的操作
 
         ' 取得 SimTree2 多選清單 (SelectedNodes 是 SimTree 提供的 List(Of TreeNode))
         Dim selectedNodes As List(Of TreeNode) = SimTree2.SelectedNodes
@@ -1259,6 +1255,9 @@ Partial Class Form1
             Cursor = Cursors.Default : Return           ' 如果沒有任何有效的資料夾 (List.Count=0) 就直接結束
         End If
 
+        Dim cToken As CancellationToken = OkayNowYouHaveToken()  ' ✅ 取得新 Token，同時取消上一次未完成的操作
+        ' 2026/07/07 by Simon/Claude: 取用時機由函式開頭下移到早退檢查之後 — token 化的運算中判定上線後，
+        '   早退路徑不再有「取了沒還」的殘留 token；取用/歸還(下方 Finally)自此成對。
         Try ' by Claude Opus, 2026/04/11: Try 上移，包住 GetSubtree 的 Await，否則 ESC 時拋出的 OperationCanceledException 沒有被捕捉
             Dim progressTree = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             Dim folderList = Await GetUniqueFolderList(selectedNodes, _includeSubTab2, progress:=progressTree, cToken:=cToken)
@@ -1316,6 +1315,8 @@ Partial Class Form1
             PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = "" : Cursor = Cursors.Default
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message) : Cursor = Cursors.Default
+        Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
         End Try
     End Sub
     Private Async Sub Lv2_KeyDown(sender As Object, e As KeyEventArgs) Handles ListView2.KeyDown
@@ -1323,7 +1324,8 @@ Partial Class Form1
         ''' ListView2: 年度 / 月份視圖導覽 (2026/04/16 by Gemini 3.1 Pro: 從 HandleListViewKeyPress 拆分回歸)
         ''' </summary>
         _dbg("開始", $"鍵值: {e.KeyCode}")
-        Dim cToken As CancellationToken = OkayNowYouHaveToken()
+        ' 2026/07/07 by Simon/Claude: 原本在此每次按鍵都 OkayNowYouHaveToken()，但只有「進入月份視圖」分支用到 —
+        '   token 化的運算中判定上線後改移入該分支內取用+歸還，避免按鍵殘留 _cts。
         Dim lv As ListView = DirectCast(sender, ListView)
 
         If e.KeyCode = Keys.Enter Then                ' Enter = 等同雙擊目前選定的項目
@@ -1360,11 +1362,14 @@ Partial Class Form1
                 Dim selectedYear As Integer = 0
                 If Integer.TryParse(selectedItem.Text.Trim(), selectedYear) AndAlso
                     _tv2FolderList IsNot Nothing AndAlso _tv2FolderList.Count > 0 Then
+                    Dim cToken As CancellationToken = OkayNowYouHaveToken()   ' 2026/07/07 by Simon/Claude: 從函式開頭移入本分支(唯一用到 token 的地方)
                     Try
                         Await GoToLv2MonthView(selectedYear, cToken:=cToken)
                     Catch ex As OperationCanceledException
                         _dbg("結束", "ESC 中斷")
                         PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = "" : Cursor = Cursors.Default
+                    Finally
+                        OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token
                     End Try
                 End If
             End If
@@ -1420,6 +1425,8 @@ Partial Class Form1
             PgrsBar1.Text = "由使用者中斷。" : PgrsBar2.Text = "" : Cursor = Cursors.Default
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message)
+        Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
         End Try
 
     End Sub
@@ -1513,8 +1520,7 @@ Partial Class Form1
         If hit.ChartElementType = ChartElementType.DataPoint Then
             BrushCt2HoverState(chart, hit.PointIndex)
         Else
-            ' 滑鼠離開所有長條，還原上一個點與標題
-            ClearCt2HoverState(chart)
+            ClearCt2HoverState(chart)   ' 滑鼠離開所有長條，還原上一個點與標題
         End If
 
     End Sub
@@ -1528,11 +1534,8 @@ Partial Class Form1
 
         ' by Gemini, 2026/03/29: 合併為 SimTree2 單一操作路徑
         Dim selectedNodes As List(Of TreeNode) = SimTree2.SelectedNodes
-        If selectedNodes IsNot Nothing AndAlso selectedNodes.Count > 0 Then
-            SimTree2_AfterSelect(SimTree2, New TreeViewEventArgs(selectedNodes(0)))
-        End If
+        If selectedNodes IsNot Nothing AndAlso selectedNodes.Count > 0 Then SimTree2_AfterSelect(SimTree2, New TreeViewEventArgs(selectedNodes(0)))
         _dbg("結束")
-
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"

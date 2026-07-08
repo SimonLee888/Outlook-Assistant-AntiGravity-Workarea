@@ -277,8 +277,8 @@ Partial Class Form1
         PgrsBar1.Text = "正在讀取 PST 郵件清單..." : PgrsBar2.Text = SafeGetPath(folder)
         Cursor = Cursors.WaitCursor
 
+        Dim cToken As System.Threading.CancellationToken = OkayNowYouHaveToken()   ' 2026/07/07 by Simon/Claude: 宣告移出 Try，供 Finally 歸還
         Try
-            Dim cToken As System.Threading.CancellationToken = OkayNowYouHaveToken()
             ' needTopic:=False：Tab7 不需要 Conversation Topic，省去讀 PR_CONVERSATION_TOPIC 開銷
             Dim rows = Await GetMailInfo(folder, needTopic:=False, cToken:=cToken)
             ShowLvPstItems(rows.Select(Function(r) r.Mail).ToList())
@@ -289,6 +289,7 @@ Partial Class Form1
         Catch ex As System.Exception
             _dbg("錯誤", ex.Message) : PgrsBar1.Text = "讀取失敗: " & ex.Message
         Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化
             Cursor = Cursors.Default
             _dbg("結束", folder.Name)
         End Try

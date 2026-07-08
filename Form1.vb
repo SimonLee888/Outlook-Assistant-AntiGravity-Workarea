@@ -7,7 +7,8 @@ Imports Microsoft.Office.Interop.Outlook
 
 Partial Class Form1
 
-#Region "■ 00 Form 雙緩衝"
+#Region "■ 01 全域宣告"
+    ' Form 雙緩衝: 視窗合成模式，解決 Tab 切換/Resize 閃爍
     'Protected Overrides ReadOnly Property CreateParams As CreateParams
     '    ' 2026/04/18 by Claude: 開啟 WS_EX_COMPOSITED 視窗合成模式
     '    ' 原理: Windows 把所有子控制項的繪製先合成到 offscreen buffer，再一次性 blit 到螢幕。
@@ -40,9 +41,7 @@ Partial Class Form1
             End If
         End If
     End Sub
-#End Region
 
-#Region "■ 01 全域宣告"
     <System.Diagnostics.Conditional("DEBUG")>
     Private Sub _dbg(Optional msg As String = "", Optional detail As String = "", <System.Runtime.CompilerServices.CallerMemberName> Optional caller As String = "")
         ' Tier 1, 2026/06/15 by Simon/Claude Opus 4.8: 守衛提前 — 顯示關閉時直接 return。
@@ -83,7 +82,7 @@ Partial Class Form1
     Private _isTabInitialized(10) As Boolean            ' 記錄每個 Tab 的 UI 是否已經初始化完成, (0)是FormLoad的第一次啟動, (1)~(5)分別對應 Tab1~Tab5
     Private _isUserBusy As Boolean = False              ' ✅ 2026/04/01 by Gemini: 使用者操作忙碌旗標，用於暫緩背景預載程序
     Private _isClosing As Boolean = False               ' added by Gemini, 2026/04/08: 關閉流程旗標，確保 FormClosing 中的非同步儲存完成後再釋放資源並允許關閉
-    ' Private _cancelRequested As Boolean = False        ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
+    ' Private _cancelRequested As Boolean = False       ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
     ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
     Private _cts As CancellationTokenSource             ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
     ' 2026/07/06 by Simon/Claude: 「啟動花費」計時改為量到 Tab1 完整顯示(SimTree1_AfterSelect 首次 RenderLv1 完成)為止，
@@ -99,15 +98,16 @@ Partial Class Form1
     Private _showAllFolders As Boolean = False
     Private _includeSubTab2 As Boolean = False
     Private _includeSubTab3 As Boolean = False
+    Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
+    Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
+    Private _lvResizePending As ListView = Nothing
+    Private _lvResizeTimer As New Forms.Timer() With {.Interval = 100}
+
     Private _lastTvMousePoint As Point = Point.Empty    ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
     Private _lastLvMousePoint As Point = Point.Empty    ' by Gemini 3.1 Pro, 2026/04/26: 拆分 TreeView 與 ListView 的全域座標紀錄變數，避免互相干擾
     Private _lastHoveredPointIndex As Integer = -1      ' 記住上一個 hover 的點，-1 表示沒有
     'Private _lastHoveredTreeNode As TreeNode = Nothing ' 2026/5/14 by simon/Gemini: 將mouse hover作成內建功能
     Private _lastHoveredLvItem As ListViewItem = Nothing
-    Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
-    Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
-    Private _lvResizePending As ListView = Nothing
-    Private _lvResizeTimer As New Forms.Timer() With {.Interval = 100}
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
@@ -131,6 +131,41 @@ Partial Class Form1
         Public Const Low As Integer = 300   ' 低頻慢速：極耗時的附件掃描，不需過度更新
         Private Sub New() : End Sub         ' 防止被實例化
     End Class
+
+    Private Enum ThemeColorHex As Integer
+        ''' <summary>主要視窗或Panel背景色 FromArgb(242, 242, 242)</summary>
+        Gray95 = &HFFF2F2F2
+        ''' <summary>比DimGray更深的灰色, 主要用在字型 FromArgb(64, 64, 64)</summary>
+        DarkerDimGray = &HFF404040
+        ''' <summary>滑鼠懸停(Hover)的背景色 FromArgb(229, 229, 229)</summary>
+        MercuryGray = &HFFE5E5E5
+        ''' <summary>輕微的格線或邊框色 FromArgb(224, 224, 224)</summary>
+        AltoGray = &HFFE0E0E0
+        ''' <summary>主視覺品牌藍色 (如按鈕、連結文字) FromArgb(0, 120, 212)</summary>
+        Brand_Blue = &HFF0078D4
+        ''' <summary>穩重的簡報藍色 FromArgb(70, 130, 180)</summary>
+        Steel_Blue = &HFF4682B4
+        ''' <summary>輕快的藍色 FromArgb(141, 179, 211)</summary>
+        Polo_Blue = &HFF8DB3D3
+        ''' <summary>深珊瑚紅 FromArgb(216, 57, 51)</summary>
+        CoralRed = &HFFD83933
+        ''' <summary>鐵鏽紅 FromArgb(162, 44, 41)</summary>
+        RustRed = &HFFA22C29
+        ''' <summary>深橘金色，用於平均線或參考線，具備極佳辨識度 FromArgb(230, 126, 34)</summary>
+        DeepAmber = &HFFE67E22
+        ''' <summary>在紅藍灰上都能看清的青色，用於平均線或參考線，具備極佳辨識度 FromArgb(0, 212, 255)</summary>
+        Cyan = &HFF00D4FF
+        ''' <summary>Chart2 背景 很淺的藍色 FromArgb(237, 244, 255)</summary>
+        bgColor = &HFFEDF4FF
+        ''' <summary>Chart2 格線 稍明顯的淡藍色 FromArgb(208, 223, 245)</summary>
+        gridLine = &HFFD0DFF5
+        ''' <summary>Chart2 普通柱 天藍 FromArgb(74, 143, 212)</summary>
+        barNormal = &HFF4A8FD4
+        ''' <summary>Chart2 突顯柱 珊瑚紅 FromArgb(255, 85, 51)</summary>
+        barHighlight = &HFFFF5533
+        ''' <summary>Chart2 平均線 琥珀 FromArgb(255, 170, 0)</summary>
+        avgLineColor = &HFFFFAA00
+    End Enum
 
     Private _fontDefault As New Font("Microsoft Jhenghei", 10.0F, _fontRegular, GraphicsUnit.Point, 0)
     Private _fontHeader As New Font("Microsoft Jhenghei", 10.0F, _fontBold, GraphicsUnit.Point, 0)
@@ -156,18 +191,17 @@ Partial Class Form1
         _startupStopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
 
         InitLookAndFeel()       ' 設計程式外觀
-        InitPgrsBarEvents()      ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
+        InitPgrsBarEvents()     ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
 
         ' 2026/04/18 by Claude: Form 自身背景繪製的雙緩衝
-        ' WS_EX_COMPOSITED (CreateParams, ■00) 管子控制項合成層；DoubleBuffered 管 Form 自身的 WM_PAINT。
-        ' 兩者作用層次不同，互補無衝突。
+        ' WS_EX_COMPOSITED (CreateParams, ■00) 管子控制項合成層；DoubleBuffered 管 Form 自身的 WM_PAINT。兩者作用層次不同，互補無衝突。
         Me.DoubleBuffered = True
         Me.KeyPreview = True    ' ✅ 讓 Form 優先攔截 ESC，否則 ESC 會先被 TreeView/ListBox 等子控制項消耗
         Me.BringToFront()       ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
         Me.Show()
 
-        Cursor = Cursors.Default ' 視窗容器已顯示，但 Tab1 資料尚未載入完成，計時繼續跑，交給 SimTree1_AfterSelect 首次完成時停錶
-        PgrsBar1.Text = "正在載入..." ' 蓋掉 Designer 預設的 "ProgressBar1"，實際啟動秒數待 Tab1 完整顯示後才寫入
+        Cursor = Cursors.Default        ' 視窗容器已顯示，但 Tab1 資料尚未載入完成，計時繼續跑，交給 SimTree1_AfterSelect 首次完成時停錶
+        PgrsBar1.Text = "正在載入..."   ' 蓋掉 Designer 預設的 "ProgressBar1"，實際啟動秒數待 Tab1 完整顯示後才寫入
         PgrsBar2.Text = ""
         _dbg("結束")
 
@@ -204,16 +238,20 @@ Partial Class Form1
         ' KeyPreview=True 讓 Form 優先攔截 KeyDown，子控制項不會先吃掉 ESC
         If e.KeyCode = Keys.Escape Then
             ' 只有正在運算中才觸發中斷 (透過 WaitCursor 判定)
-            If Cursor = Cursors.WaitCursor OrElse PgrsBar1.Text.StartsWith("正在") Then
+            ' 2026/07/07 by Simon/Claude: 「運算中」判定全面 token 化 — 舊版靠 WaitCursor / PgrsBar1「正在」開頭猜測，
+            '   任何背景流程(如 timerSaveCache 自動存檔)中途改寫這兩個共享 UI 狀態就會讓 ESC 間歇性失效(難重現、重開就好)。
+            '   現在 OkayNowYouHaveToken(開始)/OkeyNowByeByeToken(結束) 完整標記作業生命週期，
+            '   「_cts IsNot Nothing」就是「運算進行中」的唯一真相來源，不再依賴共享 UI 狀態。
+            If _cts IsNot Nothing AndAlso Not _cts.IsCancellationRequested Then
                 '_cancelRequested = True    ' 2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標
                 ' ✅ 發送標準取消信號
-                If _cts IsNot Nothing AndAlso Not _cts.IsCancellationRequested Then _cts.Cancel()
+                _cts.Cancel()
                 Cursor = Cursors.Default : PgrsBar1.Text = "由使用者中斷。"
                 e.Handled = True
                 e.SuppressKeyPress = True ' ✅ 防止事件繼續傳遞觸發 Lv2_KeyPress 等回上一頁邏輯
             End If
 
-            ' 非運算中: 完全不設 _cancelRequested，不呼叫 _cts.Cancel()，直接放行。
+            ' 非運算中(_cts Is Nothing)或已按過一次 ESC(收尾中): 不重複 Cancel，直接放行。
             ' 讓 ListView/TreeView 等子控制項的原生 KeyDown/KeyPress 自己處理 ESC (例如 ListView2 返回年份視圖)。
             ' 2026/04/11 by Claude: 修正舊版非運算中按 ESC 仍呼叫 _cts.Cancel() 的 bug，會汙染 token，導致下一個操作取得的 cToken 已經是 cancelled 狀態。
         ElseIf e.KeyCode = Keys.F1 Then
@@ -613,9 +651,9 @@ Partial Class Form1
 
         ' ── Button3 樣式 ──
         Button3.FlatStyle = FlatStyle.System
-        Button3.FlatAppearance.BorderColor = ThemeColors.Brand_Blue
+        Button3.FlatAppearance.BorderColor = ThemeColors.BrandBlue
         Button3.FlatAppearance.MouseOverBackColor = ThemeColors.MercuryGray
-        Button3.ForeColor = ThemeColors.Brand_Blue
+        Button3.ForeColor = ThemeColors.BrandBlue
         Button3.BringToFront()
         CheckSubFolder3.BringToFront()
 
@@ -636,11 +674,11 @@ Partial Class Form1
                                          End If
                                      End Sub
         AddHandler CheckAttName.CheckedChanged, Sub()
-                                                       TextBox3.Enabled = CheckAttName.Checked
-                                                       If CheckAttName.Checked Then
-                                                           TextBox3.Focus() : TextBox3.SelectAll()
-                                                       End If
-                                                   End Sub
+                                                    TextBox3.Enabled = CheckAttName.Checked
+                                                    If CheckAttName.Checked Then
+                                                        TextBox3.Focus() : TextBox3.SelectAll()
+                                                    End If
+                                                End Sub
         AddHandler CheckAttCount.CheckedChanged, Sub()
                                                      CountMin.Enabled = CheckAttCount.Checked
                                                      CountMax.Enabled = CheckAttCount.Checked
@@ -735,9 +773,9 @@ Partial Class Form1
         ' 3. 右側：選項面板 + 列表
         ' 建立面板 (還原原始高度 80px)
         Dim layoutPanel4 = New Panel With {.Name = "layoutPanel4",
-                                         .Height = 80,
-                                         .Dock = DockStyle.Top,
-                                         .BackColor = ThemeColors.Gray95}
+                                           .Height = 80,
+                                           .Dock = DockStyle.Top,
+                                           .BackColor = ThemeColors.Gray95}
 
         ButtonDeleteMail.Parent = layoutPanel4
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
@@ -810,12 +848,6 @@ Partial Class Form1
         rbFuzzyMatch.Location = New Point(20, 45)
         rbFuzzyMatch.AutoSize = True
 
-        '' 設定 Label2 (搜尋模式顯示)
-        'Label2.Text = "搜尋模式:"
-        'Label2.Location = New Point(20, 0) ' 根據需求排好位置
-        'Label2.AutoSize = True
-        'Label2.Visible = True
-
         ' 設定 Button5 (開始掃描)
         Button5.Text = "開始掃描"
         Button5.Size = New Size(100, 60)
@@ -837,20 +869,27 @@ Partial Class Form1
         Dim lblFuzzyTier As New Label With {.Name = "lblFuzzyTier",
                                             .AutoSize = True,
                                             .Location = New Point(288, 80), ' TrackBar1(150,73 130x29) 右側、Button5 下方空區
-                                            .Visible = False}
+                                            .Enabled = False}
         AddHandler TrackBar1.ValueChanged, Sub()
-                                               Dim v As Integer = Math.Clamp(TrackBar1.Value, 1, 5)
-                                               lblFuzzyTier.Text = _fuzzyTierName(v) & " " & (GetFuzzyTargetT() * 100).ToString("0.##") & "%"
+                                               Dim value As Integer = Math.Clamp(TrackBar1.Value, 1, 5)
+                                               lblFuzzyTier.Text = _fuzzyTierName(value) & " " & (GetFuzzyTargetT() * 100).ToString("0.##") & "%"
                                            End Sub
         ' 初始顯示一次(預設 TrackBar1.Value=4 → 極高 98%)，否則啟動到第一次拖動前是空的
         lblFuzzyTier.Text = _fuzzyTierName(Math.Clamp(TrackBar1.Value, 1, 5)) & " " & (GetFuzzyTargetT() * 100).ToString("0.##") & "%"
 
-        AddHandler rbFuzzyMatch.CheckedChanged, Sub() CheckSubFolder5.Checked = Not rbFuzzyMatch.Checked
-        AddHandler rbFuzzyMatch.CheckedChanged, Sub() lblFuzzyTier.Visible = rbFuzzyMatch.Checked
-        AddHandler rbFuzzyMatch.CheckedChanged, Sub() TrackBar1.Visible = rbFuzzyMatch.Checked
+        ' 2026/07/07 by Simon/Claude: 平行線程數 UI(lblThreads/numThreads)，排在 lblFuzzyTier 右側空區，只在 Fuzzy 模式才顯示/啟用(Exact 模式不會跑平行 SimHash，故隱藏/停用)
+        ' 所有「跟著 Fuzzy 模式切換」的連動，整合進單一事件函式，避免散落各處
+        AddHandler rbFuzzyMatch.CheckedChanged, Sub()
+                                                    Dim isFuzzy As Boolean = rbFuzzyMatch.Checked
+                                                    CheckSubFolder5.Checked = Not isFuzzy
+                                                    lblFuzzyTier.Enabled = isFuzzy
+                                                    TrackBar1.Enabled = isFuzzy
+                                                    lblThreads.Enabled = isFuzzy
+                                                    numThreads.Enabled = isFuzzy
+                                                End Sub
 
         ' 3. 組裝右側面板
-        layoutPanel5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, TrackBar1, Button5, lblFuzzyTier})
+        layoutPanel5.Controls.AddRange({rbExactMatch, rbFuzzyMatch, CheckSubFolder5, TrackBar1, Button5, lblFuzzyTier, lblThreads, numThreads})
         CheckSubFolder5.BringToFront() ' ✅ by Gemini 3 Flash, 2026/05/05: 顯式移至最前，防止被遮擋
 
         ' 4. 將控制項掛載到 SplitContainer5 的正確 Panel 中
@@ -1025,6 +1064,18 @@ Partial Class Form1
         Return SmartThrottleCore(sw, onThrottled, cToken:=cToken)
 
     End Function
+    Private Sub OkeyNowByeByeToken(myToken As CancellationToken)
+        ' 2026/07/07 by Simon/Claude: OkayNowYouHaveToken 的對稱收尾 — 每個作業的 Finally 呼叫，歸還 token。
+        '   _cts 清為 Nothing 之後，「_cts IsNot Nothing」即成為「運算進行中」的唯一真相來源
+        '   (Form1_KeyDown 的 ESC 中斷與 timerSaveCache 的避讓共用此判定，取代舊的 WaitCursor/PgrsBar1 UI 狀態猜測)。
+        '   只在 _cts 仍屬於自己(Token 同源)時才清 — 若使用者已啟動下一個作業，_cts 已換新主人，不可誤清。
+        Try
+            If _cts IsNot Nothing AndAlso _cts.Token.Equals(myToken) Then
+                _cts.Dispose() : _cts = Nothing
+            End If
+        Catch
+        End Try
+    End Sub
     Private Async Function SmartThrottleCore(sw As Stopwatch, onThrottled As System.Action, cToken As CancellationToken) As Task
 
         onThrottled?.Invoke() : sw.Restart()
@@ -1256,9 +1307,7 @@ Partial Class Form1
         Dim backColor = If(isSelected, ThemeColors.AltoGray, If(isHovered, ThemeColors.MercuryGray, Color.White))
         Dim foreColor = Color.Black
 
-        Using brush = New SolidBrush(backColor)
-            e.Graphics.FillRectangle(brush, e.Bounds)
-        End Using
+        Using brush = New SolidBrush(backColor) : e.Graphics.FillRectangle(brush, e.Bounds) : End Using
 
         '' 開啟 GDI+ 的平滑抗鋸齒渲染，解決字體邊緣粗糙的問題
         'e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit
@@ -2186,6 +2235,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' ClearMemoryCachesCore — [記憶體層] 統一清理所有 ConcurrentDictionary
         ' ---------------------------------------------------------------
+        _dbg("開始", "清理所有快取")
         _cacheMailCount.Clear()
         _cacheMailCountAll.Clear()
         _cacheFolderCount.Clear()
@@ -2208,8 +2258,9 @@ Partial Class Form1
         ' 2026/07/03 by Simon/Claude Fable 5: 記憶體被整批清空，尚未存檔的 dirty 標記已無資料可寫，一併清除避免殘留幽靈標記
         _dirtyMailFolders.Clear()
         _cacheCleanSubject.Clear()  ' GetCleanSubject 的 memoization 快取，同批清理
-
+        _dbg("結束", "清理所有快取")
     End Sub
+
 #End Region
 
     Public Class ThemeColors
@@ -2223,11 +2274,11 @@ Partial Class Form1
         ''' <summary>輕微的格線或邊框色 (#E0E0E0)</summary>
         Public Shared ReadOnly AltoGray As Color = Color.FromArgb(224, 224, 224)
         ''' <summary>主視覺品牌藍色 (如按鈕、連結文字) (#0078D4)</summary>
-        Public Shared ReadOnly Brand_Blue As Color = Color.FromArgb(0, 120, 212)
+        Public Shared ReadOnly BrandBlue As Color = Color.FromArgb(0, 120, 212)
         ''' <summary>穩重的簡報藍色 (#4682B4)</summary>
-        Public Shared ReadOnly Steel_Blue As Color = Color.FromArgb(70, 130, 180)
+        Public Shared ReadOnly SteelBlue As Color = Color.FromArgb(70, 130, 180)
         ''' <summary>輕快的藍色 (#8DB3D3)</summary>
-        Public Shared ReadOnly Polo_Blue As Color = Color.FromArgb(141, 179, 211)
+        Public Shared ReadOnly PoloBlue As Color = Color.FromArgb(141, 179, 211)
         ''' <summary>深珊瑚紅 (#D83933)</summary>
         Public Shared ReadOnly CoralRed As Color = Color.FromArgb(216, 57, 51)
         ''' <summary>鐵鏽紅 (#A22C29)</summary>
@@ -2248,7 +2299,6 @@ Partial Class Form1
         ''' <summary>Chart2 平均線 琥珀 (#FFAA00)</summary>
         Public Shared ReadOnly avgLineColor As Color = Color.FromArgb(255, 170, 0)
     End Class
-
 #End Region
 
 End Class

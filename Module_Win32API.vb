@@ -1,5 +1,6 @@
 ﻿Imports System.Collections.Concurrent
 Imports System.Threading
+Imports Microsoft.Data.Sqlite
 Imports Microsoft.Office.Interop
 Imports Microsoft.Office.Interop.Outlook
 
@@ -78,18 +79,17 @@ Partial Class Form1
 
     ' === 2026/4/19, 用來改變windows計時器精度 ===
     <Runtime.InteropServices.DllImport("winmm.dll", EntryPoint:="timeBeginPeriod", SetLastError:=True)>
-    Private Shared Function TimeBeginPeriod(ByVal uPeriod As Integer) As Integer
+    Private Shared Function TimeBeginPeriod(
+        ByVal uPeriod As Integer) As Integer
     End Function
     <Runtime.InteropServices.DllImport("winmm.dll", EntryPoint:="timeEndPeriod", SetLastError:=True)>
-    Private Shared Function TimeEndPeriod(ByVal uPeriod As Integer) As Integer
+    Private Shared Function TimeEndPeriod(
+        ByVal uPeriod As Integer) As Integer
     End Function
 
     ' === 2026/07/03 by Simon/Claude Fable 5: EULA 自動關閉改用 SetWinEventHook 事件驅動 (取代純輪詢的 SW_HIDE 競速) ===
     '   OUTOFCONTEXT 不需 DLL injection，事件經由「安裝 hook 那條執行緒」的訊息佇列送達 (該執行緒必須有 message pump)
-    Private Delegate Sub WinEventDelegate(
-        hWinEventHook As IntPtr, eventType As UInteger, hwnd As IntPtr,
-        idObject As Integer, idChild As Integer,
-        dwEventThread As UInteger, dwmsEventTime As UInteger)
+    Private Delegate Sub WinEventDelegate(hWinEventHook As IntPtr, eventType As UInteger, hwnd As IntPtr, idObject As Integer, idChild As Integer, dwEventThread As UInteger, dwmsEventTime As UInteger)
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function SetWinEventHook(
         ByVal eventMin As UInteger,
@@ -110,7 +110,6 @@ Partial Class Form1
         ByVal lpClassName As System.Text.StringBuilder,
         ByVal nMaxCount As Integer) As Integer
     End Function
-
     ' === 2026/07/03 by Simon/Claude Fable 5: 專職 hook 執行緒的 message pump 用 ===
     '   OUTOFCONTEXT 事件送到「安裝 hook 那條執行緒」的訊息佇列；UI 執行緒被 New RDOSession 卡住時
     '   無法 pump，事件永遠送不到 → 必須開專職執行緒自己跑 GetMessage 迴圈
@@ -118,11 +117,9 @@ Partial Class Form1
     Private Structure NativeMsg
         Public hwnd As IntPtr
         Public message As UInteger
-        Public wParam As IntPtr
-        Public lParam As IntPtr
+        Public wParam, lParam As IntPtr
         Public time As UInteger
-        Public ptX As Integer
-        Public ptY As Integer
+        Public ptX, ptY As Integer
     End Structure
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function GetMessage(
@@ -472,16 +469,16 @@ Partial Class Form1
         ' ==========================================
         ' 2026/06/29 by Simon/Claude [Option A1]: GetSortedSubFolders 的「免物化」對稱孿生 —
         '   回直屬子夾的 (path,eid,sid) 純資料 tuple，給 Tab1 暖重啟 id-tuple BFS 用，全程零 COM Folder 物化。
-        '   ② DB 優先(DbGetOrderedSubFolderIDs，已含 entry_id IS NOT NULL [/is_mail=1] 過濾 + 英文優先排序)；
+        '   ② DB 優先(LazyGetOrderedSubFolderIDs，已含 entry_id IS NOT NULL [/is_mail=1] 過濾 + 英文優先排序)；
         '   ② 回 Nothing(DB 無此節點子夾) → ③ 退 GetFolderById 物化 parent 走 COM 列舉(保留身分證註冊副作用)。
         '   注意: 本函數不寫 _cacheFolderTree(那是物化版 List(Of Folder) 快取)；BFS 走 ② DB 已足夠快(~120ms/全樹)。
         ' 2026/06/30 by Simon/Claude [A1 修正]: 移除 ③ COM 物化退路。元兇釘死 —
-        '   DbGetOrderedSubFolderIDs 對「葉節點(無子夾)」與「DB缺漏」都回 Nothing,無法區分;
+        '   LazyGetOrderedSubFolderIDs 對「葉節點(無子夾)」與「DB缺漏」都回 Nothing,無法區分;
         '   原 ③ 對每個葉節點(佔樹大半)誤觸發 GetFolderById 物化(~2.8ms/夾),正是 S1 沒降的真因。
         '   暖重啟 DB 健康(R1 探針 46 夾全相符),葉節點回 Nothing 屬正常 → 回空清單。
         '   DB 真缺漏的半殘情境按 Q2 既定方針交 F5 強制刷新重建,不在此 graceful。
         ' 2026/07/01 by Simon/Claude: 重新加回 ③ COM 物化退路，改為有條件觸發，修復冷啟動(全新DB/無任何記錄)子樹展不開的 regression —
-        '   06/30 拿掉 ③ 的前提是「暖重啟、DB健康」，但完全空白的 DB 下，DbGetOrderedSubFolderIDs 對「真葉節點」與「DB根本沒掃過」同樣回 Nothing，
+        '   06/30 拿掉 ③ 的前提是「暖重啟、DB健康」，但完全空白的 DB 下，LazyGetOrderedSubFolderIDs 對「真葉節點」與「DB根本沒掃過」同樣回 Nothing，
         '   導致從 root 往下第一層就展不開，整棵子樹統計全部停在 0。
         '   修法: 呼叫端 BuildBfsFolderTree 多傳入 selfKnownToDb(此節點自己在記憶體/DB 是否已有記錄)；
         '   只有 selfKnownToDb=False(真正未知節點)才觸發 ③；
@@ -491,7 +488,7 @@ Partial Class Form1
 
         ' ② DB 直讀(免物化優先路徑)
         If _dbCache IsNot Nothing Then
-            Dim dbIDs = DbGetOrderedSubFolderIDs(fPath, _showAllFolders)
+            Dim dbIDs = LazyGetOrderedSubFolderIDs(fPath, _showAllFolders)
             If dbIDs IsNot Nothing Then
                 For Each row In dbIDs : result.Add((row.path, row.eid, row.sid)) : Next
                 Return result
@@ -1014,6 +1011,7 @@ Partial Class Form1
         End If
     End Sub
 
+
     ' 2026/06/22 by Simon/Claude Opus 4.8: IRM 保護信隔離夾名稱 (方案 Y: 每顆 PST 各建一個同名夾, 同 store 內搬)
     Private Const QUARANTINE_NAME As String = "_IRM_Protected"
     Private Async Function ScanAndMoveRpmsgRdo() As Task
@@ -1218,15 +1216,12 @@ Partial Class Form1
         Const N As Integer = 2000      ' 每 PST 每個 block 的冷讀信數(想要更穩可調 2000, 時間約翻倍)
         Const M As Integer = 4         ' 取幾個「夠大」的 PST 當標的(K=4 時每 worker 各 1 個)
         Const BLOCKS As Integer = 6    ' 2 workload × 3 K-config; 每 PST 需 >= BLOCKS*N 封冷信
-
         ' ── 1. 收集階段: 臨時一條 session 走訪, 挑 M 個有 >= BLOCKS*N 封的 PST, 各收 BLOCKS*N 個 EntryID ──
         '    (EntryID 是字串、跨 session 通用, 收一次給所有 worker 重用; RDOStore 物件不可跨 session 持有)
-
         ' ── 2. 對 2 種 workload × K=1/2/4 量測 ──
         Dim workloads = {"附件檔名", "內文"}
         Dim kConfigs = {1, 2, 4}
         Dim summary As New List(Of String)()
-
         _dbg("P3", "===== 量測結束, 摘要(看 K=2/4 吞吐相對 K=1 有沒有上去) =====")
         For Each s In summary : _dbg(" │摘要", s) : Next
         _dbg("P3", "===== 請把本段全部貼回 =====")
@@ -1244,7 +1239,6 @@ Partial Class Form1
         Dim profileName As String = ""
         Try : profileName = CStr(CallByName(_rdo, "ProfileName", CallType.Get)) : Catch : End Try
         _dbg("B", $"===== resolve 形式對照 (profile=[{profileName}], N={N}, 單執行緒) =====")
-
         _dbg("B", "===== 對照結束, 請貼回(三個附件數應一致才公平) =====")
     End Function      ' 2026/6/23, 修改P3, 開始比較獨立session 形式對效能的影響倍數, 與平行度效能吞吐量測試
     Private Async Function SpikeBodyResolveCompare() As Task
@@ -1262,9 +1256,7 @@ Partial Class Form1
         Dim profileName As String = ""
         Try : profileName = CStr(CallByName(_rdo, "ProfileName", CallType.Get)) : Catch : End Try
         _dbg("B內文", $"===== 內文 resolve 形式對照 (profile=[{profileName}], N={N}, 單執行緒/UI緒) =====")
-
     End Function      ' 驗證「內文讀取換獨立 session 效能與平行度效能吞吐量測試」
-
     ' 2026/06/23 by Simon/Claude: 探針 — 驗證獨立 session _rdo2 的 resolve 形式
     '   目的: 用 OOM 取得的 (EntryID, OOM StoreID, FolderPath) 在 _rdo2 上分別試三種
     '         resolve, 決定 production 該走「雙參數」還是「store-scoped」。

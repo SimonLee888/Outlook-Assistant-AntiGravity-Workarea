@@ -89,6 +89,8 @@ Partial Class Form1
         TabPage5 = New TabPage()
         SplitContainer5 = New SplitContainer()
         SimTree5 = New SimTree()
+        lblThreads = New Label()
+        numThreads = New NumericUpDown()
         TrackBar1 = New StepTrackBar()
         ListView5 = New ListView()
         ColumnHeader1 = New ColumnHeader()
@@ -158,6 +160,7 @@ Partial Class Form1
         SplitContainer5.Panel1.SuspendLayout()
         SplitContainer5.Panel2.SuspendLayout()
         SplitContainer5.SuspendLayout()
+        CType(numThreads, ComponentModel.ISupportInitialize).BeginInit()
         CType(TrackBar1, ComponentModel.ISupportInitialize).BeginInit()
         TabPage6.SuspendLayout()
         SettingGroup.SuspendLayout()
@@ -194,7 +197,7 @@ Partial Class Form1
         TabPage1.Padding = New Padding(4)
         TabPage1.Size = New Size(1054, 1278)
         TabPage1.TabIndex = 0
-        TabPage1.Text = "資料夾統計"
+        TabPage1.Text = "1. 資料夾統計"
         TabPage1.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer1
@@ -279,7 +282,7 @@ Partial Class Form1
         TabPage2.Padding = New Padding(4)
         TabPage2.Size = New Size(1054, 1278)
         TabPage2.TabIndex = 1
-        TabPage2.Text = "統計圖表"
+        TabPage2.Text = "2. 統計圖表"
         TabPage2.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer2
@@ -336,7 +339,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(687, 395)
+        ListView2.Size = New Size(716, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -371,7 +374,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(687, 857)
+        Chart2.Size = New Size(716, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -384,7 +387,7 @@ Partial Class Form1
         TabPage3.Padding = New Padding(4)
         TabPage3.Size = New Size(1054, 1278)
         TabPage3.TabIndex = 2
-        TabPage3.Text = "尋找附件檔案"
+        TabPage3.Text = "3. 尋找附件檔案"
         TabPage3.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer3
@@ -427,7 +430,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(556, 77)
+        CheckSubFolder3.Location = New Point(589, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -441,7 +444,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(562, 10)
+        Button3.Location = New Point(596, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -524,7 +527,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(687, 1133)
+        ListView3.Size = New Size(716, 1133)
         ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -594,7 +597,7 @@ Partial Class Form1
         CheckAttName.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         CheckAttName.Location = New Point(8, 28)
         CheckAttName.Margin = New Padding(4)
-        CheckAttName.Name = "CheckAttachName"
+        CheckAttName.Name = "CheckAttName"
         CheckAttName.Size = New Size(150, 25)
         CheckAttName.TabIndex = 12
         CheckAttName.Text = "附件名稱 (最慢)"
@@ -700,7 +703,7 @@ Partial Class Form1
         TabPage4.Padding = New Padding(4)
         TabPage4.Size = New Size(1054, 1278)
         TabPage4.TabIndex = 3
-        TabPage4.Text = "尋找系列郵件"
+        TabPage4.Text = "4. 尋找系列郵件"
         TabPage4.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer4
@@ -770,7 +773,7 @@ Partial Class Form1
         Listview4.Location = New Point(0, 111)
         Listview4.Margin = New Padding(4)
         Listview4.Name = "Listview4"
-        Listview4.Size = New Size(687, 1133)
+        Listview4.Size = New Size(716, 1133)
         Listview4.TabIndex = 13
         Listview4.UseCompatibleStateImageBehavior = False
         Listview4.View = View.Details
@@ -791,7 +794,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(575, 15)
+        ButtonDeleteMail.Location = New Point(566, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -803,7 +806,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(471, 15)
+        Button4.Location = New Point(462, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -820,7 +823,7 @@ Partial Class Form1
         TabPage5.Padding = New Padding(4)
         TabPage5.Size = New Size(1054, 1278)
         TabPage5.TabIndex = 4
-        TabPage5.Text = "尋找重複郵件"
+        TabPage5.Text = "5. 尋找重複郵件"
         TabPage5.UseVisualStyleBackColor = True
         ' 
         ' SplitContainer5
@@ -836,6 +839,8 @@ Partial Class Form1
         ' 
         ' SplitContainer5.Panel2
         ' 
+        SplitContainer5.Panel2.Controls.Add(lblThreads)
+        SplitContainer5.Panel2.Controls.Add(numThreads)
         SplitContainer5.Panel2.Controls.Add(TrackBar1)
         SplitContainer5.Panel2.Controls.Add(ListView5)
         SplitContainer5.Size = New Size(1046, 1270)
@@ -853,9 +858,35 @@ Partial Class Form1
         SimTree5.Size = New Size(317, 1270)
         SimTree5.TabIndex = 8
         ' 
+        ' lblThreads
+        ' 
+        lblThreads.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        lblThreads.AutoSize = True
+        lblThreads.Enabled = False
+        lblThreads.Location = New Point(590, 76)
+        lblThreads.Name = "lblThreads"
+        lblThreads.Size = New Size(61, 22)
+        lblThreads.TabIndex = 20
+        lblThreads.Text = "平行化"
+        ' 
+        ' numThreads
+        ' 
+        numThreads.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        numThreads.Enabled = False
+        numThreads.Increment = New Decimal(New Integer() {2, 0, 0, 0})
+        numThreads.Location = New Point(658, 73)
+        numThreads.Margin = New Padding(4)
+        numThreads.Maximum = New Decimal(New Integer() {12, 0, 0, 0})
+        numThreads.Name = "numThreads"
+        numThreads.Size = New Size(53, 29)
+        numThreads.TabIndex = 19
+        numThreads.TextAlign = HorizontalAlignment.Center
+        numThreads.Value = New Decimal(New Integer() {6, 0, 0, 0})
+        ' 
         ' TrackBar1
         ' 
         TrackBar1.AutoSize = False
+        TrackBar1.Enabled = False
         TrackBar1.Location = New Point(150, 73)
         TrackBar1.Maximum = 5
         TrackBar1.Minimum = 1
@@ -864,7 +895,6 @@ Partial Class Form1
         TrackBar1.TabIndex = 10
         TrackBar1.TickStyle = TickStyle.Both
         TrackBar1.Value = 4
-        TrackBar1.Visible = False
         ' 
         ' ListView5
         ' 
@@ -901,7 +931,7 @@ Partial Class Form1
         TabPage6.Padding = New Padding(4)
         TabPage6.Size = New Size(1054, 1278)
         TabPage6.TabIndex = 5
-        TabPage6.Text = "Setting"
+        TabPage6.Text = "6. Setting"
         TabPage6.UseVisualStyleBackColor = True
         ' 
         ' ListView6
@@ -1118,7 +1148,7 @@ Partial Class Form1
         TabPage7.Padding = New Padding(3)
         TabPage7.Size = New Size(1054, 1278)
         TabPage7.TabIndex = 6
-        TabPage7.Text = "OST 解析"
+        TabPage7.Text = "7. OST 解析"
         TabPage7.UseVisualStyleBackColor = True
         ' 
         ' LoadPST
@@ -1306,8 +1336,10 @@ Partial Class Form1
         TabPage5.ResumeLayout(False)
         SplitContainer5.Panel1.ResumeLayout(False)
         SplitContainer5.Panel2.ResumeLayout(False)
+        SplitContainer5.Panel2.PerformLayout()
         CType(SplitContainer5, ComponentModel.ISupportInitialize).EndInit()
         SplitContainer5.ResumeLayout(False)
+        CType(numThreads, ComponentModel.ISupportInitialize).EndInit()
         CType(TrackBar1, ComponentModel.ISupportInitialize).EndInit()
         TabPage6.ResumeLayout(False)
         SettingGroup.ResumeLayout(False)
@@ -1332,13 +1364,6 @@ Partial Class Form1
     Friend WithEvents ToolStripProgressBar1 As ToolStripStatusLabel
     Friend WithEvents StatusStrip1 As StatusStrip
 
-    'Friend WithEvents tmrPreCache As Timer
-    'Friend WithEvents Timer2 As Timer
-    'Friend WithEvents Timer3 As Timer
-    'Friend WithEvents BackgroundWorker1 As System.ComponentModel.BackgroundWorker
-    'Friend WithEvents BackgroundWorker2 As System.ComponentModel.BackgroundWorker
-    'Friend WithEvents BackgroundWorker3 As System.ComponentModel.BackgroundWorker
-
     Friend WithEvents TabPage1 As TabPage
     Friend WithEvents ListView1 As ListView
     Friend WithEvents ColumnHeader11 As ColumnHeader
@@ -1353,7 +1378,6 @@ Partial Class Form1
     Friend WithEvents ColumnHeader22 As ColumnHeader
     Friend WithEvents ColumnHeader23 As ColumnHeader
     Friend WithEvents CheckSubFolder2 As CheckBox
-    ' Friend WithEvents Label2 As Label
 
     Friend WithEvents TabPage3 As TabPage
     Friend WithEvents ListView3 As ListView
@@ -1430,5 +1454,7 @@ Partial Class Form1
     Friend WithEvents ColumnHeader42 As ColumnHeader
     Friend WithEvents chkClearSimHash As CheckBox
     Friend WithEvents TrackBar1 As StepTrackBar ' 改為 StepTrackBar，點擊滑軌只移一格。by Claude Sonnet 4.6, 2026/06/18
+    Friend WithEvents numThreads As NumericUpDown
+    Friend WithEvents lblThreads As Label
 
 End Class

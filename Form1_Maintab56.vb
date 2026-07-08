@@ -13,9 +13,28 @@ Partial Class Form1
     Private _tv5PrevSearchMode As Boolean = True                ' by Gemini 3 Flash, 2026/05/06: 記憶最後一次掃描的模式
     Private _lv5LastSortColumn As Integer = -1                  ' by Simon/Claude, 2026/05/10: Tab5 欄位排序狀態
     Private _lv5SortOrder As SortOrder = SortOrder.Ascending    ' by Simon/Claude, 2026/05/10: Tab5 欄位排序狀態
-
     Private _lv5PrevGroupResults As Dictionary(Of String, List(Of MailItemInfo)) = Nothing  ' by Gemini 3 Flash, 2026/05/06: 記憶 Tab5 掃描結果，供刪除後重新渲染使用
-    Private _lv5FuzzyScoreMap As Dictionary(Of String, Double) = Nothing                    ' 2026/06/17 by Simon/Claude Opus 4.8: Tab5 Fuzzy EntryID→對群代表的 body bigram Jaccard，供 RenderLv5Group 及排序/刪除重渲染查表顯示(不重讀 body)
+
+    Private _lv5FuzzyScoreMap As Dictionary(Of String, Double) = Nothing    ' 2026/06/17 by Simon/Claude Opus 4.8: Tab5 Fuzzy EntryID→對群代表的 body bigram Jaccard，供 RenderLv5Group 及排序/刪除重渲染查表顯示(不重讀 body)
+    ' 原有: Private Const MIN_BIGRAM_FOR_FUZZY As Integer = 5   ' 內文 bigram 少於此值(極短/空白信)不納入模糊比對，避免無意義的雜訊群
+    ' Q1-A 2026/06/18 by Simon/Claude Opus 4.8:
+    '   MIN_BIGRAM_FOR_FUZZY          : 由 5 提高至 16 (保守起點, 實測再調)。內文 distinct bigram 少於此值(極短/純符號牆 >>>/空白信) 整封不納入模糊比對。屬「逐封自身長度」下限，與 Q1-C 互補
+    '   MIN_SHARED_BIGRAM_FOR_FUZZY   : S5 最終閘門「共有內容量」下限 |A∩B|>=此值。Jaccard 比例對規模無感 (短信剛好全中→100% 但實質空洞)，另加交集絕對數把關。屬「逐對共有量」下限，與 Q1-A 互補
+    ' 改後:
+    '   Q1 連動滑桿 2026/06/18 by Simon/Claude Opus 4.8:
+    '       原 MIN_SHARED = MIN_BIGRAM*2 固定值，改為隨檔位連動(見下方 MinSharedBigramFor)。MIN_BIGRAM_FOR_FUZZY 由 16→25 作 1 倍基準(低檔)。
+    '       短信全中假陽性的成因是「共有量不足」，故連動打在共有量(C)上；S4 池子閘與 S5 最終閘共用 MinSharedBigramFor(targetT)，無死區(S4 只放進能過 S5 的信)。
+    '       基準 25 為保守起點，看 _dbg("S5閘門") yield 再微調。
+    ' 2026/6/19 by Simon/Claude Opus 4.8
+    ' MIN_BIGRAM_FOR_FUZZY 的閾值控制: 把過關結果裡 inter 最小的那幾群打開看——
+    '   如果 [25,50) 那段大多是「請查收附件謝謝」這種客套話 → 40，甚至可往 50 推
+    '   如果那段藏著不同來源的真同文（只是短）→ 退回 30。
+    Private Const MIN_BIGRAM_FOR_FUZZY As Integer = 45
+    ' 2026/06/17 by Simon/Claude Opus 4.8: Tab5 Fuzzy 相似度檔位表。TrackBar1.Value 1~5 → 低/中/高/極高/完全一致。
+    '   targetT 同時驅動 size 視窗(1/T)、Hamming 一階(HammingThresholdFor)、S5 最終 Jaccard 門檻(s >= targetT)，一個旋鈕全管。
+    Private Shared ReadOnly _fuzzyTierT As Double() = New Double() {0, 0.87, 0.92, 0.95, 0.98, 1}   ' index 0 佔位(trackbar 從 1 起)
+    Private Shared ReadOnly _fuzzyTierName As String() = New String() {"", "低", "中", "高", "極高", "完全一致"}
+    Private ReadOnly _dbWriteLock As New Object()               ' 平行版多 worker 共用 _dbMail 連線寫入時的互斥鎖 (SqliteConnection 非執行緒安全，不可多執行緒同時 BeginTransaction)
     Private Structure RefreshStats
         ' 2026/06/14 by Simon/Claude Opus 4.8: 一次刷新作業的統計，供狀態列回饋
         Dim Updated As Integer
@@ -30,7 +49,7 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         ' Bt5_Click — 掃描重複郵件 (Layer1，約 25 行)
         ' 2026/05/05 by Claude: 重構拆分
-        '   Layer2: ScanMailsToGroupDictAsync / RenderLv5Group
+        '   Layer2: ScanMailsToGroupDict / RenderLv5Group
         '   Helper: BuildMailGroupKey（含 Message-ID 主鍵 + Exact 容忍分桶）
         ' ---------------------------------------------------------------
         _dbg("開始")
@@ -55,17 +74,18 @@ Partial Class Form1
             ' 2026/06/17 by Simon/Claude Opus 4.8: Exact 維持原主鍵分桶；Fuzzy 改走 SimHash+bigram Jaccard 內文比對管線(S3→S6)
             Dim groupDict As Dictionary(Of String, List(Of MailItemInfo))
             If isExactMode Then
-                groupDict = Await ScanMailsToGroupDictAsync(folderList, True, progress5, cToken)
-                _lv5FuzzyScoreMap = Nothing                                                          ' Exact 不用 scoreMap
+                groupDict = Await ScanMailsToGroupDict(folderList, True, progress5, cToken)
+                _lv5FuzzyScoreMap = Nothing ' Exact 不用 scoreMap
             Else
-                ' 沿用 ScanMailsToGroupDictAsync 完成資料夾列舉 + L2.5 快取，攤平成全體郵件(主旨分桶鍵在 Fuzzy 不再使用)
-                Dim scanned = Await ScanMailsToGroupDictAsync(folderList, False, progress5, cToken)
+                ' 沿用 ScanMailsToGroupDict 完成資料夾列舉 + L2.5 快取，攤平成全體郵件(主旨分桶鍵在 Fuzzy 不再使用)
+                Dim scanned = Await ScanMailsToGroupDict(folderList, False, progress5, cToken)
                 Dim allMails = scanned.Values.SelectMany(Function(x) x).ToList()
-                Dim targetT As Double = GetFuzzyTargetT()                                           ' S8 改接trackbar控制項參數 (低/中/高/極高)
-                Await PreComputeFuzzySimHash(allMails, progress5, cToken)                      ' S3 build pass(暖快取跳過已算)
-                Dim cand = Await GenerateFuzzyCandidatePairs(allMails, targetT, cToken)             ' S4 size 視窗 + Hamming 一階
-                Dim filt = Await FilterCandidatesByJaccardAsync(cand, targetT, progress5, cToken)   ' S5 候選 body Jaccard 精算
-                Dim fuzzy = BuildFuzzyGroups(filt.Pairs, filt.Sets)                                 ' S6 union-find 分群 + scoreMap
+                Dim targetT As Double = GetFuzzyTargetT()                                       ' S8 改接trackbar控制項參數 (低/中/高/極高)
+                Dim thread_K As Integer = GetThreadCount()                                      ' 2026/07/07 by Simon/Claude: 讀 UI(numThread)一次，往下貫穿 S3/S4/S5 三處平行化
+                Await PreComputeSimHash(allMails, progress5, cToken, thread_K)                  ' S3 build pass(暖快取跳過已算)
+                Dim cand = Await PairFuzzyCandidates(allMails, targetT, thread_K, cToken)       ' S4 size 視窗 + Hamming 一階
+                Dim filt = Await FilterCandidates(cand, targetT, progress5, thread_K, cToken)   ' S5 候選 body Jaccard 精算
+                Dim fuzzy = BuildFuzzyGroups(filt.Pairs, filt.Sets)                             ' S6 union-find 分群 + scoreMap
                 _lv5FuzzyScoreMap = fuzzy.ScoreMap
                 groupDict = fuzzy.GroupDict
             End If
@@ -81,6 +101,7 @@ Partial Class Form1
         Catch ex As System.Exception
             MessageBox.Show("掃描重複郵件時發生錯誤: " & ex.Message, "錯誤") : _dbg("錯誤", ex.Message)
         Finally
+            OkeyNowByeByeToken(cToken)   ' 2026/07/07 by Simon/Claude: 歸還 token — 運算中判定 token 化(見 OkayNowYouHaveToken/OkeyNowByeByeToken)
             Button5.Enabled = True : Cursor = Cursors.Default : _dbg("結束")
         End Try
 
@@ -94,10 +115,10 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function ScanMailsToGroupDictAsync(folderList As List(Of (eid As String, sid As String, fPath As String)), isExact As Boolean, progress As IProgress(Of ProgressReport),   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
+    Private Async Function ScanMailsToGroupDict(folderList As List(Of (eid As String, sid As String, fPath As String)), isExact As Boolean, progress As IProgress(Of ProgressReport),   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
                                                      cToken As CancellationToken) As Task(Of Dictionary(Of String, List(Of MailItemInfo)))
         ' ---------------------------------------------------------------
-        ' ScanMailsToGroupDictAsync — 改用 GetMailInfo L2.5 快取（Tab4/Tab5 共用）
+        ' ScanMailsToGroupDict — 改用 GetMailInfo L2.5 快取（Tab4/Tab5 共用）
         ' 2026/05/06 by Claude: 原版直接 GetTable COM 掃描已移除，改走 L2.5 快取代理層
         '   ① 記憶體快取命中 → 0 COM call（Tab4 掃過即共享）
         '   ② SSD lazy load → 僅需 snapshot 驗證
@@ -353,58 +374,22 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Fuzzy 模糊比對專用區塊 (SimHash + bigram Jaccard)"
-    ' 原有: Private Const MIN_BIGRAM_FOR_FUZZY As Integer = 5   ' 內文 bigram 少於此值(極短/空白信)不納入模糊比對，避免無意義的雜訊群
-    ' Q1-A 2026/06/18 by Simon/Claude Opus 4.8:
-    '   MIN_BIGRAM_FOR_FUZZY          : 由 5 提高至 16 (保守起點, 實測再調)。內文 distinct bigram 少於此值(極短/純符號牆 >>>/空白信) 整封不納入模糊比對。屬「逐封自身長度」下限，與 Q1-C 互補
-    '   MIN_SHARED_BIGRAM_FOR_FUZZY   : S5 最終閘門「共有內容量」下限 |A∩B|>=此值。Jaccard 比例對規模無感 (短信剛好全中→100% 但實質空洞)，另加交集絕對數把關。屬「逐對共有量」下限，與 Q1-A 互補
-    ' Private Const MIN_BIGRAM_FOR_FUZZY As Integer = 16
-    ' Private Const MIN_SHARED_BIGRAM_FOR_FUZZY As Integer = MIN_BIGRAM_FOR_FUZZY * 2
-    ' 改後:
-    '   Q1 連動滑桿 2026/06/18 by Simon/Claude Opus 4.8:
-    '       原 MIN_SHARED = MIN_BIGRAM*2 固定值，改為隨檔位連動(見下方 MinSharedBigramFor)。MIN_BIGRAM_FOR_FUZZY 由 16→25 作 1 倍基準(低檔)。
-    '       短信全中假陽性的成因是「共有量不足」，故連動打在共有量(C)上；S4 池子閘與 S5 最終閘共用 MinSharedBigramFor(targetT)，無死區(S4 只放進能過 S5 的信)。
-    '       基準 25 為保守起點，看 _dbg("S5閘門") yield 再微調。
-    Private Const MIN_BIGRAM_FOR_FUZZY As Integer = 45
-    ' 2026/6/19 by Simon/Claude Opus 4.8
-    ' MIN_BIGRAM_FOR_FUZZY 的閾值控制: 把過關結果裡 inter 最小的那幾群打開看——
-    '   如果 [25,50) 那段大多是「請查收附件謝謝」這種客套話 → 40，甚至可往 50 推
-    '   如果那段藏著不同來源的真同文（只是短）→ 退回 30。
-
-    ' 2026/06/17 by Simon/Claude Opus 4.8: Tab5 Fuzzy 相似度檔位表。TrackBar1.Value 1~5 → 低/中/高/極高/完全一致。
-    '   targetT 同時驅動 size 視窗(1/T)、Hamming 一階(HammingThresholdFor)、S5 最終 Jaccard 門檻(s >= targetT)，一個旋鈕全管。
-    Private Shared ReadOnly _fuzzyTierT As Double() = New Double() {0, 0.87, 0.92, 0.95, 0.98, 1}   ' index 0 佔位(trackbar 從 1 起)
-    Private Shared ReadOnly _fuzzyTierName As String() = New String() {"", "低", "中", "高", "極高", "完全一致"}
-
-    ' 2026/07/03 by Simon/Claude [平行化SimHash]: PROBE_BODYPAR 實測值，Simon 可自行調整(過高可能撞 OST 檔鎖競爭，效率遞減)
-    Private Const SIMHASH_PARALLEL_K As Integer = 8     ' 2026/07/03 by Simon/Claude [平行線程可自行調整(過高可能撞 OST 檔鎖競爭，效率遞減)]: 實測值 K=4 效率99%, K=8 效率還有75% (跨 349 資料夾/205616 封母體樣本)
-    Private ReadOnly _dbMailWriteLock As New Object()   ' 平行版多 worker 共用 _dbMail 連線寫入時的互斥鎖(SqliteConnection 非執行緒安全，不可多執行緒同時 BeginTransaction)
-    Private Function SplitIntoChunks(Of T)(list As List(Of T), k As Integer) As List(Of List(Of T))
-        ' 把 list 切成 k 塊(連續切片, 最後一塊可能較短)。供平行版 SimHash 與 PROBE_BODYPAR 探針共用
-        Dim result As New List(Of List(Of T))(k)
-        Dim n As Integer = list.Count
-        Dim per As Integer = CInt(Math.Ceiling(n / CDbl(k)))
-        For i As Integer = 0 To k - 1
-            Dim startIdx As Integer = i * per
-            If startIdx >= n Then result.Add(New List(Of T)()) : Continue For
-            result.Add(list.GetRange(startIdx, Math.Min(per, n - startIdx)))
-        Next
-        Return result
-    End Function
-    Private Async Function PreComputeFuzzySimHash(mails As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+    Private Async Function PreComputeSimHash(mails As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken, thread_K As Integer) As Task
         ' 對「_cacheSimHash 沒有的」郵件讀 body 算 simhash+bigram_count，寫回獨立 db 與記憶體快取。已算過的(暖快取)直接跳過。
-        ' 2026/07/03 by Simon/Claude [平行化SimHash]: PROBE_BODYPAR 實測(跨349資料夾/205616封母體樣本) K=8 平行讀 body 效率75%，
+        ' 2026/07/03 by Simon/Claude [平行化SimHash]: PROBE_BODYPAR 實測(跨349資料夾/205616封母體樣本) numThread=8 平行讀 body 效率75%，
         '   35萬封估4.3分鐘(對比單執行緒約25分鐘)。_rdo2 在且 Outlook session 就緒時走平行版；否則(未勾CheckRDO)退回序列版。
+        ' 2026/07/07 by Simon/Claude: numThread 改由呼叫端傳入(來源 numThread UI)，取代原本硬編碼的 SIMHASH_PARALLEL_K。
         LoadDbMail()
         Dim todo = mails.Where(Function(m) Not _cacheSimHash.ContainsKey(m.EntryID)).ToList()
         If todo.Count = 0 Then Return
 
         If _rdo2 IsNot Nothing AndAlso _olNS IsNot Nothing Then
-            Await PreComputeFuzzySimHashParallel(todo, progress, cToken)
+            Await PreComputeSimHashParallel(todo, progress, thread_K, cToken)
         Else
-            Await PreComputeFuzzySimHashSerial(todo, progress, cToken)
+            Await PreComputeSimHashSerial(todo, progress, cToken)
         End If
     End Function
-    Private Async Function PreComputeFuzzySimHashSerial(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+    Private Async Function PreComputeSimHashSerial(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
         ' 序列版(原實作)：未勾 CheckRDO 或 Outlook session 未就緒時的 fallback。走 L2.5 GetMailBody(內建 RDO/OOM 分派)。
         Dim totalBodyChars As Long = 0
         ' 2026/06/25 by Gemini 3.1 Pro: 將 Batch Size 提升至 3000，大幅降低磁碟寫入次數與 I/O 停頓
@@ -436,14 +421,14 @@ Partial Class Form1
 
         If batch.Count > 0 Then SaveDbMail(batch)
     End Function
-    Private Async Function PreComputeFuzzySimHashParallel(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+    Private Async Function PreComputeSimHashParallel(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) As Task
         ' 平行版：每個 worker 在自己的 ThreadPool 執行緒內自建/自用/自 Logoff 一個獨立 RDOSession(不碰共用 _rdo2/UI 緒)，
         '   對齊 PROBE_BODYPAR 探針驗證過、確實能拿到平行加速的用法(memory_20260622_1846 §八: OOM 物件才必須留 UI 緒, RDO 獨立 session 可背景跑)。
         '   RDO 解析失敗的少數信(探針觀察約0.3%)收進回傳清單，等全部 worker 結束、續回本協調函數(繼承呼叫端的 UI 緒 SynchronizationContext)後，
         '   才用既有 GetMailBody(內建OOM fallback)逐封補算——OOM COM 物件只能在 UI 緒操作，背景 worker 絕不可呼叫 OOM。
         Dim profileName As String = _olNS.CurrentProfileName
-        Dim k As Integer = Math.Min(SIMHASH_PARALLEL_K, Math.Max(1, todo.Count))
-        Dim chunks = SplitIntoChunks(todo, k)
+        Dim numThread As Integer = Math.Min(thread_K, Math.Max(1, todo.Count))   ' 2026/07/07 by Simon/Claude: numThread 改用 numThread(來自 UI)，取代 SIMHASH_PARALLEL_K
+        Dim chunks = SplitIntoChunks(todo, numThread)
 
         Dim swEta As Stopwatch = Stopwatch.StartNew()
         Dim processedCounter(0) As Integer     ' 單元素陣列：worker 們用 Interlocked 共用累加同一儲存格
@@ -452,14 +437,14 @@ Partial Class Form1
         Dim totalCount As Integer = todo.Count
 
         Dim tasks As New List(Of Task(Of List(Of MailItemInfo)))()
-        For w As Integer = 0 To k - 1
+        For w As Integer = 0 To numThread - 1
             Dim idx As Integer = w
-            tasks.Add(Task.Run(Function() SimHashParallelWorker(profileName, chunks(idx), cToken, processedCounter, totalCount, swEta, lastReportMs, reportGate, progress)))
+            tasks.Add(Task.Run(Function() SimHashParallelWorker(profileName, chunks(idx), processedCounter, totalCount, swEta, lastReportMs, reportGate, progress, numThread, cToken)))
         Next
         Dim rdoFailedLists = Await Task.WhenAll(tasks)
         Dim rdoFailed = rdoFailedLists.SelectMany(Function(x) x).ToList()
 
-        _dbg("[SimHash]", $"平行版(K={k}) 完成 {todo.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
+        _dbg("[SimHash]", $"平行化(K={numThread}) 完成 {todo.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
 
         ' RDO 解析失敗的少數信，回到 UI 緒用既有 GetMailBody(內建OOM fallback) 逐封補算
         If rdoFailed.Count > 0 Then
@@ -475,9 +460,8 @@ Partial Class Form1
             SaveDbMail(fallbackBatch)
         End If
     End Function
-    Private Function SimHashParallelWorker(profileName As String, subset As List(Of MailItemInfo), cToken As CancellationToken,
-                                            processedCounter As Integer(), totalCount As Integer, swEta As Stopwatch,
-                                            lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport)) As List(Of MailItemInfo)
+    Private Function SimHashParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer, swEta As Stopwatch,
+                                           lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) As List(Of MailItemInfo)
         ' 平行版 worker：自建獨立 session 掃 subset 算 simhash，寫入 _cacheSimHash(ConcurrentDictionary,執行緒安全)與 _dbMail(自帶鎖)。
         '   RDO 解析失敗(store找不到/GetMessageFromID失敗/.Body失敗)的信收進回傳清單，交還協調函數做OOM補算(worker背景緒不可碰OOM)。
         Dim rdoFailed As New List(Of MailItemInfo)()
@@ -520,7 +504,7 @@ Partial Class Form1
                     _cacheSimHash(m.EntryID) = (sh, setB.Count)
                     batch.Add((m.EntryID, sh, setB.Count))
                     If batch.Count >= 1000 Then
-                        SyncLock _dbMailWriteLock : SaveDbMail(batch) : End SyncLock
+                        SyncLock _dbWriteLock : SaveDbMail(batch) : End SyncLock
                         batch.Clear()
                     End If
                 End If
@@ -533,7 +517,7 @@ Partial Class Form1
                             If nowMs - lastReportMs(0) >= ThrottleFreq.Mid Then   ' 進鎖後再驗一次，避免重複回報(雙重檢查)
                                 lastReportMs(0) = nowMs
                                 Dim eta = CalculateSpeedAndETA(totalCount, done, swEta.Elapsed.TotalSeconds)
-                                progress?.Report(New ProgressReport With {.Message = $"計算內文指紋(平行K): {done}/{totalCount} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                                progress?.Report(New ProgressReport With {.Message = $"計算內文指紋(平行化(K={thread_K}): {done}/{totalCount} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
                             End If
                         Finally
                             Monitor.Exit(reportGate)
@@ -541,7 +525,7 @@ Partial Class Form1
                     End If
                 End If
             Next
-            If batch.Count > 0 Then SyncLock _dbMailWriteLock : SaveDbMail(batch) : End SyncLock
+            If batch.Count > 0 Then SyncLock _dbWriteLock : SaveDbMail(batch) : End SyncLock
             Return rdoFailed
         Finally
             For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
@@ -551,49 +535,201 @@ Partial Class Form1
             End If
         End Try
     End Function
+    Private Function MailBodyParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer, dbHitCount As Integer, swEta As Stopwatch,
+                                            lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
+                                            As (Sets As Dictionary(Of String, HashSet(Of Integer)), RdoFailed As List(Of MailItemInfo))
+        ' 2026/07/08 by Simon/Claude: S5-1b 平行版 worker — 對齊 SimHashParallelWorker(S3)的手法：
+        '   自建獨立 RDOSession(不碰共用 _rdo2/UI 緒)，逐封讀 body → 正規化 → 建 bigram 集合(不算 simhash，S5 只需要集合)。
+        '   RDO 解析失敗的少數信收進回傳清單，交還協調函數用既有 GetMailBody(內建OOM fallback)逐封補算——OOM COM 物件只能在 UI 緒操作。
+        Dim localSets As New Dictionary(Of String, HashSet(Of Integer))(subset.Count)
+        Dim rdoFailed As New List(Of MailItemInfo)()
+        Dim session As Redemption.RDOSession = Nothing
+        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
+        Try
+            Try
+                session = New Redemption.RDOSession()
+                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
+            Catch ex As System.Exception
+                _dbg("FuzzyBodyParallelWorker Logon失敗", ex.Message)
+                Return (localSets, subset)   ' 這個 worker 的整批信全部交還協調函數用 OOM 補算
+            End Try
 
-    Private Async Function FilterCandidatesByJaccardAsync(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
-            As Task(Of (Pairs As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), Sets As Dictionary(Of String, HashSet(Of Integer))))
+            storeByName = BuildRdoStoreByNameDict(session)
+
+            For i As Integer = 0 To subset.Count - 1
+                If (i And 127) = 0 Then cToken.ThrowIfCancellationRequested()
+                Dim m As MailItemInfo = subset(i)
+                Dim store As Redemption.RDOStore = Nothing
+                Dim body As String = Nothing
+                If storeByName.TryGetValue(GetStoreNameFromPath(m.FolderPath), store) Then
+                    Dim rm As Redemption.RDOMail = Nothing
+                    Try
+                        Try : rm = TryCast(store.GetMessageFromID(m.EntryID), Redemption.RDOMail) : Catch : End Try
+                        If rm IsNot Nothing Then Try : body = rm.Body : Catch : End Try
+                    Finally
+                        Dim o As Object = rm : TryMarshalRelease(o)
+                    End Try
+                End If
+
+                If body Is Nothing Then
+                    rdoFailed.Add(m)
+                Else
+                    ' 同 S3 SimHashParallelWorker: 集合必須用正規化 body 建 — 序列版(GetMailBodyRdo)與 OOM 補算路徑都先過 NormalizeMailBody,
+                    '   worker 若拿生 rm.Body 建,同一封信兩路徑集合不一致,且會永久污染 bigram_set BLOB(Regex 為 Shared 預編譯實例,跨緒安全)
+                    localSets(m.EntryID) = BuildBigramSet(NormalizeMailBody(body))
+                End If
+
+                Dim done As Integer = Interlocked.Increment(processedCounter(0))
+                If (done And 63) = 0 Then
+                    Dim nowMs As Long = swEta.ElapsedMilliseconds
+                    If nowMs - Interlocked.Read(lastReportMs(0)) >= ThrottleFreq.Mid AndAlso Monitor.TryEnter(reportGate) Then
+                        Try
+                            If nowMs - lastReportMs(0) >= ThrottleFreq.Mid Then   ' 進鎖後再驗一次，避免重複回報(雙重檢查)
+                                lastReportMs(0) = nowMs
+                                Dim eta = CalculateSpeedAndETA(totalCount, done, swEta.Elapsed.TotalSeconds)
+                                progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文(平行K={thread_K}): {done}/{totalCount} (DB命中 {dbHitCount:N0}) ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                            End If
+                        Finally
+                            Monitor.Exit(reportGate)
+                        End Try
+                    End If
+                End If
+            Next
+            Return (localSets, rdoFailed)
+        Finally
+            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
+            If session IsNot Nothing Then
+                Try : session.Logoff() : Catch : End Try
+                Dim so As Object = session : TryMarshalRelease(so)
+            End If
+        End Try
+    End Function
+    Private Async Function FilterCandidates(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
+                                            As Task(Of (Pairs As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), Sets As Dictionary(Of String, HashSet(Of Integer))))
+
         ' 只對通過 S4 的少數候選讀 body、建 bigram 集合、算精確 bigram Jaccard。集合回傳給 S6 算群代表分數，免重讀。
         Dim sets As New Dictionary(Of String, HashSet(Of Integer))()
+
         ' 2026/07/05 by Simon/Claude: 去重改保留整個 MailItemInfo(原本只留 EntryID) — GetMailBody 不帶 folderPath 會落 OOM 慢路徑,帶上才走 RDO 快路徑
-        Dim uniqueMails = candidates.SelectMany(Function(p) New MailItemInfo() {p.A, p.B}).
-            GroupBy(Function(m) m.EntryID).Select(Function(g) g.First()).ToList()
+        Dim uniqueMails = candidates.SelectMany(Function(p) New MailItemInfo() {p.A, p.B}).GroupBy(Function(m) m.EntryID).Select(Function(g) g.First()).ToList()
 
-        ' Phase1: 候選 body 讀取(COM, UI 執行緒, 少量) → bigram 集合。這裡走 GetMailBody(會快取這少數幾封)
-        Dim swEta As Stopwatch = Stopwatch.StartNew()  ' 2026/06/17 by Simon/Claude: 供進度速度與 ETA 計算
-        For k As Integer = 0 To uniqueMails.Count - 1
-            cToken.ThrowIfCancellationRequested()
-            Dim m = uniqueMails(k)
-            If Not sets.ContainsKey(m.EntryID) Then sets(m.EntryID) = BuildBigramSet(GetMailBody(m.EntryID, m.FolderPath))
-            If (k And 15) = 0 Then
-                ' 2026/06/17 by Simon/Claude: 加入速度與 ETA 顯示，對齊 Tab3/Tab4 做法
-                Dim eta = CalculateSpeedAndETA(uniqueMails.Count, k + 1, swEta.Elapsed.TotalSeconds)
-                progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文: {k + 1}/{uniqueMails.Count} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
-                Await Task.Delay(1, cToken)
+        ' Phase1a: 先從 mail_simhash.bigram_set 整批載回已存的候選集合(核心版 BLOB 快取, 純 SQLite+CPU → 背景執行緒)
+        ' 2026/07/07 by Simon/Claude: 只有進過 S5 的候選才有 BLOB(見 SaveDbMailSets), 是「最可能相似配對」的核心族群。
+        '   實測全庫平均每封 set 僅 ~2.4KB, 數萬候選反序列化約 1~2 秒, 取代原本 20~50 秒的 RDO 重讀(22k/20s, 53k/50s)。
+        progress?.Report(New ProgressReport With {.Message = $"載入候選指紋集合: {uniqueMails.Count:N0} 封 (DB)..."})
+        Dim idList = uniqueMails.Select(Function(m) m.EntryID).ToList()
+        Dim dbSets = Await Task.Run(Function()
+                                        SyncLock _dbWriteLock
+                                            Return LoadDbMailSets(idList)
+                                        End SyncLock
+                                    End Function, cToken)
+        For Each kv In dbSets : sets(kv.Key) = kv.Value : Next
+
+        ' Phase1b: DB 沒有的才讀 body → 建集合。
+        ' 2026/07/08 by Simon/Claude: 原本序列版單線 GetMailBody 派工實測約 500 封/秒(大量首見候選時要等好幾分鐘)。
+        '   比照 S3 PreComputeSimHashParallel 的多 RDOSession worker 手法接上 numThread：_rdo2 在且 Outlook
+        '   session 就緒時走平行版；否則(未勾 CheckRDO)退回序列版 GetMailBody(內建 RDO/OOM 分派，會快取這少數幾封)。
+        Dim missing = uniqueMails.Where(Function(m) Not sets.ContainsKey(m.EntryID)).ToList()
+        Dim newRows As New List(Of (EntryID As String, SetBytes As Byte()))(missing.Count)
+
+        If missing.Count > 0 AndAlso _rdo2 IsNot Nothing AndAlso _olNS IsNot Nothing Then
+            Dim profileName As String = _olNS.CurrentProfileName
+            Dim wK As Integer = Math.Min(thread_K, Math.Max(1, missing.Count))
+            Dim chunks = SplitIntoChunks(missing, wK)
+            Dim swEta As Stopwatch = Stopwatch.StartNew()
+            Dim processedCounter(0) As Integer
+            Dim lastReportMs(0) As Long
+            Dim reportGate As New Object()
+            Dim dbHitCount As Integer = dbSets.Count
+
+            Dim tasks As New List(Of Task(Of (Sets As Dictionary(Of String, HashSet(Of Integer)), RdoFailed As List(Of MailItemInfo))))()
+            For w As Integer = 0 To wK - 1
+                Dim idx As Integer = w
+                tasks.Add(Task.Run(Function() MailBodyParallelWorker(profileName, chunks(idx), processedCounter, missing.Count, dbHitCount, swEta, lastReportMs, reportGate, progress, wK, cToken)))
+            Next
+            Dim results = Await Task.WhenAll(tasks)
+
+            Dim rdoFailed As New List(Of MailItemInfo)()
+            For Each r In results
+                For Each kv In r.Sets
+                    sets(kv.Key) = kv.Value
+                    newRows.Add((kv.Key, BigramSetToBytes(kv.Value)))
+                Next
+                rdoFailed.AddRange(r.RdoFailed)
+            Next
+            _dbg("[Fuzzy]", $"S5-1b 平行(K={wK}) 完成 {missing.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
+
+            ' RDO 解析失敗的少數信，回到 UI 緒用既有 GetMailBody(內建OOM fallback) 逐封補算——OOM COM 物件只能在 UI 緒操作
+            If rdoFailed.Count > 0 Then
+                For Each m In rdoFailed
+                    cToken.ThrowIfCancellationRequested()
+                    Dim setB = BuildBigramSet(GetMailBody(m.EntryID, m.FolderPath))
+                    sets(m.EntryID) = setB
+                    newRows.Add((m.EntryID, BigramSetToBytes(setB)))
+                Next
             End If
-        Next
+        ElseIf missing.Count > 0 Then
+            ' 序列版 fallback(原實作)：未勾 CheckRDO 或 Outlook session 未就緒時使用。走 L2.5 GetMailBody(會快取這少數幾封)
+            Dim swEta As Stopwatch = Stopwatch.StartNew()  ' 2026/06/17 by Simon/Claude: 供進度速度與 ETA 計算
+            For k As Integer = 0 To missing.Count - 1
+                cToken.ThrowIfCancellationRequested()
+                Dim m = missing(k)
+                Dim setB = BuildBigramSet(GetMailBody(m.EntryID, m.FolderPath))
+                sets(m.EntryID) = setB
+                newRows.Add((m.EntryID, BigramSetToBytes(setB)))   ' 2026/07/07: 收集待回寫 BLOB
+                If (k And 15) = 0 Then
+                    ' 2026/06/17 by Simon/Claude: 加入速度與 ETA 顯示，對齊 Tab3/Tab4 做法
+                    Dim eta = CalculateSpeedAndETA(missing.Count, k + 1, swEta.Elapsed.TotalSeconds)
+                    progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文: {k + 1}/{missing.Count} (DB命中 {dbSets.Count:N0}) ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                    Await Task.Delay(1, cToken)
+                End If
+            Next
+        End If
 
-        ' Phase2: Jaccard 精算(純 CPU)。候選少，序列即可；日後量大可改 Parallel.For(對齊 Tab4)
+        ' Phase1c: 新算的集合批次回寫 DB, 下次冷搜尋這批候選直接走 Phase1a 免讀 body
+        If newRows.Count > 0 Then
+            progress?.Report(New ProgressReport With {.Message = $"回寫候選指紋集合: {newRows.Count:N0} 封 (DB)..."})
+            Await Task.Run(Sub()
+                               SyncLock _dbWriteLock
+                                   SaveDbMailSets(newRows)
+                               End SyncLock
+                           End Sub, cToken)
+        End If
+
+        ' Phase2: Jaccard 精算(純 CPU)。
+        ' 2026/07/07 by Simon/Claude: 「日後量大可改 Parallel.For」的日後到了 — 實測 95.8 萬對單線 2.56s，改平行。
+        '   sets 字典此階段唯讀(Dictionary 並行讀取安全)；worker 收 (Idx, 結果) 合併後依 Idx 排序，輸出順序與單線版一致。
+        '   MaxDegreeOfParallelism 改接 numThread(UI)，與 S3/S4 共用同一顆旋鈕。
         Dim minShared As Integer = MinSharedBigramFor(targetT)   ' Q1 連動 2026/06/18 by Simon/Claude: S5 共有量下限改用檔位值
         Dim pairs = Await Task.Run(
             Function() As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double))
-                Dim r As New List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double))()
-                For Each p In candidates
-                    ' Q1-C 2026/06/18 by Simon/Claude Opus 4.8: 先取交集絕對數，不足門檻直接淘汰(擋短信比例 100% 假陽性)；達標再由 inter 導出 Jaccard，免重算交集
-                    Dim setA = sets(p.A.EntryID), setB = sets(p.B.EntryID)
-                    Dim inter As Integer = BigramIntersectionCount(setA, setB)
-                    If inter < minShared Then Continue For
+                Dim collected As New List(Of (Idx As Integer, A As MailItemInfo, B As MailItemInfo, Score As Double))()
+                Dim mergeLock As New Object()
+                Dim po As New ParallelOptions With {.CancellationToken = cToken, .MaxDegreeOfParallelism = thread_K}
+                Parallel.For(0, candidates.Count, po,
+                    Function() New List(Of (Idx As Integer, A As MailItemInfo, B As MailItemInfo, Score As Double))(),
+                    Function(k As Integer, state As ParallelLoopState, local As List(Of (Idx As Integer, A As MailItemInfo, B As MailItemInfo, Score As Double)))
+                        Dim p = candidates(k)
+                        ' Q1-C 2026/06/18 by Simon/Claude Opus 4.8: 先取交集絕對數，不足門檻直接淘汰(擋短信比例 100% 假陽性)；達標再由 inter 導出 Jaccard，免重算交集
+                        Dim setA = sets(p.A.EntryID), setB = sets(p.B.EntryID)
+                        Dim inter As Integer = BigramIntersectionCount(setA, setB)
+                        If inter >= minShared Then
+                            Dim union As Integer = setA.Count + setB.Count - inter
+                            Dim s As Double = If(union = 0, 0.0, inter / union)   ' size 1/T 界線 S4 已保證，此處不重複早退
+                            If s >= targetT Then local.Add((k, p.A, p.B, s))
+                        End If
+                        Return local
+                    End Function,
+                    Sub(local)
+                        SyncLock mergeLock : collected.AddRange(local) : End SyncLock
+                    End Sub)
 
-                    Dim union As Integer = setA.Count + setB.Count - inter
-                    Dim s As Double = If(union = 0, 0.0, inter / union)   ' size 1/T 界線 S4 已保證，此處不重複早退
-                    If s >= targetT Then r.Add((p.A, p.B, s))
-                Next
-                Return r
+                collected.Sort(Function(x, y) x.Idx.CompareTo(y.Idx))
+                Return collected.Select(Function(x) (x.A, x.B, x.Score)).ToList()
             End Function, cToken)
         Return (pairs, sets)
     End Function
-    Private Async Function GenerateFuzzyCandidatePairs(mails As List(Of MailItemInfo), targetT As Double, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
+    Private Async Function PairFuzzyCandidates(mails As List(Of MailItemInfo), targetT As Double, thread_K As Integer, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
         ' size 1/T 滑動視窗收斂 O(n²) + Hamming 一階篩。純 CPU、無 COM → 放 Task.Run 不凍 UI。
         Dim hThr As Integer = HammingThresholdFor(targetT)
         Dim maxRatio As Double = 1.0 / targetT
@@ -602,24 +738,38 @@ Partial Class Form1
         Return Await Task.Run(
             Function() As List(Of (A As MailItemInfo, B As MailItemInfo))
                 ' 取出有指紋且 bigram 數達標者，依 bigram_count 升冪排序(作為 size 視窗的排序鍵)
-                Dim items = mails.
-                    Where(Function(m) _cacheSimHash.ContainsKey(m.EntryID) AndAlso _cacheSimHash(m.EntryID).BigramCount >= minBigram).
-                    Select(Function(m) (Mail:=m, SH:=_cacheSimHash(m.EntryID).SimHash, Cnt:=_cacheSimHash(m.EntryID).BigramCount)).
-                    OrderBy(Function(x) x.Cnt).ToList()
+                Dim items = mails.Where(Function(m) _cacheSimHash.ContainsKey(m.EntryID) AndAlso _cacheSimHash(m.EntryID).BigramCount >= minBigram).
+                                  Select(Function(m) (Mail:=m, SH:=_cacheSimHash(m.EntryID).SimHash, Cnt:=_cacheSimHash(m.EntryID).BigramCount)).
+                                  OrderBy(Function(x) x.Cnt).ToList()
 
-                Dim result As New List(Of (A As MailItemInfo, B As MailItemInfo))()
-                For i As Integer = 0 To items.Count - 1
-                    If (i And 1023) = 0 Then cToken.ThrowIfCancellationRequested()
-                    For j As Integer = i + 1 To items.Count - 1
-                        If items(j).Cnt > items(i).Cnt * maxRatio Then Exit For   ' size 1/T 上界：升冪→超界後 j 全部出局，收尾視窗
-                        If GetHammingDistance(items(i).SH, items(j).SH) <= hThr Then result.Add((items(i).Mail, items(j).Mail))
-                    Next
-                Next
+                ' 2026/07/07 by Simon/Claude: 外圈 Parallel.For 平行化 — 實測 178k 指紋/95.8萬對時單線 6.8~7.1s，是暖跑最大頭。
+                '   純 CPU 零共享：worker 各自收 (i,j) 索引對(值型別)，合併後依 (i,j) 排序再物化，
+                '   輸出順序與舊單線版完全一致(下游 union-find 群編號維持決定性)。
+                '   取消改由 ParallelOptions.CancellationToken 負責(取代舊的 (i And 1023) 手動檢查)。
+                '   MaxDegreeOfParallelism 改接 numThread(UI)，與 S3/S5-2 共用同一顆旋鈕。
+                Dim pairsIdx As New List(Of (I As Integer, J As Integer))()
+                Dim mergeLock As New Object()
+                Dim po As New ParallelOptions With {.CancellationToken = cToken, .MaxDegreeOfParallelism = thread_K}
+                Parallel.For(0, items.Count, po,
+                    Function() New List(Of (I As Integer, J As Integer))(),
+                    Function(i As Integer, state As ParallelLoopState, local As List(Of (I As Integer, J As Integer)))
+                        For j As Integer = i + 1 To items.Count - 1
+                            If items(j).Cnt > items(i).Cnt * maxRatio Then Exit For   ' size 1/T 上界：升冪→超界後 j 全部出局，收尾視窗
+                            If GetHammingDistance(items(i).SH, items(j).SH) <= hThr Then local.Add((i, j))
+                        Next
+                        Return local
+                    End Function,
+                    Sub(local)
+                        SyncLock mergeLock : pairsIdx.AddRange(local) : End SyncLock
+                    End Sub)
+
+                pairsIdx.Sort(Function(a, b) If(a.I <> b.I, a.I.CompareTo(b.I), a.J.CompareTo(b.J)))
+                Dim result As New List(Of (A As MailItemInfo, B As MailItemInfo))(pairsIdx.Count)
+                For Each p In pairsIdx : result.Add((items(p.I).Mail, items(p.J).Mail)) : Next
                 Return result
             End Function, cToken)
     End Function
-    Private Function BuildFuzzyGroups(similar As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), sets As Dictionary(Of String, HashSet(Of Integer))) _
-            As (GroupDict As Dictionary(Of String, List(Of MailItemInfo)), ScoreMap As Dictionary(Of String, Double))
+    Private Function BuildFuzzyGroups(similar As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), sets As Dictionary(Of String, HashSet(Of Integer))) As (GroupDict As Dictionary(Of String, List(Of MailItemInfo)), ScoreMap As Dictionary(Of String, Double))
         ' 通過 Jaccard 門檻的配對 → union-find 連通分量 → G1,G2…；每群選 bigram_count 最大者為代表，每封顯示「對代表的 bigram Jaccard %」。
         Dim parent As New Dictionary(Of String, String)()
         Dim mailById As New Dictionary(Of String, MailItemInfo)()
@@ -736,13 +886,15 @@ Partial Class Form1
 
     ' 輔助函數
     Private Function GetFuzzyTargetT() As Double
+        ' 2026/06/17 by Simon/Claude Opus 4.8: D6 Hamming 一階門檻「起始值」表
+        '   ── 微調原因：SimHash Hamming 對應的是特徵向量夾角(cosine)、非 Jaccard，且 64-bit 量化有噪音，無法用公式定死。
+        '   ── 微調方式：寧鬆勿緊(誤選 OK, 後面還有 Jaccard 把關 >> 但漏掉真重複就不 OK 了)。
+        '                   下方 _dbg 探針會記錄「Hamming 過關配對數 vs Jaccard 過關數」，實際上機看 yield rate：太低就收緊、疑似漏抓就放寬。v1.1 依實測定案。Jaccard(S5) 才是準確閘門。
         Return _fuzzyTierT(Math.Clamp(TrackBar1.Value, 1, 5))   ' TrackBar1.Value(1~5)→targetT，越界夾住保險
     End Function
-    ' 2026/06/17 by Simon/Claude Opus 4.8: D6 Hamming 一階門檻「起始值」表
-    '   ── 微調原因：SimHash Hamming 對應的是特徵向量夾角(cosine)、非 Jaccard，且 64-bit 量化有噪音，無法用公式定死。
-    '   ── 微調方式：寧鬆勿緊(誤選 OK, 後面還有 Jaccard 把關 >> 但漏掉真重複就不 OK 了)。
-    '                   下方 _dbg 探針會記錄「Hamming 過關配對數 vs Jaccard 過關數」，實際上機看 yield rate：太低就收緊、疑似漏抓就放寬。v1.1 依實測定案。Jaccard(S5) 才是準確閘門。
     Private Function HammingThresholdFor(targetT As Double) As Integer
+        ' Q1 連動滑桿 2026/06/18 by Simon/Claude Opus 4.8: 共有內容量下限的檔位連動表(對齊 HammingThresholdFor/GetFuzzyTargetT 邊界)
+        '   越嚴(高 T)→要求兩封共有越多真實內容才算重複。倍率 低1/中2/高3/極高4/完全一致5，乘上基準 MIN_BIGRAM_FOR_FUZZY(=25)。
         ' Hamming 門檻對應表 (64-bit SimHash):
         ' Hamming   targetT 你的 E[d]=64(1−T)	SD=√(64·T(1−T))	    E+~2SD	Claude設定門檻
         ' 0 bit     0.999	    0.064	            0.25	        ~0.6	     2
@@ -756,14 +908,33 @@ Partial Class Form1
         If targetT >= 0.92 Then Return 10
         Return 14   ' 0.87(低檔)；0.9275(中)會先命中上一行的 >=0.92→10
     End Function
-    ' Q1 連動滑桿 2026/06/18 by Simon/Claude Opus 4.8: 共有內容量下限的檔位連動表(對齊 HammingThresholdFor/GetFuzzyTargetT 邊界)
-    '   越嚴(高 T)→要求兩封共有越多真實內容才算重複。倍率 低1/中2/高3/極高4/完全一致5，乘上基準 MIN_BIGRAM_FOR_FUZZY(=25)。
     Private Function MinSharedBigramFor(targetT As Double) As Integer
         If targetT >= 0.99 Then Return MIN_BIGRAM_FOR_FUZZY * 5   ' 完全一致 125
         If targetT >= 0.98 Then Return MIN_BIGRAM_FOR_FUZZY * 4   ' 極高 100
         If targetT >= 0.95 Then Return MIN_BIGRAM_FOR_FUZZY * 3   ' 高 75
         If targetT >= 0.92 Then Return MIN_BIGRAM_FOR_FUZZY * 2   ' 中 50
         Return MIN_BIGRAM_FOR_FUZZY                               ' 低 0.87 (1×) 25
+    End Function
+
+    Private Function GetThreadCount() As Integer
+        ' 2026/07/07 by Simon/Claude: Fuzzy 管線三處平行化(S3 SimHash worker 數 / S4 Hamming Parallel.For / S5-2 Jaccard Parallel.For)
+        '   統一改讀 numThread(UI, layoutPanel5)，取代原本各自硬編碼的 SIMHASH_PARALLEL_K=8。
+        '   在 Bt5_Click 開頭讀一次(UI 執行緒)、往下當參數傳，不在背景執行緒碰 UI 控制項。
+        ' numThread.Value: 0 或未輸入 → 自動(Environment.ProcessorCount)；否則採使用者指定值(下限 1)。
+        Dim value As Integer = CInt(numThreads.Value)
+        Return If(value <= 0, Environment.ProcessorCount, value)
+    End Function
+    Private Function SplitIntoChunks(Of T)(list As List(Of T), k As Integer) As List(Of List(Of T))
+        ' 把 list 切成 numThread 塊(連續切片, 最後一塊可能較短)。供平行版 SimHash 與 PROBE_BODYPAR 探針共用
+        Dim result As New List(Of List(Of T))(k)
+        Dim n As Integer = list.Count
+        Dim per As Integer = CInt(Math.Ceiling(n / CDbl(k)))
+        For i As Integer = 0 To k - 1
+            Dim startIdx As Integer = i * per
+            If startIdx >= n Then result.Add(New List(Of T)()) : Continue For
+            result.Add(list.GetRange(startIdx, Math.Min(per, n - startIdx)))
+        Next
+        Return result
     End Function
     Private Function Uf_Find(parent As Dictionary(Of String, String), x As String) As String
         Dim root As String = x
@@ -805,10 +976,25 @@ Partial Class Form1
         ' 2026/06/15 by Simon/Claude Opus 4.8: Lv3/4/5 共用右鍵選單；冪等，重複呼叫只建一次 (確保三個 LV 共用同一實例)
         If ctxMenuLv3Lv4Lv5 IsNot Nothing Then Return Else ctxMenuLv3Lv4Lv5 = New ContextMenuStrip()
 
+        Dim mnuOpen As New ToolStripMenuItem("開啟選取項目(&O)")
+        Dim mnuPreview As New ToolStripMenuItem("快速預覽選取項目(&P)")
         Dim mnuRefresh As New ToolStripMenuItem("重刷選取項目(&R)")
         Dim mnuDelete As New ToolStripMenuItem("刪除選取項目(&D)")
+        ctxMenuLv3Lv4Lv5.Items.Add(mnuOpen)
+        ctxMenuLv3Lv4Lv5.Items.Add(mnuPreview)
+        ctxMenuLv3Lv4Lv5.Items.Add(New ToolStripSeparator())
         ctxMenuLv3Lv4Lv5.Items.Add(mnuRefresh)
         ctxMenuLv3Lv4Lv5.Items.Add(mnuDelete)
+
+        ' 2026/07/07 by Simon/Claude: 「開啟」= OpenSelectedMailsWithPreviewOffer(真正 Outlook Inspector，超過10封會問要不要改快速預覽)；「快速預覽」= ShowMailQuickPreview(HTMLBody+WebView2，ms 等級，無數量限制)
+        AddHandler mnuOpen.Click, Sub(sender, e)
+                                      Dim lv = TryCast(ctxMenuLv3Lv4Lv5.SourceControl, ListView)
+                                      If lv IsNot Nothing Then OpenSelectedMailsWithPreviewOffer(lv)
+                                  End Sub
+        AddHandler mnuPreview.Click, Sub(sender, e)
+                                         Dim lv = TryCast(ctxMenuLv3Lv4Lv5.SourceControl, ListView)
+                                         If lv IsNot Nothing Then ShowMailQuickPreview(GetSelectedMailInfos(lv))
+                                     End Sub
 
         ' 2026/06/21 by Simon/Claude Opus 4.8: 共用選單新增「刪除選取項目」，依 SourceControl 分派至各 LV 既有刪除處理器
         AddHandler mnuDelete.Click, Sub(sender, e)
@@ -862,9 +1048,7 @@ Partial Class Form1
         End If
 
         ' 2. 繪製背景 (使用 SolidBrush 繪製 BackColor，解決懸停消失問題)
-        Using bgBrush As New SolidBrush(backColor)
-            e.Graphics.FillRectangle(bgBrush, e.Bounds)
-        End Using
+        Using bgBrush As New SolidBrush(backColor) : e.Graphics.FillRectangle(bgBrush, e.Bounds) : End Using
 
         ' 3. 繪製文字 (使用 TextRenderer 確保對齊與抗鋸齒)
         Dim textRect As Rectangle = e.Bounds
@@ -914,12 +1098,8 @@ Partial Class Form1
         Dim lv = DirectCast(sender, ListView)
         Dim item As ListViewItem = lv.GetItemAt(e.X, e.Y)
 
-        'If item IsNot Nothing AndAlso e.Button = MouseButtons.Left Then
-        '    ' 單擊左鍵複製主旨到剪貼簿，這原本是 Listview4 獨有的方便設計，現在擴展到 Tab3 共用 (by Gemini 3.1 Pro, 2026/04/21)
-        '    Clipboard.SetText(item.SubItems(0).Text)
-        'End If
-        '' 路徑更新邏輯統一由 ShowLv3Lv4Lv5PathToPgrsBar 接管
-        'ShowLv3Lv4Lv5PathToPgrsBar(sender, e)
+        ' 單擊左鍵複製主旨到剪貼簿，這原本是 Listview4 獨有的方便設計，現在擴展到 Tab3 共用 (by Gemini 3.1 Pro, 2026/04/21)
+        'If item IsNot Nothing AndAlso e.Button = MouseButtons.Left Then  Clipboard.SetText(item.SubItems(0).Text)
     End Sub
     Private Sub HandleLv3Lv4Lv5_DoubleClick(sender As Object, e As EventArgs)
         ''' <summary>
@@ -953,7 +1133,12 @@ Partial Class Form1
         Dim lv = DirectCast(sender, ListView)
 
         If e.KeyCode = Keys.Enter Then
-            OpenMailByEntryID(GetSelectedEntryIDs(lv))
+            ' 2026/07/07 by Simon/Claude: 一般 Enter = 開啟(超過10封會問要不要改快速預覽)；Ctrl/Shift+Enter = 快速預覽(HTMLBody+WebView2，ms 等級，無數量限制)
+            If e.Control OrElse e.Shift Then
+                ShowMailQuickPreview(GetSelectedMailInfos(lv))
+            Else
+                OpenSelectedMailsWithPreviewOffer(lv)
+            End If
             e.Handled = True : e.SuppressKeyPress = True
 
         ElseIf e.KeyCode = Keys.Delete Then
@@ -1334,7 +1519,7 @@ Partial Class Form1
         If String.IsNullOrEmpty(fPath) Then Return
         InvalidateMailCache(fPath)
         PoisonFolderSnapDb(fPath)
-        SimDbDeleteMailRowsByEntryIds(DbGetFolderEntryIds(fPath), includeAttFilenames:=True)
+        SimDbDeleteMailRowsByEntryIds(LazyGetFolderIdAsList(fPath), includeAttFilenames:=True)
         DbPurgeFolderMailRows(fPath)
     End Sub
 #End Region
@@ -1426,22 +1611,24 @@ Partial Class Form1
     Private Async Sub RenewCache_Click(sender As Object, e As EventArgs) Handles RenewCache.Click
         ' 2026/04/09 重構: 原本只做孤兒清除，現在改呼叫完整的 RenewCacheToDB
         '   RenewCacheToDB 內含: Phase1 BFS → Phase2 snapshot 比對 → Phase3 dirty 重算
-        '                         Phase4 ancestor 聚合清除 → Phase5 month_counts DB 清除
-        '                         Phase6 CleanupOrphan + SaveCachesToDB
+        '                        Phase4 ancestor 聚合清除 → Phase5 month_counts DB 清除
+        '                        Phase6 CleanupOrphan + SaveCachesToDB
         '   RenewIncludeSize 勾選時才重算 folder_size (GetTable 遍歷，大資料夾較慢)
         ' 2026/6/7: by simon/Gemini: 直接在這裡計時顯示整體耗時, 去除原本在 RenewCacheToDB 內的多段計時, 避免重構後的邏輯分散導致耗時統計不完整或混亂
 
         Dim sw As Stopwatch = Stopwatch.StartNew()
+        Dim renewSummary As String = ""     ' 2026/07/07 by Simon/Claude: 接住 RenewCacheToDB 既有的統計彙整字串
         Try
-            Await RenewCacheToDB()
-            Await DbVacuumIfNeeded()    ' 2026/06/16 by Claude Sonnet 4.6: RenewCache 完成後，視碎片比例決定是否執行 VACUUM (freelist_count / page_count > 5% 才執行，避免每次都白等)
+            renewSummary = Await RenewCacheToDB()
+            Await DbVacuumIfNeeded()        ' 2026/06/16 by Claude Sonnet 4.6: RenewCache 完成後，視碎片比例決定是否執行 VACUUM (freelist_count / page_count > 5% 才執行，避免每次都白等)
             RefreshLv6DbStats()
-            Await RefreshAllTreeViews() ' by Gemini 3.0 flash, 2026/04/24: 更新完成後，執行非同步 UI 刷新，確保新資料夾能立即顯示
+            Await RefreshAllTreeViews()     ' by Gemini 3.0 flash, 2026/04/24: 更新完成後，執行非同步 UI 刷新，確保新資料夾能立即顯示
 
         Catch ex As OperationCanceledException
             _dbg(" ├ 中斷", "使用者已取消快取更新")
         Finally
-            PgrsBar1.Text = $"RenewCache 完成 — 耗時: {sw.Elapsed.TotalSeconds:0.000} 秒"
+            PgrsBar1.Text = $"RenewCache 完成 — 耗時: {sw.Elapsed.TotalSeconds:0.00} 秒"
+            If renewSummary <> "" Then PgrsBar2.Text = renewSummary   ' 2026/07/07 by Simon/Claude: 秀出既有的新增/更新/刪除統計，純接線不加新邏輯
         End Try
     End Sub
     Private Async Sub RefreshLv6DbStats()
@@ -1476,20 +1663,20 @@ Partial Class Form1
 
             ' ── 步驟 3: 填充 Memory 數據 ──
             AddLv6StatLine("═══ Memory 快取 ════", "", isHeader:=True)
-            AddLv6StatLine("_cacheFolderTree", _cacheFolderTree.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheFolderIDs", _cacheFolderIDs.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheSubTreeList", _cacheSubTreeList.Count.ToString("N0") & " 筆")
+            AddLv6StatLine("_cacheFolderTree", $"{_cacheFolderTree.Count:N0} 筆")
+            AddLv6StatLine("_cacheFolderIDs", $"{_cacheFolderIDs.Count:N0} 筆")
+            AddLv6StatLine("_cacheSubTreeList", $"{_cacheSubTreeList.Count:N0} 筆")
             AddLv6StatLine("", "", isHeader:=False) ' 間隔
-            AddLv6StatLine("_cacheMailCount", _cacheMailCount.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheMailCountAll", _cacheMailCountAll.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheFolderCount", _cacheFolderCount.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheFolderCountAll", _cacheFolderCountAll.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheYearCounts", _cacheYearCounts.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheMonthCounts", _cacheMonthCounts.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheAttMailList", _cacheAttMailList.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheAttFilename", _cacheAttFilename.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheFolderSize", _cacheFolderSize.Count.ToString("N0") & " 筆")
-            AddLv6StatLine("_cacheFolderSizeAll", _cacheFolderSizeAll.Count.ToString("N0") & " 筆")
+            AddLv6StatLine("_cacheMailCount", $"{_cacheMailCount.Count:N0} 筆")
+            AddLv6StatLine("_cacheMailCountAll", $"{_cacheMailCountAll.Count:N0} 筆")
+            AddLv6StatLine("_cacheFolderCount", $"{_cacheFolderCount.Count:N0} 筆")
+            AddLv6StatLine("_cacheFolderCountAll", $"{_cacheFolderCountAll.Count:N0} 筆")
+            AddLv6StatLine("_cacheYearCounts", $"{_cacheYearCounts.Count:N0} 筆")
+            AddLv6StatLine("_cacheMonthCounts", $"{_cacheMonthCounts.Count:N0} 筆")
+            AddLv6StatLine("_cacheAttMailList", $"{_cacheAttMailList.Count:N0} 筆")
+            AddLv6StatLine("_cacheAttFilename", $"{_cacheAttFilename.Count:N0} 筆")
+            AddLv6StatLine("_cacheFolderSize", $"{_cacheFolderSize.Count:N0} 筆")
+            AddLv6StatLine("_cacheFolderSizeAll", $"{_cacheFolderSizeAll.Count:N0} 筆")
             AddLv6StatLine("", "", isHeader:=False) ' 間隔
 
             ' ── 步驟 4: 填充 SQLite 數據 ──
@@ -1502,15 +1689,16 @@ Partial Class Form1
             ' 2026/06/21 by Simon/Claude: DB 檔案大小改雙檔並列；下方依 db 分組(順序不變，OLAcacheMail.db 的兩張表移到區塊末)
             AddLv6StatLine("DB 檔案大小", $"{ (st.kb / 1024.0).ToString(If(st.kb < 10240, "F1", "F0")) } + { (st.kbMail / 1024.0).ToString(If(st.kbMail < 10240, "F1", "F0")) } MB")
             AddLv6StatLine("──── OLAcache.db ────", "", True)
-            AddLv6StatLine("folder_info", st.fc.ToString("N0") & " 筆")
-            AddLv6StatLine("senders", st.senders.ToString("N0") & " 筆")         ' 2026/06/14 by Simon/Claude Opus 4.8: 補上 senders，與 DbShowDbFileStat 順序一致
-            AddLv6StatLine("mail_info", st.basic.ToString("N0") & " 筆")    ' by Gemini 3 Flash, 2026/04/22
-            AddLv6StatLine("year_counts", st.yc.ToString("N0") & " 筆")
-            AddLv6StatLine("month_counts", st.mc.ToString("N0") & " 筆")
-            AddLv6StatLine("att_maillist", st.mb.ToString("N0") & " 筆")
-            AddLv6StatLine("──── OLAcacheMail.db ────", "", True)   ' 2026/06/21 by Simon/Claude: att_filenames/mail_simhash 住此檔
-            AddLv6StatLine("att_filenames", st.at.ToString("N0") & " 筆")
-            AddLv6StatLine("mail_simhash", st.sh.ToString("N0") & " 筆")   ' 2026/06/21 by Simon/Claude: 新增
+            AddLv6StatLine("folder_info", $"{st.fc:N0} 筆")
+            AddLv6StatLine("senders", $"{st.senders:N0} 筆")     ' 2026/06/14 by Simon/Claude Opus 4.8: 補上 senders，與 DbShowDbFileStat 順序一致
+            AddLv6StatLine("mail_info", $"{st.basic:N0} 筆")     ' by Gemini 3 Flash, 2026/04/22
+            AddLv6StatLine("year_counts", $"{st.yc:N0} 筆")
+            AddLv6StatLine("month_counts", $"{st.mc:N0} 筆")
+            AddLv6StatLine("att_maillist", $"{st.mb:N0} 筆")
+            AddLv6StatLine("─── OLAcacheMail.db ────", "", True) ' 2026/06/21 by Simon/Claude: att_filenames/mail_simhash 住此檔
+            AddLv6StatLine("att_filenames", $"{st.at:N0} 筆")
+            AddLv6StatLine("mail_simhash", $"{st.sh:N0} 筆")     ' 2026/06/21 by Simon/Claude: 新增
+            AddLv6StatLine("bigram_set", $"{st.bs:N0} 筆")       ' 2026/07/07 by Simon/Claude: S5 候選集合 BLOB 回填量(非 NULL 筆數/淨容量)
             AddLv6StatLine("最後更新日期", datePart)
             AddLv6StatLine("最後更新時間", timePart)
 
@@ -1547,7 +1735,7 @@ Partial Class Form1
             Dim targetTableName As String = ""
             If selectedLabel = "DB 檔案大小" Then               ' 2026/06/13 by Simon/Claude Opus 4.8: 新增對 DB 檔案大小 的特殊識別，觸發專門的空間分布分析
                 Dim unused = DbShowDbFileStat()                 ' 明確的 fire-and-forget，編譯器知道你是故意的
-            ElseIf selectedLabel.Contains("folder_info") Then  ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
+            ElseIf selectedLabel.Contains("folder_info") Then   ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
                 targetTableName = "folder_info"
             ElseIf selectedLabel.Contains("mail_info") Then
                 targetTableName = "mail_info"
@@ -1561,6 +1749,8 @@ Partial Class Form1
                 targetTableName = "month_counts"
             ElseIf selectedLabel.Contains("mail_simhash") Then  ' 2026/06/21 by Simon/Claude: 新增 mail_simhash 分支(DbShowTableStat 內部會路由到 _dbMail)
                 targetTableName = "mail_simhash"
+            ElseIf selectedLabel.Contains("bigram_set") Then    ' 2026/07/07 by Simon/Claude: bigram_set 是 mail_simhash 表內的欄位，筆數/大小跟全表不同，需獨立統計而非整表路由
+                Dim unused2 = DbShowBigramSetStat()
             Else
                 ' 2026/06/13 by Simon/Claude Opus 4.8: 未來要加上例外續集也可以一行搞定，確保即使該功能發生錯誤也不會影響 UI 穩定性，並將錯誤訊息導向除錯視窗
                 ' Me.DbShowDbFileStat().ContinueWith(
@@ -1637,8 +1827,11 @@ Partial Class Form1
     End Function
 #End Region
 #Region "  ├ Debug 測試區"
-    Private Async Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
-
+    Private Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
+        ' 2026/07/07 by Simon/Claude: 快速預覽功能已提升為正式功能(見 ShowMailQuickPreview/GetSelectedMailInfos in Form1_MainTab34.vb，
+        '   右鍵選單「快速預覽選取項目」與 Ctrl/Shift+Enter 皆可觸發)。這裡保留兩支純比較用診斷探針：
+        '   平常點擊 = 手工 TextBox 陽春預覽(.Body 純文字，比較基準)；按住 Shift = 測試 RDO 獨立 session 自己的 Display()(已證實無效，見備忘)；
+        '   按住 Ctrl = 呼叫正式版 ShowMailQuickPreview，方便跟前兩者同批次比較耗時
 
 
     End Sub

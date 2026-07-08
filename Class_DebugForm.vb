@@ -44,28 +44,25 @@ Public Class DebugForm
 
 #Region "■ 01 Win32 API & 常數"
     <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function SendMessage(
-                                       hWnd As IntPtr, msg As Integer,
-                                       wParam As IntPtr, lParam As IntPtr) As IntPtr : End Function
+    Private Shared Function SendMessage(hWnd As IntPtr, msg As Integer, wParam As IntPtr, lParam As IntPtr) As IntPtr
+    End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function CreateRectRgn(
-                                         x1 As Integer, y1 As Integer,
-                                         x2 As Integer, y2 As Integer) As IntPtr : End Function
+    Private Shared Function CreateRectRgn(x1 As Integer, y1 As Integer, x2 As Integer, y2 As Integer) As IntPtr
+    End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function SelectClipRgn(
-                                         hDC As IntPtr, hRgn As IntPtr) As Integer : End Function
+    Private Shared Function SelectClipRgn(hDC As IntPtr, hRgn As IntPtr) As Integer
+    End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function DeleteObject(
-                                        hObject As IntPtr) As Boolean : End Function
+    Private Shared Function DeleteObject(hObject As IntPtr) As Boolean
+    End Function
 
     ' 2026/06/19 by Simon/Claude Opus 4.8: 改 OS 層 class background brush，消除撐高瞬間新區域的黑塊 (受控層 BackColor 太晚、壓不到這一幀)
     <Runtime.InteropServices.DllImport("user32.dll", EntryPoint:="SetClassLongPtrW")>
-    Private Shared Function SetClassLongPtr(
-                                           hWnd As IntPtr, nIndex As Integer,
-                                           dwNewLong As IntPtr) As IntPtr : End Function
+    Private Shared Function SetClassLongPtr(hWnd As IntPtr, nIndex As Integer, dwNewLong As IntPtr) As IntPtr
+    End Function
     <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function CreateSolidBrush(
-                                            crColor As Integer) As IntPtr : End Function
+    Private Shared Function CreateSolidBrush(crColor As Integer) As IntPtr
+    End Function
 
     Private Const WM_SETFONT As Integer = &H30
     Private Const WM_SETREDRAW As Integer = &HB         ' 2026/3/26 by Gemini

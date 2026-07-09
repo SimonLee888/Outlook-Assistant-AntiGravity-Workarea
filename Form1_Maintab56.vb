@@ -535,74 +535,45 @@ Partial Class Form1
             End If
         End Try
     End Function
-    Private Function MailBodyParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer, dbHitCount As Integer, swEta As Stopwatch,
-                                            lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
-                                            As (Sets As Dictionary(Of String, HashSet(Of Integer)), RdoFailed As List(Of MailItemInfo))
-        ' 2026/07/08 by Simon/Claude: S5-1b 平行版 worker — 對齊 SimHashParallelWorker(S3)的手法：
-        '   自建獨立 RDOSession(不碰共用 _rdo2/UI 緒)，逐封讀 body → 正規化 → 建 bigram 集合(不算 simhash，S5 只需要集合)。
-        '   RDO 解析失敗的少數信收進回傳清單，交還協調函數用既有 GetMailBody(內建OOM fallback)逐封補算——OOM COM 物件只能在 UI 緒操作。
-        Dim localSets As New Dictionary(Of String, HashSet(Of Integer))(subset.Count)
-        Dim rdoFailed As New List(Of MailItemInfo)()
-        Dim session As Redemption.RDOSession = Nothing
-        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
-        Try
-            Try
-                session = New Redemption.RDOSession()
-                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
-            Catch ex As System.Exception
-                _dbg("FuzzyBodyParallelWorker Logon失敗", ex.Message)
-                Return (localSets, subset)   ' 這個 worker 的整批信全部交還協調函數用 OOM 補算
-            End Try
+    Private Async Function PairFuzzyCandidates(mails As List(Of MailItemInfo), targetT As Double, thread_K As Integer, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
+        ' size 1/T 滑動視窗收斂 O(n²) + Hamming 一階篩。純 CPU、無 COM → 放 Task.Run 不凍 UI。
+        Dim hThr As Integer = HammingThresholdFor(targetT)
+        Dim maxRatio As Double = 1.0 / targetT
+        Dim minBigram As Integer = MinSharedBigramFor(targetT)   ' Q1 連動 2026/06/18 by Simon/Claude: S4 池子閘改用檔位值(同 S5，避免放進注定死在 S5 的信)
 
-            storeByName = BuildRdoStoreByNameDict(session)
+        Return Await Task.Run(
+            Function() As List(Of (A As MailItemInfo, B As MailItemInfo))
+                ' 取出有指紋且 bigram 數達標者，依 bigram_count 升冪排序(作為 size 視窗的排序鍵)
+                Dim items = mails.Where(Function(m) _cacheSimHash.ContainsKey(m.EntryID) AndAlso _cacheSimHash(m.EntryID).BigramCount >= minBigram).
+                                  Select(Function(m) (Mail:=m, SH:=_cacheSimHash(m.EntryID).SimHash, Cnt:=_cacheSimHash(m.EntryID).BigramCount)).
+                                  OrderBy(Function(x) x.Cnt).ToList()
 
-            For i As Integer = 0 To subset.Count - 1
-                If (i And 127) = 0 Then cToken.ThrowIfCancellationRequested()
-                Dim m As MailItemInfo = subset(i)
-                Dim store As Redemption.RDOStore = Nothing
-                Dim body As String = Nothing
-                If storeByName.TryGetValue(GetStoreNameFromPath(m.FolderPath), store) Then
-                    Dim rm As Redemption.RDOMail = Nothing
-                    Try
-                        Try : rm = TryCast(store.GetMessageFromID(m.EntryID), Redemption.RDOMail) : Catch : End Try
-                        If rm IsNot Nothing Then Try : body = rm.Body : Catch : End Try
-                    Finally
-                        Dim o As Object = rm : TryMarshalRelease(o)
-                    End Try
-                End If
+                ' 2026/07/07 by Simon/Claude: 外圈 Parallel.For 平行化 — 實測 178k 指紋/95.8萬對時單線 6.8~7.1s，是暖跑最大頭。
+                '   純 CPU 零共享：worker 各自收 (i,j) 索引對(值型別)，合併後依 (i,j) 排序再物化，
+                '   輸出順序與舊單線版完全一致(下游 union-find 群編號維持決定性)。
+                '   取消改由 ParallelOptions.CancellationToken 負責(取代舊的 (i And 1023) 手動檢查)。
+                '   MaxDegreeOfParallelism 改接 numThread(UI)，與 S3/S5-2 共用同一顆旋鈕。
+                Dim pairsIdx As New List(Of (I As Integer, J As Integer))()
+                Dim mergeLock As New Object()
+                Dim po As New ParallelOptions With {.CancellationToken = cToken, .MaxDegreeOfParallelism = thread_K}
+                Parallel.For(0, items.Count, po,
+                    Function() New List(Of (I As Integer, J As Integer))(),
+                    Function(i As Integer, state As ParallelLoopState, local As List(Of (I As Integer, J As Integer)))
+                        For j As Integer = i + 1 To items.Count - 1
+                            If items(j).Cnt > items(i).Cnt * maxRatio Then Exit For   ' size 1/T 上界：升冪→超界後 j 全部出局，收尾視窗
+                            If GetHammingDistance(items(i).SH, items(j).SH) <= hThr Then local.Add((i, j))
+                        Next
+                        Return local
+                    End Function,
+                    Sub(local)
+                        SyncLock mergeLock : pairsIdx.AddRange(local) : End SyncLock
+                    End Sub)
 
-                If body Is Nothing Then
-                    rdoFailed.Add(m)
-                Else
-                    ' 同 S3 SimHashParallelWorker: 集合必須用正規化 body 建 — 序列版(GetMailBodyRdo)與 OOM 補算路徑都先過 NormalizeMailBody,
-                    '   worker 若拿生 rm.Body 建,同一封信兩路徑集合不一致,且會永久污染 bigram_set BLOB(Regex 為 Shared 預編譯實例,跨緒安全)
-                    localSets(m.EntryID) = BuildBigramSet(NormalizeMailBody(body))
-                End If
-
-                Dim done As Integer = Interlocked.Increment(processedCounter(0))
-                If (done And 63) = 0 Then
-                    Dim nowMs As Long = swEta.ElapsedMilliseconds
-                    If nowMs - Interlocked.Read(lastReportMs(0)) >= ThrottleFreq.Mid AndAlso Monitor.TryEnter(reportGate) Then
-                        Try
-                            If nowMs - lastReportMs(0) >= ThrottleFreq.Mid Then   ' 進鎖後再驗一次，避免重複回報(雙重檢查)
-                                lastReportMs(0) = nowMs
-                                Dim eta = CalculateSpeedAndETA(totalCount, done, swEta.Elapsed.TotalSeconds)
-                                progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文(平行K={thread_K}): {done}/{totalCount} (DB命中 {dbHitCount:N0}) ({eta.Speed:F0} 個/秒{eta.EtaString})"})
-                            End If
-                        Finally
-                            Monitor.Exit(reportGate)
-                        End Try
-                    End If
-                End If
-            Next
-            Return (localSets, rdoFailed)
-        Finally
-            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
-            If session IsNot Nothing Then
-                Try : session.Logoff() : Catch : End Try
-                Dim so As Object = session : TryMarshalRelease(so)
-            End If
-        End Try
+                pairsIdx.Sort(Function(a, b) If(a.I <> b.I, a.I.CompareTo(b.I), a.J.CompareTo(b.J)))
+                Dim result As New List(Of (A As MailItemInfo, B As MailItemInfo))(pairsIdx.Count)
+                For Each p In pairsIdx : result.Add((items(p.I).Mail, items(p.J).Mail)) : Next
+                Return result
+            End Function, cToken)
     End Function
     Private Async Function FilterCandidates(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
                                             As Task(Of (Pairs As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), Sets As Dictionary(Of String, HashSet(Of Integer))))
@@ -729,45 +700,74 @@ Partial Class Form1
             End Function, cToken)
         Return (pairs, sets)
     End Function
-    Private Async Function PairFuzzyCandidates(mails As List(Of MailItemInfo), targetT As Double, thread_K As Integer, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
-        ' size 1/T 滑動視窗收斂 O(n²) + Hamming 一階篩。純 CPU、無 COM → 放 Task.Run 不凍 UI。
-        Dim hThr As Integer = HammingThresholdFor(targetT)
-        Dim maxRatio As Double = 1.0 / targetT
-        Dim minBigram As Integer = MinSharedBigramFor(targetT)   ' Q1 連動 2026/06/18 by Simon/Claude: S4 池子閘改用檔位值(同 S5，避免放進注定死在 S5 的信)
+    Private Function MailBodyParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer, dbHitCount As Integer, swEta As Stopwatch,
+                                            lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
+                                            As (Sets As Dictionary(Of String, HashSet(Of Integer)), RdoFailed As List(Of MailItemInfo))
+        ' 2026/07/08 by Simon/Claude: S5-1b 平行版 worker — 對齊 SimHashParallelWorker(S3)的手法：
+        '   自建獨立 RDOSession(不碰共用 _rdo2/UI 緒)，逐封讀 body → 正規化 → 建 bigram 集合(不算 simhash，S5 只需要集合)。
+        '   RDO 解析失敗的少數信收進回傳清單，交還協調函數用既有 GetMailBody(內建OOM fallback)逐封補算——OOM COM 物件只能在 UI 緒操作。
+        Dim localSets As New Dictionary(Of String, HashSet(Of Integer))(subset.Count)
+        Dim rdoFailed As New List(Of MailItemInfo)()
+        Dim session As Redemption.RDOSession = Nothing
+        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
+        Try
+            Try
+                session = New Redemption.RDOSession()
+                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
+            Catch ex As System.Exception
+                _dbg("FuzzyBodyParallelWorker Logon失敗", ex.Message)
+                Return (localSets, subset)   ' 這個 worker 的整批信全部交還協調函數用 OOM 補算
+            End Try
 
-        Return Await Task.Run(
-            Function() As List(Of (A As MailItemInfo, B As MailItemInfo))
-                ' 取出有指紋且 bigram 數達標者，依 bigram_count 升冪排序(作為 size 視窗的排序鍵)
-                Dim items = mails.Where(Function(m) _cacheSimHash.ContainsKey(m.EntryID) AndAlso _cacheSimHash(m.EntryID).BigramCount >= minBigram).
-                                  Select(Function(m) (Mail:=m, SH:=_cacheSimHash(m.EntryID).SimHash, Cnt:=_cacheSimHash(m.EntryID).BigramCount)).
-                                  OrderBy(Function(x) x.Cnt).ToList()
+            storeByName = BuildRdoStoreByNameDict(session)
 
-                ' 2026/07/07 by Simon/Claude: 外圈 Parallel.For 平行化 — 實測 178k 指紋/95.8萬對時單線 6.8~7.1s，是暖跑最大頭。
-                '   純 CPU 零共享：worker 各自收 (i,j) 索引對(值型別)，合併後依 (i,j) 排序再物化，
-                '   輸出順序與舊單線版完全一致(下游 union-find 群編號維持決定性)。
-                '   取消改由 ParallelOptions.CancellationToken 負責(取代舊的 (i And 1023) 手動檢查)。
-                '   MaxDegreeOfParallelism 改接 numThread(UI)，與 S3/S5-2 共用同一顆旋鈕。
-                Dim pairsIdx As New List(Of (I As Integer, J As Integer))()
-                Dim mergeLock As New Object()
-                Dim po As New ParallelOptions With {.CancellationToken = cToken, .MaxDegreeOfParallelism = thread_K}
-                Parallel.For(0, items.Count, po,
-                    Function() New List(Of (I As Integer, J As Integer))(),
-                    Function(i As Integer, state As ParallelLoopState, local As List(Of (I As Integer, J As Integer)))
-                        For j As Integer = i + 1 To items.Count - 1
-                            If items(j).Cnt > items(i).Cnt * maxRatio Then Exit For   ' size 1/T 上界：升冪→超界後 j 全部出局，收尾視窗
-                            If GetHammingDistance(items(i).SH, items(j).SH) <= hThr Then local.Add((i, j))
-                        Next
-                        Return local
-                    End Function,
-                    Sub(local)
-                        SyncLock mergeLock : pairsIdx.AddRange(local) : End SyncLock
-                    End Sub)
+            For i As Integer = 0 To subset.Count - 1
+                If (i And 127) = 0 Then cToken.ThrowIfCancellationRequested()
+                Dim m As MailItemInfo = subset(i)
+                Dim store As Redemption.RDOStore = Nothing
+                Dim body As String = Nothing
+                If storeByName.TryGetValue(GetStoreNameFromPath(m.FolderPath), store) Then
+                    Dim rm As Redemption.RDOMail = Nothing
+                    Try
+                        Try : rm = TryCast(store.GetMessageFromID(m.EntryID), Redemption.RDOMail) : Catch : End Try
+                        If rm IsNot Nothing Then Try : body = rm.Body : Catch : End Try
+                    Finally
+                        Dim o As Object = rm : TryMarshalRelease(o)
+                    End Try
+                End If
 
-                pairsIdx.Sort(Function(a, b) If(a.I <> b.I, a.I.CompareTo(b.I), a.J.CompareTo(b.J)))
-                Dim result As New List(Of (A As MailItemInfo, B As MailItemInfo))(pairsIdx.Count)
-                For Each p In pairsIdx : result.Add((items(p.I).Mail, items(p.J).Mail)) : Next
-                Return result
-            End Function, cToken)
+                If body Is Nothing Then
+                    rdoFailed.Add(m)
+                Else
+                    ' 同 S3 SimHashParallelWorker: 集合必須用正規化 body 建 — 序列版(GetMailBodyRdo)與 OOM 補算路徑都先過 NormalizeMailBody,
+                    '   worker 若拿生 rm.Body 建,同一封信兩路徑集合不一致,且會永久污染 bigram_set BLOB(Regex 為 Shared 預編譯實例,跨緒安全)
+                    localSets(m.EntryID) = BuildBigramSet(NormalizeMailBody(body))
+                End If
+
+                Dim done As Integer = Interlocked.Increment(processedCounter(0))
+                If (done And 63) = 0 Then
+                    Dim nowMs As Long = swEta.ElapsedMilliseconds
+                    If nowMs - Interlocked.Read(lastReportMs(0)) >= ThrottleFreq.Mid AndAlso Monitor.TryEnter(reportGate) Then
+                        Try
+                            If nowMs - lastReportMs(0) >= ThrottleFreq.Mid Then   ' 進鎖後再驗一次，避免重複回報(雙重檢查)
+                                lastReportMs(0) = nowMs
+                                Dim eta = CalculateSpeedAndETA(totalCount, done, swEta.Elapsed.TotalSeconds)
+                                progress?.Report(New ProgressReport With {.Message = $"開始過濾候選內文(平行K={thread_K}): {done}/{totalCount} (DB命中 {dbHitCount:N0}) ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                            End If
+                        Finally
+                            Monitor.Exit(reportGate)
+                        End Try
+                    End If
+                End If
+            Next
+            Return (localSets, rdoFailed)
+        Finally
+            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
+            If session IsNot Nothing Then
+                Try : session.Logoff() : Catch : End Try
+                Dim so As Object = session : TryMarshalRelease(so)
+            End If
+        End Try
     End Function
     Private Function BuildFuzzyGroups(similar As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), sets As Dictionary(Of String, HashSet(Of Integer))) As (GroupDict As Dictionary(Of String, List(Of MailItemInfo)), ScoreMap As Dictionary(Of String, Double))
         ' 通過 Jaccard 門檻的配對 → union-find 連通分量 → G1,G2…；每群選 bigram_count 最大者為代表，每封顯示「對代表的 bigram Jaccard %」。
@@ -915,7 +915,6 @@ Partial Class Form1
         If targetT >= 0.92 Then Return MIN_BIGRAM_FOR_FUZZY * 2   ' 中 50
         Return MIN_BIGRAM_FOR_FUZZY                               ' 低 0.87 (1×) 25
     End Function
-
     Private Function GetThreadCount() As Integer
         ' 2026/07/07 by Simon/Claude: Fuzzy 管線三處平行化(S3 SimHash worker 數 / S4 Hamming Parallel.For / S5-2 Jaccard Parallel.For)
         '   統一改讀 numThread(UI, layoutPanel5)，取代原本各自硬編碼的 SIMHASH_PARALLEL_K=8。
@@ -1631,71 +1630,6 @@ Partial Class Form1
             If renewSummary <> "" Then PgrsBar2.Text = renewSummary   ' 2026/07/07 by Simon/Claude: 秀出既有的新增/更新/刪除統計，純接線不加新邏輯
         End Try
     End Sub
-
-    ' PROBE_RENEWCACHE_DIAG  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
-    ' 2026/07/09 by Simon/Claude: 診斷「按 RenewCache 出現超多 exception」回報用的一次性探針。
-    '   命令列帶 /autoprobe_renewcache 才會啟動 (Form1_Shown 尾端掛勾)，正常啟動完全不受影響；搭配 /autoclose 跑完自動關閉。
-    '   原理: 掛 AppDomain.FirstChanceException，只在呼叫 RenewCacheToDB() 期間收集(前後 Add/RemoveHandler 限縮範圍)，
-    '         依「例外型別 | 拋出的方法名稱 | 訊息(截斷)」分組計數，避免同性質例外洗版看不出全貌。
-    '   結果寫 %TEMP%\OutlookAssistant_ProbeResult_RenewCache.txt。純診斷，不動 production 邏輯，用完即可整段刪除。
-    Private _probeExCounts As New Concurrent.ConcurrentDictionary(Of String, Integer)
-    Private _probeExSamples As New Concurrent.ConcurrentDictionary(Of String, String)
-    Private Sub PROBE_OnFirstChanceException(sender As Object, e As Runtime.ExceptionServices.FirstChanceExceptionEventArgs)
-        Try
-            Dim topFrame = New Diagnostics.StackTrace(e.Exception, False).GetFrame(0)
-            Dim methodName = If(topFrame?.GetMethod()?.Name, "?")
-            Dim msg = If(e.Exception.Message, "")
-            If msg.Length > 140 Then msg = msg.Substring(0, 140)
-            Dim key = $"{e.Exception.GetType().Name} | {methodName} | {msg}"
-            _probeExCounts.AddOrUpdate(key, 1, Function(k, v) v + 1)
-            _probeExSamples.TryAdd(key, e.Exception.ToString())
-        Catch
-        End Try
-    End Sub
-    Private Async Function RunAutoProbeRenewCache() As Task
-        Dim resultPath = IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_RenewCache.txt")
-        Dim sb As New Text.StringBuilder()
-        sb.AppendLine($"=== PROBE_RENEWCACHE_DIAG {Date.Now:yyyy-MM-dd HH:mm:ss} ===")
-        Try
-            Await Task.Delay(800)   ' 保守起見，等 Form1_Shown 尾端其餘收尾都跑完
-            sb.AppendLine($"_dbCache Is Nothing: {_dbCache Is Nothing}")
-            _probeExCounts.Clear() : _probeExSamples.Clear()
-            AddHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf PROBE_OnFirstChanceException
-            Dim sw = Stopwatch.StartNew()
-            Dim summary As String = ""
-            Try
-                summary = Await RenewCacheToDB()
-            Catch ex As System.Exception
-                sb.AppendLine($"[外層例外] {ex.GetType().Name}: {ex.Message}")
-            Finally
-                RemoveHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf PROBE_OnFirstChanceException
-            End Try
-            sw.Stop()
-            sb.AppendLine($"耗時: {sw.Elapsed.TotalSeconds:0.00} 秒")
-            sb.AppendLine($"resultSummary: {summary}")
-            Dim total = _probeExCounts.Values.Sum()
-            sb.AppendLine($"FirstChanceException 總數: {total}  (相異樣式: {_probeExCounts.Count})")
-            sb.AppendLine("---- 依樣式分組 (次數 desc) ----")
-            For Each kv In _probeExCounts.OrderByDescending(Function(x) x.Value)
-                sb.AppendLine($"{kv.Value,6}  {kv.Key}")
-            Next
-            sb.AppendLine()
-            sb.AppendLine("---- 各樣式例外樣本 (含 StackTrace) ----")
-            For Each kv In _probeExSamples
-                sb.AppendLine($"### {kv.Key}")
-                sb.AppendLine(kv.Value)
-                sb.AppendLine()
-            Next
-        Catch ex As System.Exception
-            sb.AppendLine($"[PROBE 本身出錯] {ex.GetType().Name}: {ex.Message}{vbCrLf}{ex.StackTrace}")
-        End Try
-        IO.File.WriteAllText(resultPath, sb.ToString(), System.Text.Encoding.UTF8)
-        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase)) Then
-            Await Task.Delay(300)
-            Me.Close()
-        End If
-    End Function
-    ' PROBE_RENEWCACHE_DIAG  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
 
     Private Async Sub RefreshLv6DbStats()
         ' ---------------------------------------------------------------

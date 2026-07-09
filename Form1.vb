@@ -344,11 +344,6 @@ Partial Class Form1
         End If
         If Not String.IsNullOrEmpty(_startupElapsedMsg) Then PgrsBar1.Text = _startupElapsedMsg
 
-        ' PROBE_RENEWCACHE_DIAG  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
-        ' 2026/07/09 by Simon/Claude: 無 GUI 自動觸發,命令列帶 /autoprobe_renewcache 才會啟動,正常啟動完全不受影響。
-        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoprobe_renewcache", StringComparison.OrdinalIgnoreCase)) Then Dim unused6 = RunAutoProbeRenewCache()
-        ' PROBE_RENEWCACHE_DIAG  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
-
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
 

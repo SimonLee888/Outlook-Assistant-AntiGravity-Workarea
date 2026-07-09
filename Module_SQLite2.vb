@@ -2103,6 +2103,9 @@ Partial Class Form1
         '   單次 GetItemFromID 遠比整夾 GetTable 表掃便宜，用來抓「純 PST 壓縮換 entry_id」這種
         '   兩個便宜訊號都抓不到的邊界案例 —— 壓縮通常整批 ID 一起換掉，抽一筆探測即可命中。
         ' 2026/07/04 by Simon/Claude Sonnet 5
+        ' 2026/07/09 by Simon/Claude: 修正 — 空資料夾在 mail_info 只有 EMPTY_BASIC_ 哨兵列(非真 entry_id)，
+        '   之前沒濾掉就直接餵給呼叫端的 GetItemFromID，保證每次都失敗，導致所有空資料夾被誤判 dirty 強制整夾重掃，
+        '   RenewCache 因此跳出大量例外且耗時暴增(entry_id/att_maillist 等表其他讀取路徑本來就有濾這個哨兵，這裡漏掉了)。
         ' ---------------------------------------------------------------
         If _dbCache Is Nothing Then Return ""
         Dim fh = FolderPathToHash64(fPath)
@@ -2110,7 +2113,10 @@ Partial Class Form1
             Using cmd As New SqliteCommand("SELECT entry_id FROM mail_info WHERE folder_hash=@fh LIMIT 1", _dbCache)
                 cmd.Parameters.AddWithValue("@fh", fh)
                 Dim result = cmd.ExecuteScalar()
-                If result IsNot Nothing AndAlso Not IsDBNull(result) Then Return ByteArrayToHexString(DirectCast(result, Byte()))
+                If result IsNot Nothing AndAlso Not IsDBNull(result) Then
+                    Dim eid = ByteArrayToHexString(DirectCast(result, Byte()))
+                    If Not eid.StartsWith("EMPTY_", StringComparison.OrdinalIgnoreCase) Then Return eid
+                End If
             End Using
         Catch ex As System.Exception
             _dbg("DbGetSampleEntryId 錯誤", $"{fPath}: {ex.Message}")

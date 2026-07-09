@@ -1631,6 +1631,72 @@ Partial Class Form1
             If renewSummary <> "" Then PgrsBar2.Text = renewSummary   ' 2026/07/07 by Simon/Claude: 秀出既有的新增/更新/刪除統計，純接線不加新邏輯
         End Try
     End Sub
+
+    ' PROBE_RENEWCACHE_DIAG  ↓↓↓ 整塊可刪 ↓↓↓ ----------------------------------------------------------
+    ' 2026/07/09 by Simon/Claude: 診斷「按 RenewCache 出現超多 exception」回報用的一次性探針。
+    '   命令列帶 /autoprobe_renewcache 才會啟動 (Form1_Shown 尾端掛勾)，正常啟動完全不受影響；搭配 /autoclose 跑完自動關閉。
+    '   原理: 掛 AppDomain.FirstChanceException，只在呼叫 RenewCacheToDB() 期間收集(前後 Add/RemoveHandler 限縮範圍)，
+    '         依「例外型別 | 拋出的方法名稱 | 訊息(截斷)」分組計數，避免同性質例外洗版看不出全貌。
+    '   結果寫 %TEMP%\OutlookAssistant_ProbeResult_RenewCache.txt。純診斷，不動 production 邏輯，用完即可整段刪除。
+    Private _probeExCounts As New Concurrent.ConcurrentDictionary(Of String, Integer)
+    Private _probeExSamples As New Concurrent.ConcurrentDictionary(Of String, String)
+    Private Sub PROBE_OnFirstChanceException(sender As Object, e As Runtime.ExceptionServices.FirstChanceExceptionEventArgs)
+        Try
+            Dim topFrame = New Diagnostics.StackTrace(e.Exception, False).GetFrame(0)
+            Dim methodName = If(topFrame?.GetMethod()?.Name, "?")
+            Dim msg = If(e.Exception.Message, "")
+            If msg.Length > 140 Then msg = msg.Substring(0, 140)
+            Dim key = $"{e.Exception.GetType().Name} | {methodName} | {msg}"
+            _probeExCounts.AddOrUpdate(key, 1, Function(k, v) v + 1)
+            _probeExSamples.TryAdd(key, e.Exception.ToString())
+        Catch
+        End Try
+    End Sub
+    Private Async Function RunAutoProbeRenewCache() As Task
+        Dim resultPath = IO.Path.Combine(IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_RenewCache.txt")
+        Dim sb As New Text.StringBuilder()
+        sb.AppendLine($"=== PROBE_RENEWCACHE_DIAG {Date.Now:yyyy-MM-dd HH:mm:ss} ===")
+        Try
+            Await Task.Delay(800)   ' 保守起見，等 Form1_Shown 尾端其餘收尾都跑完
+            sb.AppendLine($"_dbCache Is Nothing: {_dbCache Is Nothing}")
+            _probeExCounts.Clear() : _probeExSamples.Clear()
+            AddHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf PROBE_OnFirstChanceException
+            Dim sw = Stopwatch.StartNew()
+            Dim summary As String = ""
+            Try
+                summary = Await RenewCacheToDB()
+            Catch ex As System.Exception
+                sb.AppendLine($"[外層例外] {ex.GetType().Name}: {ex.Message}")
+            Finally
+                RemoveHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf PROBE_OnFirstChanceException
+            End Try
+            sw.Stop()
+            sb.AppendLine($"耗時: {sw.Elapsed.TotalSeconds:0.00} 秒")
+            sb.AppendLine($"resultSummary: {summary}")
+            Dim total = _probeExCounts.Values.Sum()
+            sb.AppendLine($"FirstChanceException 總數: {total}  (相異樣式: {_probeExCounts.Count})")
+            sb.AppendLine("---- 依樣式分組 (次數 desc) ----")
+            For Each kv In _probeExCounts.OrderByDescending(Function(x) x.Value)
+                sb.AppendLine($"{kv.Value,6}  {kv.Key}")
+            Next
+            sb.AppendLine()
+            sb.AppendLine("---- 各樣式例外樣本 (含 StackTrace) ----")
+            For Each kv In _probeExSamples
+                sb.AppendLine($"### {kv.Key}")
+                sb.AppendLine(kv.Value)
+                sb.AppendLine()
+            Next
+        Catch ex As System.Exception
+            sb.AppendLine($"[PROBE 本身出錯] {ex.GetType().Name}: {ex.Message}{vbCrLf}{ex.StackTrace}")
+        End Try
+        IO.File.WriteAllText(resultPath, sb.ToString(), System.Text.Encoding.UTF8)
+        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase)) Then
+            Await Task.Delay(300)
+            Me.Close()
+        End If
+    End Function
+    ' PROBE_RENEWCACHE_DIAG  ↑↑↑ 整塊可刪 ↑↑↑ ----------------------------------------------------------
+
     Private Async Sub RefreshLv6DbStats()
         ' ---------------------------------------------------------------
         ' RefreshLv6DbStats — 切換到 Setting 頁時呼叫，更新 txtDatabaseStats / Listview6

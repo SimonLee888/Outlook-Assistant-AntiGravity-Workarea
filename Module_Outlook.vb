@@ -74,13 +74,18 @@ Partial Class Form1
     Private Shared _cacheFolderSize As New ConcurrentDictionary(Of String, Long)        ' 自身資料夾的郵件大小加總
     Private Shared _cacheFolderSizeAll As New ConcurrentDictionary(Of String, Long)     ' 整支子樹的所有子目錄郵件大小加總
 
-    Private Shared _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of Folder))     ' GetSortedSubFolders() 已排序的子資料夾清單
+    ' 2026/07/10 by Simon/Claude Fable 5: 值型別由 List(Of Folder) 升級為 (f, name, fPath) tuple —
+    '   GetSortedSubFolders 枚舉時本來就讀過 Name/路徑，舊版回傳時丟棄，害 LoadSubFolderToTreeView 建節點又重打 COM 讀一次。
+    Private Shared _cacheFolderTree As New ConcurrentDictionary(Of String, List(Of (f As Folder, name As String, fPath As String)))     ' GetSortedSubFolders() 已排序的子資料夾清單
+    ' 2026/07/10 by Simon/Claude Fable 5: store-root 清單借放 _cacheFolderTree 的保留鍵 (真實資料夾路徑一律以 "\\" 開頭，不會撞鍵)，
+    '   不另開字典 — ClearMemoryCachesCore / F5 清 _cacheFolderTree 時自動一併失效重讀
+    Private Const KEY_STORE_ROOTS As String = ":::StoreRoots"
     Private Shared _cacheAttMailList As New ConcurrentDictionary(Of String, FolderCacheTab3)    ' 包含附件的郵件預掃描結果 (速度很快, 不用存入SSD?)
     Private Shared _cacheAttFilename As New ConcurrentDictionary(Of String, List(Of String))    ' 所有附件檔名清單
     Private Shared _cacheMailBody As New ConcurrentDictionary(Of String, String)                ' by Gemini 3 Flash, 2026/04/26: Tab4 相似度計算用的 Body 快取 (session 級，避免重複讀取 Outlook mailitem.Body)
 
-    Private Shared _cacheYearCounts As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
-    Private Shared _cacheMonthCounts As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
+    Private Shared _cacheYearCount As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
+    Private Shared _cacheMonthCount As New ConcurrentDictionary(Of String, ConcurrentDictionary(Of Integer, Integer))
 
     ' GetSubtree() 的樹狀展開平坦化清單 (by Gemini, 2026/04/10: 帶路徑優化) (2026/06/28 Stage2: 改帶 eid/sid 不帶 COM 物件)
     Private Shared _cacheSubTreeList As New ConcurrentDictionary(Of String, List(Of (eid As String, sid As String, fPath As String)))
@@ -406,15 +411,29 @@ Partial Class Form1
         ' 2026/4/?? by Claude: PST root pFolder 幾乎 100% 都有子資料夾，這個假設安全；
         '   就算 PST 真的空了，展開時 LoadSubFolderToTreeView 清除 ":::" 後不加任何子節點，節點就會自動收起 "+" 號，行為正確
         '
-        ' 2026/05/04 by Gemini 3 Flash, 減少 TreeView 節點批次添加時 List() 的 Resize 次數 (預分配容量先訂16, 通常不會在一個資料夾內還有超過16個子資料夾)
+        ' 2026/05/04 by Gemini 3 Flash, 減少 TreeView 節點批次添加時 List() 的 Resize 次數 (預分配容量先訂32, 通常不會在一個資料夾內還有超過32個子資料夾)
         ' 2026/5/20 by simon: 在node.Name屬性加上值, 以便後續可以使用TreeNode.Find()
+        '
+        ' 2026/07/10 by Simon/Claude Fable 5: store-root 快取 — 啟動時 5 棵 SimTree 拿同一份 _pstStoreList 連呼 5 次，
+        '   每個 store 3 次 COM (GetRootFolder / .Name / .FullFolderPath) 有 4/5 是重複讀。
+        '   root 資訊借放 _cacheFolderTree 的保留鍵 KEY_STORE_ROOTS，第 2 棵樹起純記憶體組節點 (~0ms)。
+        '   失效跟著 _cacheFolderTree 走 (ClearMemoryCachesCore / _showAllFolders 切換的 Clear 都會清到)，與 _pstStoreList 的生命週期一致。
         ' ===========================================================
         _dbg(" ├ 開始", tv.Name)
 
-        Dim nodeList As New List(Of TreeNode)(16)
-        For Each store In storeList
-            Dim root As Folder = store.GetRootFolder
-            Dim node As New TreeNode(root.Name) With {.Tag = root, .Name = root.FullFolderPath}
+        Dim roots As List(Of (f As Folder, name As String, fPath As String)) = Nothing
+        If Not _cacheFolderTree.TryGetValue(KEY_STORE_ROOTS, roots) Then
+            roots = New List(Of (f As Folder, name As String, fPath As String))(storeList.Count)
+            For Each store In storeList
+                Dim root As Folder = store.GetRootFolder
+                roots.Add((root, root.Name, root.FullFolderPath))
+            Next
+            _cacheFolderTree(KEY_STORE_ROOTS) = roots
+        End If
+
+        Dim nodeList As New List(Of TreeNode)(32)
+        For Each r In roots
+            Dim node As New TreeNode(r.name) With {.Tag = r.f, .Name = r.fPath}
             node.Nodes.Add(":::")   ' ✅ PST root內必定有資料夾, 所以無條件加佔位節點，省掉判斷 root.Folders.Count 這一次多餘的 COM 往返
             nodeList.Add(node)      ' 先加進List在記憶體中快速操作, 而不是直接加到Treeview.Nodes
         Next
@@ -800,9 +819,9 @@ Partial Class Form1
     Private Async Function GetYearCount(fPath As String, eid As String, sid As String, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' GetYearCount — 單一資料夾年份郵件分佈 (Layer2.5 快取代理)
-        ' 2026/04/17 by Claude: 從 CollectYearCounts (L2) 拆出，對齊其他 Layer2.5 快取函數架構
+        ' 2026/04/17 by Claude: 從 CollectYearCount (L2) 拆出，對齊其他 Layer2.5 快取函數架構
         ' 呼叫順序: ① 記憶體命中 → ② DB lazy load → ③ 讀取派工(RDO 優先,失敗 fallback OOM)
-        ' OCE 不在此攔截，直接 re-throw 讓 CollectYearCounts (L2) 的 Catch OCE 接住
+        ' OCE 不在此攔截，直接 re-throw 讓 CollectYearCount (L2) 的 Catch OCE 接住
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid)。熱路徑①②只靠 fPath,folder 延後到 ③ 才 GetFolderById 物化,消除每夾眼物化的 COM 稅。
         ' 2026/07/02 by Simon/Claude [PROBE_YEARSQL 驗證通過]: ③ 改為 RDO 派工(GetYearCountRdo via ExecSQL,免物化folder,
         '   失敗才 fallback GetFolderById + GetYearCountOOM)。探針驗證: TOP1+ORDER BY 範圍偵測 55/55、6/6 兩子樹全數相符,
@@ -811,14 +830,14 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         If _iLikeNoisy Then _dbg(" ├ 開始", fPath & " | ID: " & eid)
         Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
-        If _cacheYearCounts.TryGetValue(fPath, value) Then     ' ① 記憶體命中
+        If _cacheYearCount.TryGetValue(fPath, value) Then     ' ① 記憶體命中
             If _iLikeNoisy Then _dbg("    ├ Cache Hit: ", ExtractFolderName(fPath))
             Return value
         End If
 
         Dim dbResult = LazyGetYearCount(fPath)          ' ② DB lazy load
         If dbResult IsNot Nothing Then
-            _cacheYearCounts(fPath) = dbResult
+            _cacheYearCount(fPath) = dbResult
             If _iLikeNoisy Then _dbg("    ├ DB Hit: ", ExtractFolderName(fPath))
             Return dbResult
         End If
@@ -830,7 +849,7 @@ Partial Class Form1
             Dim folder As Folder = GetFolderById(eid, sid)      ' 只有掉到 OOM 才物化
             folderResult = Await GetYearCountOOM(folder, fPath:=fPath, cToken:=cToken) ' ③b Layer3 COM；OCE re-throw 至 L2
         End If
-        _cacheYearCounts(fPath) = folderResult                  ' ✅ OCE 時走不到此行，快取僅在完整計算後寫入
+        _cacheYearCount(fPath) = folderResult                  ' ✅ OCE 時走不到此行，快取僅在完整計算後寫入
         MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
         Return folderResult
 
@@ -842,9 +861,9 @@ Partial Class Form1
         '   原來的快取/過濾邏輯混在 L3 裡，現在統一到此 L2.5 層，L3 只剩純 COM
         ' 呼叫順序:
         '   提前過濾 1 — GetMailCount=0   → 直接回傳空，不打 COM
-        '   提前過濾 2 — _cacheYearCounts 已知該年無信 → 直接回傳空，不打 COM
+        '   提前過濾 2 — _cacheYearCount 已知該年無信 → 直接回傳空，不打 COM
         '   ① 記憶體命中 → ② DB lazy load → ③ 讀取派工(RDO 優先,失敗 fallback OOM)
-        ' OCE 不在此攔截，直接 re-throw 讓 CollectMonthCounts (L2) 的 Catch OCE 接住
+        ' OCE 不在此攔截，直接 re-throw 讓 CollectMonthCount (L2) 的 Catch OCE 接住
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid 領頭),folder 延後到 ③才物化
         ' 2026/07/02 by Simon/Claude: ③ 比照 GetYearCount 套用 RDO 派工(年份架構已驗證,月份不另外測,直接套用)。
         ' 2026/07/03 by Simon 註解: YearCount/MonthCount多線程平行化: 技術上可行但不值得, 在17~30萬封郵件的全庫重建也都不到二秒, 再砍也只快不到一秒反而增加多線程同步複雜度, 先不做。
@@ -858,7 +877,7 @@ Partial Class Form1
         ' 提前過濾 2: 年度快取已知此年份信件數為 0，不必打月份 COM
         ' 2026/04/10 by Gemini: 省掉「某資料夾在 2001 年確定無信」的多餘 COM 呼叫
         Dim yCache As ConcurrentDictionary(Of Integer, Integer) = Nothing
-        If _cacheYearCounts.TryGetValue(fPath, yCache) Then
+        If _cacheYearCount.TryGetValue(fPath, yCache) Then
             Dim countInYear As Integer = 0
             yCache.TryGetValue(year, countInYear)
             If countInYear = 0 Then Return New ConcurrentDictionary(Of Integer, Integer)()
@@ -866,26 +885,26 @@ Partial Class Form1
 
         Dim cacheKey As String = fPath & "_" & year.ToString()
         Dim value As ConcurrentDictionary(Of Integer, Integer) = Nothing
-        If _cacheMonthCounts.TryGetValue(cacheKey, value) Then Return value ' ① 記憶體命中
+        If _cacheMonthCount.TryGetValue(cacheKey, value) Then Return value ' ① 記憶體命中
 
         Dim dbResult = LazyGetMonthCount(fPath, year)               ' ② DB lazy load
         If dbResult IsNot Nothing Then
-            _cacheMonthCounts.TryAdd(cacheKey, dbResult)
+            _cacheMonthCount.TryAdd(cacheKey, dbResult)
             If _iLikeNoisy Then _dbg("DB 命中", $"{ExtractFolderName(fPath)} {year} 年 ({dbResult.Count} 個月)")
             Return dbResult
         End If
 
         ' ③ 讀取派工: RDO 優先(免物化 folder),失敗才 GetFolderById 物化 + OOM;OCE re-throw，不在此攔截 (寫入快取在 COM 完成後，OCE 天然繞過)
-        Dim monthCounts = GetMonthCountRdo(fPath, eid, sid, year)
-        If monthCounts Is Nothing Then
+        Dim monthCount = GetMonthCountRdo(fPath, eid, sid, year)
+        If monthCount Is Nothing Then
             Dim folder As Folder = GetFolderById(eid, sid)   ' 只有掉到 OOM 才物化
-            monthCounts = Await GetMonthCountOOM(folder, year, fPath:=fPath, cToken:=cToken)
+            monthCount = Await GetMonthCountOOM(folder, year, fPath:=fPath, cToken:=cToken)
         End If
-        _cacheMonthCounts(cacheKey) = monthCounts           ' ✅ 完整計算後存入快取
+        _cacheMonthCount(cacheKey) = monthCount           ' ✅ 完整計算後存入快取
         MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤 (用 fPath，非 cacheKey；cacheKey 含 "_year" 後綴)
-        ' DbSaveMonthCountsSingle(fPath, year, monthCounts) ' ✅ 2026/04/09 設計: 增量寫入 DB (待啟用)
-        If _iLikeNoisy Then _dbg(" ├ 結束", fPath & " | Year: " & year & " | 成果: " & If(monthCounts IsNot Nothing, monthCounts.Count.ToString(), "Nothing")) ' by Gemini 3.5 Flash, 2026/07/01
-        Return monthCounts
+        ' DbSaveMonthCountSingle(fPath, year, monthCount) ' ✅ 2026/04/09 設計: 增量寫入 DB (待啟用)
+        If _iLikeNoisy Then _dbg(" ├ 結束", fPath & " | Year: " & year & " | 成果: " & If(monthCount IsNot Nothing, monthCount.Count.ToString(), "Nothing")) ' by Gemini 3.5 Flash, 2026/07/01
+        Return monthCount
 
     End Function
     Private Async Function GetAttMailList(fPath As String, eid As String, sid As String, progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of List(Of MailItemInfo))
@@ -1257,7 +1276,7 @@ Partial Class Form1
 
     End Function
 
-    Private Function GetSortedSubFolders(pFolder As Folder, Optional fPath As String = "", Optional skipCache As Boolean = False) As List(Of Folder)
+    Private Function GetSortedSubFolders(pFolder As Folder, Optional fPath As String = "", Optional skipCache As Boolean = False) As List(Of (f As Folder, name As String, fPath As String))
         ' ==========================================
         ' 取得引數pFolder下的所有subFolders並排序後傳回
         ' 優化紀錄: 2026/03/29 by Gemini 3.1 Pro
@@ -1268,6 +1287,15 @@ Partial Class Form1
         ' 2026/07/05 by Simon/Claude: 去模式化 (呼應 06/13 folder_info 子樹計數鏈同一原則，當時列為範圍外)。
         '   快取鍵拿掉 |_showAllFolders，只存一份完整骨架(含非郵件夾)；模式剪枝從骨架層移到回傳前的顯示層，
         '   根除「全顯/過濾模式各存一份快取、互相看不到對方已掃過的結果」的殘缺風險。
+        ' 2026/07/10 by Simon/Claude Fable 5: 回傳型別升級為 (f, name, fPath) tuple — 枚舉/DB 兩條路徑本來就握有 Name 與路徑，
+        '   舊版回傳 List(Of Folder) 把這兩個值丟掉，呼叫端 (LoadSubFolderToTreeView 等) 建節點又逐一重打 COM 讀回來；
+        '   現在一起帶出去，呼叫端零 COM。快取 _cacheFolderTree 同步改存 tuple。
+        ' 2026/07/10 by Simon/Claude [效能決策紀錄 — 決定不轉 RDO，別再重新研究]:
+        '   ① 實測: 單層列舉頂多 5~20 個子資料夾、最多 15~20ms，且只在節點第一次展開時觸發一次，體感為零。
+        '   ② RDO 每次呼叫要先解 store/folder 的固定解析開銷，N=5~20 時吃掉所有收益 (同 HasSubFoldersFast 2026/7/2 的結論)；
+        '      RDO 批次優勢要到幾百幾千筆才顯現 (如 GetSubtree 骨架批次、Tab3 178k 列場景)。
+        '   ③ 就算轉了也省不掉 OOM: 呼叫端 LoadSubFolderToTreeView 需要 Folder 物件塞 node.Tag，
+        '      RDO 枚舉完仍要逐一 GetFolderFromID 物化回 OOM，兩頭成本都要付。結案不做。
         ' ==========================================
         fPath = SafeGetPath(pFolder, fPath)
         Dim fName As String = ExtractFolderName(fPath)
@@ -1275,8 +1303,8 @@ Partial Class Form1
 
         ' ① 記憶體快取檢查: 命中則回傳完整骨架，模式過濾在回傳前處理，0ms
         Dim cacheKey As String = fPath
-        Dim cachedFolders As List(Of Folder) = Nothing
-        If Not skipCache AndAlso _cacheFolderTree.TryGetValue(cacheKey, cachedFolders) Then Return FilterSubFoldersByMode(cachedFolders, fPath)    ' 2026/6/27, Gemini 發現skipCache參數沒有穿透到這裡的記憶體快取
+        Dim cachedFolders As List(Of (f As Folder, name As String, fPath As String)) = Nothing
+        If Not skipCache AndAlso _cacheFolderTree.TryGetValue(cacheKey, cachedFolders) Then Return FilterSubFoldersByMode(cachedFolders)    ' 2026/6/27, Gemini 發現skipCache參數沒有穿透到這裡的記憶體快取
 
         ' ② SSD / DB 讀取分支 (Lazy Load): TreeView 展開時的主要加速點
         ' ✅ 2026/5/31 by Gemini/Simon: 加入 skipCache 引數判斷是否要強制讀取COM，避免在需要最新資料的情況下誤用過期快取
@@ -1595,15 +1623,14 @@ Partial Class Form1
                     If TypeOf row.GetValue(lb + 3) Is DateTime Then
                         rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
                     End If
-                    Dim info As New MailItemInfo With {
-                        .EntryID = entryID,
-                        .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
-                        .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
-                        .RcvTime = rcvTime,
-                        .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
-                        .FolderPath = fPath,
-                        .MsgIDhash = StringToXxHash64Hex(If(msgIdRaw, "")),
-                        .SenderEmail = If(TryCast(row.GetValue(lb + 6), String), "")}
+                    Dim info As New MailItemInfo With {.EntryID = entryID,
+                                                       .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
+                                                       .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
+                                                       .RcvTime = rcvTime,
+                                                       .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
+                                                       .FolderPath = fPath,
+                                                       .MsgIDhash = StringToXxHash64Hex(If(msgIdRaw, "")),
+                                                       .SenderEmail = If(TryCast(row.GetValue(lb + 6), String), "")}
                     result.Add(info)
                     ' 2026/07/04 piggyback: 迴紋針判定(SmartNoAttach 未設定時回 Int32 錯誤碼,只認 Boolean=True 為剔除)
                     Dim vHas As Object = row.GetValue(lb + 7)
@@ -2492,14 +2519,14 @@ Partial Class Form1
         ' 2026/04/05 by Gemini: 每 100ms 節流讓出執行緒
         ' 2026/04/15 by Claude: 加入 cToken 參數
         '   取代 _cancelRequested 旗標，改用 SmartThrottle(swThrottle, cToken) 節流讓出
-        '   cToken 取消時 Task.Delay 拋 OCE，此函數不攔截 (讓 OCE 冒泡至 CollectYearCounts)
-        '   原因: 攔住後回傳半截 yearCounts，L2 會誤以為該資料夾已統計完畢，導致計數偏低
+        '   cToken 取消時 Task.Delay 拋 OCE，此函數不攔截 (讓 OCE 冒泡至 CollectYearCount)
+        '   原因: 攔住後回傳半截 yearCount，L2 會誤以為該資料夾已統計完畢，導致計數偏低
         ' ---------------------------------------------------------------
         fPath = SafeGetPath(folder, fPath)
         Dim fName As String = ExtractFolderName(fPath)
         If _iLikeNoisy Then _dbg("    ├ 開始", fName)
 
-        Dim yearCounts As New ConcurrentDictionary(Of Integer, Integer)
+        Dim yearCount As New ConcurrentDictionary(Of Integer, Integer)
         Dim table As Outlook.Table = Nothing
         Try
             ' 2026/3/24 by Gemini: 改用 GetTable + GetArray 取代逐年 Restrict
@@ -2513,14 +2540,14 @@ Partial Class Form1
                     Dim receivedTime As DateTime = SafeGet(Of DateTime)(data, r, 0, DateTime.MinValue)
                     If receivedTime > DateTime.MinValue Then
                         Dim year As Integer = receivedTime.Year
-                        If year > 0 AndAlso year <= Date.Today.Year Then yearCounts.AddOrUpdate(year, 1, Function(k, v) v + 1)
+                        If year > 0 AndAlso year <= Date.Today.Year Then yearCount.AddOrUpdate(year, 1, Function(k, v) v + 1)
                     End If
                 Next
                 Await SmartThrottle(swThrottle, cToken:=cToken)
-                ' 2026/04/15 by Claude: _cancelRequested 取代為 SmartThrottle(swThrottle, cToken) 整合讓出與取消偵測，OCE 冒泡至呼叫端 CollectYearCounts
+                ' 2026/04/15 by Claude: _cancelRequested 取代為 SmartThrottle(swThrottle, cToken) 整合讓出與取消偵測，OCE 冒泡至呼叫端 CollectYearCount
             Loop
         Catch ex As OperationCanceledException
-            If _iLikeNoisy Then _dbg("    ├ 已取消", fName) : Throw           ' 2026/04/15: 不攔截 OCE，直接 re-throw 讓 CollectYearCounts 感知取消
+            If _iLikeNoisy Then _dbg("    ├ 已取消", fName) : Throw           ' 2026/04/15: 不攔截 OCE，直接 re-throw 讓 CollectYearCount 感知取消
         Catch ex As System.Exception
             If _iLikeNoisy Then _dbg("    ├ 錯誤", $"{fName}: {ex.Message}")  ' by Gemini, 2026/04/04: Issue 4 格式標準化
         Finally
@@ -2528,8 +2555,8 @@ Partial Class Form1
         End Try
         Await Task.Yield()   ' ✅ 函數結束前再讓出一次，確保畫面有機會更新
 
-        If _iLikeNoisy Then _dbg("    ├ 結束", $"{fName} | 年份分佈: {yearCounts.Count}")
-        Return yearCounts
+        If _iLikeNoisy Then _dbg("    ├ 結束", $"{fName} | 年份分佈: {yearCount.Count}")
+        Return yearCount
 
     End Function
     Private Async Function GetMonthCountOOM(folder As Folder, year As Integer, Optional fPath As String = "", Optional cToken As CancellationToken = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))
@@ -2549,7 +2576,7 @@ Partial Class Form1
         Dim fName As String = ExtractFolderName(fPath)
         If _iLikeNoisy Then _dbg("    ├ 開始", $"{fName} ({year} 年)")
 
-        Dim monthCounts As New ConcurrentDictionary(Of Integer, Integer)
+        Dim monthCount As New ConcurrentDictionary(Of Integer, Integer)
         Dim table As Outlook.Table = Nothing
         Try
             ' 2026/3/24 by Gemini: 改用 GetTable + 日期範圍 DASL filter + GetArray，用整年的日期範圍一次篩選，不再逐月 Restrict
@@ -2563,7 +2590,7 @@ Partial Class Form1
                 Dim data = SafeGetArray(table) : If data Is Nothing Then Exit Do
                 For r As Integer = 0 To data.GetUpperBound(0)
                     Dim receivedTime As DateTime = SafeGet(Of DateTime)(data, r, 0, DateTime.MinValue)
-                    If receivedTime > DateTime.MinValue Then monthCounts.AddOrUpdate(receivedTime.Month, 1, Function(k, v) v + 1)
+                    If receivedTime > DateTime.MinValue Then monthCount.AddOrUpdate(receivedTime.Month, 1, Function(k, v) v + 1)
                 Next
 
                 Await SmartThrottle(swThrottle, cToken:=cToken)
@@ -2580,7 +2607,7 @@ Partial Class Form1
         End Try
 
         If _iLikeNoisy Then _dbg("    ├ 結束", $"{fName} ({year} 年)")
-        Return monthCounts
+        Return monthCount
     End Function
     Private Async Function GetAttMailListOOM(folder As Folder, progress As IProgress(Of ProgressReport), Optional cToken As CancellationToken = Nothing) As Task(Of List(Of MailItemInfo))
         ' ----------------------------------------------------------------------------------------
@@ -3313,6 +3340,15 @@ Partial Class Form1
             ' by Gemini, 2026/04/10: 填充身分標識與標籤快取 (2026/07/03: isMail 併入 _cacheFolderIDs，_cacheIsMailFolder 汰除)
             If Not String.IsNullOrEmpty(.eid) Then _cacheFolderIDs.TryAdd(fPath, (.eid, .sid, .isMail = 1, .hasCh = 1))
         End With
+    End Sub
+    Private Sub ClearMonthCountMemory(fPath As String)
+        ' 清除單一資料夾在 _cacheMonthCount 記憶體的所有年份 entry。
+        ' _cacheMonthCount key 格式為 "fPath_year"，不知道呼叫當下是哪一年有快取，故用前綴比對清所有匹配的。
+        ' 2026/07/09 by Simon/Claude: 消重 — 原本 RenewCacheToDB(孤兒/dirty 兩分支各一次)與 InvalidateMailCache
+        '   (Form1_Maintab56.vb) 各自重複同一段 3 行迴圈，抽出共用；三處呼叫端已改呼叫本函式。
+        For Each mk In _cacheMonthCount.Keys.Where(Function(k) k.StartsWith(fPath & "_")).ToList()
+            _cacheMonthCount.TryRemove(mk, Nothing)
+        Next
     End Sub
 #End Region
 #End Region

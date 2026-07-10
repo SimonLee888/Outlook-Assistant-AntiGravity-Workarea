@@ -44,16 +44,22 @@ Public Class SimTree
     ' S2 2026-03-23：從 OnLostFocus 上方移至此私有狀態區，集中管理
     Private _isHighlightActive As Boolean = True
 
-    ' Win32 常數與 API (用於徹底隱藏水平捲軸)
-    ' by Gemini 3.0 Flash, 2026/04/21
-    Private Const TVS_NOHSCROLL As Integer = &H8000         ' 停用水平捲軸樣式
+    ' Win32 常數與 API (用於 SuppressAutoHScroll：保留水平捲軸、抑制自動水平位移)
+    ' 2026/07/10 by Simon/Claude: 取代舊 HideHorizontalScrollBar（TVS_NOHSCROLL 只藏捲軸、擋不住內容位移，已移除）
     Private Const WM_HSCROLL As Integer = &H114             ' 水平捲動訊息
+    Private Const WM_KEYDOWN As Integer = &H100             ' 鍵盤按下訊息
+    Private Const WM_LBUTTONDOWN As Integer = &H201         ' 滑鼠左鍵按下訊息
+    Private Const WM_LBUTTONDBLCLK As Integer = &H203       ' 滑鼠左鍵雙擊訊息
     Private Const TVM_ENSUREVISIBLE As Integer = &H1114     ' TreeView EnsureVisible 訊息 (TVM_FIRST + 20)
+    Private Const TVM_SELECTITEM As Integer = &H110B        ' TreeView 選取節點訊息 (TVM_FIRST + 11)
     Private Const SB_HORZ As Integer = 0                    ' 水平捲軸標記
-    Private Const WS_HSCROLL As Integer = &H100000          ' 標準水平捲軸樣式
+    Private Const SB_THUMBPOSITION As Integer = 4           ' WM_HSCROLL 通知碼：捲動到指定位置
 
     <DllImport("user32.dll")>
-    Private Shared Function ShowScrollBar(hWnd As IntPtr, wBar As Integer, bShow As Boolean) As Integer
+    Private Shared Function GetScrollPos(hWnd As IntPtr, nBar As Integer) As Integer
+    End Function
+    <DllImport("user32.dll")>
+    Private Shared Function SendMessage(hWnd As IntPtr, msg As Integer, wParam As IntPtr, lParam As IntPtr) As IntPtr
     End Function
 #End Region
 
@@ -101,11 +107,11 @@ Public Class SimTree
         End Set
     End Property
 
-    ' HideHorizontalScrollBar：是否隱藏水平捲軸並防止水平位移
-    ' by Gemini 3.0 Flash, 2026/04/21
-    ' 設為 True 時會加入 TVS_NOHSCROLL 樣式並攔截 WM_HSCROLL 訊息
-    <Category("Appearance"), DefaultValue(False)>
-    Public Property HideHorizontalScrollBar As Boolean = False
+    ' SuppressAutoHScroll：保留水平捲軸（使用者仍可手動捲動），但抑制選取節點 / EnsureVisible
+    ' 造成的自動水平位移（原生 TreeView 遇到長文字節點會自動往右對齊，無屬性可關）
+    ' 2026/07/10 by Simon/Claude
+    <Category("Behavior"), DefaultValue(False)>
+    Public Property SuppressAutoHScroll As Boolean = False
 
     <Category("Appearance"), Description("是否啟用滑鼠懸停高亮效果"), DefaultValue(True)>
     Public Property EnableHoverHighlight As Boolean = True
@@ -115,43 +121,23 @@ Public Class SimTree
 #End Region
 
 #Region "■ 03 核心訊息處理（捲軸控制）"
-    Protected Overrides ReadOnly Property CreateParams As CreateParams
-        ' CreateParams：覆寫樣式以停用水平捲軸
-        ' by Gemini 3.0 Flash, 2026/04/21
-        Get
-            Dim cp As CreateParams = MyBase.CreateParams
-            If HideHorizontalScrollBar Then
-                ' TVS_NOHSCROLL: TreeView 專用停用捲軸樣式
-                ' WS_HSCROLL: 標準水平捲軸樣式 (透過 Not 運算移除)
-                cp.Style = cp.Style Or TVS_NOHSCROLL
-                cp.Style = cp.Style And Not WS_HSCROLL
-            End If
-            Return cp
-        End Get
-    End Property
-    Protected Overrides Sub OnHandleCreated(e As EventArgs)
-        ' OnHandleCreated：控制項 Handle 建立後立即強力隱藏捲軸
-        ' by Gemini 3.0 Flash, 2026/04/21
-        MyBase.OnHandleCreated(e)
-        If HideHorizontalScrollBar Then
-            ' 強力移除捲軸空間 (灰條)
-            ShowScrollBar(Me.Handle, SB_HORZ, False)
-        End If
-    End Sub
     Protected Overrides Sub WndProc(ByRef m As Message)
-        ' WndProc：攔截水平捲動訊息以防止位移
-        ' by Gemini 3.0 Flash, 2026/04/21
-        If HideHorizontalScrollBar Then
+        ' WndProc：SuppressAutoHScroll 啟用時，攔截所有可能引發「自動水平位移」的訊息
+        ' 2026/07/10 by Simon/Claude
+        ' 原生 TreeView 在選取/EnsureVisible 長文字節點時會自動水平捲動對齊，comctl32 寫死、無樣式可關。
+        ' 對策：讓訊息正常處理（垂直捲動、選取、展開收攏都保留），事後若發現水平位置被動過，就捲回原位。
+        '   TVM_ENSUREVISIBLE : node.EnsureVisible()（鍵盤導航、Form1 GotoDefaultInbox 等）
+        '   TVM_SELECTITEM    : MyBase.SelectedNode = ...（SelectSingleNode 等）
+        '   WM_LBUTTONDOWN/DBLCLK, WM_KEYDOWN : comctl32 內部 ensure-visible（不經上述訊息）
+        If SuppressAutoHScroll AndAlso IsHandleCreated Then
             Select Case m.Msg
-                Case WM_HSCROLL
-                    ' 攔截水平捲動訊息，直接返回不讓控制項位移
-                    Return
-                Case TVM_ENSUREVISIBLE
-                    ' 攔截 EnsureVisible 訊息
-                    ' 這是防止 TreeView 在選取長項目時自動「對齊」文字而產生水平位移的關鍵
-                    MyBase.WndProc(m) ' 先讓基類處理垂直方向的捲動
-                    ' 強制重置水平捲動位置 (如果有的話)
-                    ShowScrollBar(Me.Handle, SB_HORZ, False)
+                Case TVM_ENSUREVISIBLE, TVM_SELECTITEM, WM_LBUTTONDOWN, WM_LBUTTONDBLCLK, WM_KEYDOWN
+                    Dim oldPos As Integer = GetScrollPos(Me.Handle, SB_HORZ)
+                    MyBase.WndProc(m)
+                    If GetScrollPos(Me.Handle, SB_HORZ) <> oldPos Then
+                        ' SB_THUMBPOSITION 走控制項自己的捲動邏輯，內容與捲軸同步還原
+                        SendMessage(Me.Handle, WM_HSCROLL, New IntPtr((oldPos << 16) Or SB_THUMBPOSITION), IntPtr.Zero)
+                    End If
                     Return
             End Select
         End If
@@ -497,6 +483,11 @@ Public Class SimTree
         ' 2026/05/24 by Claude Sonnet 4.6: 修正含 & 字元節點的背景與文字截斷問題
         ' 根因: OwnerDrawText 模式 e.Bounds.Width 以「& 為前綴」計算，比 NoPrefix 實際寬度短
         '       需自行測量實際寬度，同時用 BackColor 先清 e.Bounds 防 native 選取框殘留
+        '
+        ' 2026/07/10 by Simon/Claude [效能決策紀錄 — 決定不再優化，別再重新研究]:
+        '   曾評估把下方每次 New SolidBrush 改成欄位級快取。結論不做：OnDrawNode 只對「可見節點」觸發
+        '   （實務上一屏 30~100 個），一次完整重繪僅產生 ~百餘個微秒級短命 GDI 物件，Using 已正確 Dispose，
+        '   量不出體感差異；快取反而要處理 BackColor/HoverColor 變更時重建 + 控制項 Dispose 的生命週期。結案不做。
 
         Dim fontToUse As Font = If(e.Node.NodeFont, Me.Font)
 
@@ -585,11 +576,31 @@ Public Class SimTree
         ' （保留相容舊版呼叫，不觸發 AfterSelect）
         SelectSingleNode(node)
     End Sub
+    Public Function GetDedupedSelection() As List(Of TreeNode)
+        ' GetDedupedSelection：父子去重，回傳目前選取節點中排除掉「祖先也在選取清單內」的節點
+        ' 用途：使用者同時選中父資料夾與其子孫節點時，避免呼叫端重複計算統計（父的統計本就已含子孫）
+        ' 2026/07/10 by Simon/Claude: 從 Form1_MainTab12.vb 的 GetDeDupedNodes 搬入，改讀 Me.SelectedNodes，讓其他 Tab 可直接重用
+
+        Dim nodes As List(Of TreeNode) = Me.SelectedNodes
+        Dim selectedSet As New HashSet(Of TreeNode)(nodes)
+        Dim dedupedNodes As New List(Of TreeNode)(nodes.Count)
+
+        For Each node As TreeNode In nodes
+            Dim isDescendantOfSelected As Boolean = False
+            Dim ancestor As TreeNode = node.Parent
+            While ancestor IsNot Nothing
+                If selectedSet.Contains(ancestor) Then isDescendantOfSelected = True : Exit While
+                ancestor = ancestor.Parent
+            End While
+            If Not isDescendantOfSelected Then dedupedNodes.Add(node)
+        Next
+        Return dedupedNodes
+    End Function
 
     ' =========================================================================
     ' 整合後的路徑導覽與狀態管理 API (2026/05/14 重構)
     ' 解決了 FindNodeByPath, CollectExpandedPaths 等分散函數，統一由控制項內部管理
-    ' Todo: treeview.ContainsPath(fullPath) as boolean, 需要嗎??.......晚點有用到再做就好
+    ' 2026/07/10: ContainsPath(fullPath) 已補上薄 wrapper (見 GetNode 下方)，目前專案內尚無呼叫端，備用
     ' =========================================================================
     Public Function GetNode(fullPath As String, Optional searchOnlyExpanded As Boolean = True) As TreeNode
         ''' <summary>
@@ -607,7 +618,15 @@ Public Class SimTree
         ''' <returns>找到的 TreeNode；找不到時回傳 Nothing</returns>
         Dim n As TreeNode = Nothing
         Return If(TryGetNode(fullPath, n, searchOnlyExpanded), n, Nothing)
-        ' todo: 未來可以加上內建一個快取機制以提升path to node 的性能，例如 Dictionary(Of String, TreeNode)
+        ' 2026/07/10: 曾評估加 path→node Dictionary 快取，實測後結案不做（理由見 RestoreTreeState 的效能決策紀錄）
+    End Function
+    Public Function ContainsPath(fullPath As String, Optional searchOnlyExpanded As Boolean = True) As Boolean
+        ''' <summary>
+        ''' 判斷指定路徑的節點是否存在（TryGetNode 的布林薄包裝，不回傳節點物件）。
+        ''' 2026/07/10 by Simon/Claude: 依 Todo 補上；目前專案內尚無任何呼叫端，備用。
+        ''' </summary>
+        Dim n As TreeNode = Nothing
+        Return TryGetNode(fullPath, n, searchOnlyExpanded)
     End Function
     Public Function TryGetNode(fullPath As String, ByRef returnNode As TreeNode,
                                Optional searchOnlyExpanded As Boolean = True, Optional expandAlongTheWay As Boolean = False) As Boolean
@@ -838,6 +857,12 @@ Public Class SimTree
         ' 天然重讀 Outlook COM；若資料夾已消失，節點不出現（不需另寫 diff）
         ' FireAfterSelect 在 EndUpdate 之後呼叫，確保 Layout 結算完畢再觸發統計
         ' 2026/05/25 by Simon/Claude: 取代舊版 LoadTreeState + RefreshTreeState
+        ' ---------------------------------------------------------------
+        ' 2026/07/10 by Simon/Claude [效能決策紀錄 — 決定不再優化，別再重新研究]:
+        '   曾評估兩案：① TryGetNode 加 path→node Dictionary 快取 ② 多條路徑共享父層前綴的 Trie 式重用。
+        '   實測（300 與 780 個資料夾的兩個 Profile）：F5 全樹重刷首次約 0.25~0.35s，再次重刷降到 0.15~0.2s。
+        '   耗時大頭是 Expand() 觸發 BeforeExpand → LoadSubFolderToTreeView 的 COM/DB 載入（毫秒級/節點），
+        '   TryGetNode 的純記憶體字串比對只佔毫秒級零頭 — 兩案都省不到體感，卻要背快取失效維護成本。結案不做。
         ' ---------------------------------------------------------------
         If state Is Nothing Then Return
 

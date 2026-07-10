@@ -1011,6 +1011,30 @@ Partial Class Form1
         End If
     End Sub
 
+    Private Function GetDeDupedNodes(nodes As IEnumerable(Of TreeNode)) As List(Of TreeNode)
+        ''' <summary>
+        ''' [Layer 1.5 輔助層] 執行父子去重過濾。
+        ''' 確保當「父資料夾」及其「子資料夾」同時被選中時，只保留父資料夾以防止重複統計。
+        ''' </summary>
+        _dbg("開始")
+        If nodes Is Nothing Then Return New List(Of TreeNode)
+
+        ' 預分配容量為 64 (by Gemini 3 Flash, 2026/05/04)
+        Dim selectedSet As New HashSet(Of TreeNode)(nodes)
+        Dim dedupedNodes As New List(Of TreeNode)(64)
+
+        For Each node As TreeNode In nodes
+            Dim isDescendantOfSelected As Boolean = False
+            Dim ancestor As TreeNode = node.Parent
+            While ancestor IsNot Nothing
+                ' 若某節點的任一祖先也在選中清單裡，表示該節點已被涵蓋，應跳過
+                If selectedSet.Contains(ancestor) Then isDescendantOfSelected = True : Exit While
+                ancestor = ancestor.Parent
+            End While
+            If Not isDescendantOfSelected Then dedupedNodes.Add(node)
+        Next
+        Return dedupedNodes
+    End Function
 
     ' 2026/06/22 by Simon/Claude Opus 4.8: IRM 保護信隔離夾名稱 (方案 Y: 每顆 PST 各建一個同名夾, 同 store 內搬)
     Private Const QUARANTINE_NAME As String = "_IRM_Protected"

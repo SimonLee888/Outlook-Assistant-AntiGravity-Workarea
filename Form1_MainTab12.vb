@@ -147,9 +147,10 @@ Partial Class Form1
         '                           ComputeSize 從 .SubFolder 取資料夾；EnterSelectedFolder 從 .ParentNode 找節點
         ' ==============================================================
         ' 重構抽離, 2026/5/14 by simon
-        '   - GetDeDupedNodes:       父子去重，確保同時選中父資料夾與子資料夾時不重複計算, 可重複用於F5 Refresh
-        '   - CollectTab1FolderInfo: 非同步計算統計數字，支援一般模式與 F5 強制刷新模式
-        '   - RenderLv1:    將計算好的 ListViewItem 清單更新至 ListView1，包含雙緩衝優化與過期狀態清理
+        '   - SimTree.GetDedupedSelection : 父子去重，確保同時選中父資料夾與子資料夾時不重複計算, 可重複用於F5 Refresh
+        '                                   (2026/07/10 由本檔 GetDeDupedNodes 內建進 SimTree，舊函數移至 Module_Win32API.vb 備用待刪區)
+        '   - CollectTab1FolderInfo : 非同步計算統計數字，支援一般模式與 F5 強制刷新模式
+        '   - RenderLv1             : 將計算好的 ListViewItem 清單更新至 ListView1，包含雙緩衝優化與過期狀態清理
         ' ==============================================================
         _dbg("開始") : Dim sw As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
 
@@ -159,7 +160,7 @@ Partial Class Form1
         ' ── 父子去重 (2026/04/13 by Simon/Claude) ──────────────────────────
         ' 問題: 使用者同時選父資料夾與其子孫節點時，父的 TotalMailCount 已含子孫，若再重複計算則數字不準。
         ' 解法: 只保留「沒有任何祖先被選中」的節點。
-        Dim deDupedNodes As List(Of TreeNode) = GetDeDupedNodes(selectedNodes)
+        Dim deDupedNodes As List(Of TreeNode) = SimTree1.GetDedupedSelection()   ' 2026/07/10 by Simon/Claude: 改用 SimTree 內建版
         Dim skippedCount As Integer = selectedNodes.Count - deDupedNodes.Count
         If skippedCount > 0 Then _dbg(" ├ 父子去重", $"移除 {skippedCount:N0} 個子孫節點，實際處理 {deDupedNodes.Count:N0} 個")
 
@@ -257,7 +258,7 @@ Partial Class Form1
                     SimTree1.AddSelectedNode(parentNode)
 
                     ' 手動計算統計並渲染 (等同 SimTree1_AfterSelect 的流程)
-                    Dim dedupedNodes As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
+                    Dim dedupedNodes As List(Of TreeNode) = SimTree1.GetDedupedSelection()   ' 2026/07/10 by Simon/Claude: 改用 SimTree 內建版
                     Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken)
                     RenderLv1(items)
 
@@ -810,7 +811,7 @@ Partial Class Form1
         PgrsBar1.Text = "F5 強制更新中..." : PgrsBar2.Text = ""
 
         ' ① 去重
-        Dim dedupedNodes As List(Of TreeNode) = GetDeDupedNodes(selectedNodes)
+        Dim dedupedNodes As List(Of TreeNode) = SimTree1.GetDedupedSelection()   ' 2026/07/10 by Simon/Claude: 改用 SimTree 內建版
         Dim cToken As CancellationToken = OkayNowYouHaveToken()
 
         ' 收集目前 ListView1 有 size 顯示的 fPath (重算用)
@@ -948,30 +949,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  └ 輔助函數"
-    Private Function GetDeDupedNodes(nodes As IEnumerable(Of TreeNode)) As List(Of TreeNode)
-        ''' <summary>
-        ''' [Layer 1.5 輔助層] 執行父子去重過濾。
-        ''' 確保當「父資料夾」及其「子資料夾」同時被選中時，只保留父資料夾以防止重複統計。
-        ''' </summary>
-        _dbg("開始")
-        If nodes Is Nothing Then Return New List(Of TreeNode)
 
-        ' 預分配容量為 64 (by Gemini 3 Flash, 2026/05/04)
-        Dim selectedSet As New HashSet(Of TreeNode)(nodes)
-        Dim dedupedNodes As New List(Of TreeNode)(64)
-
-        For Each node As TreeNode In nodes
-            Dim isDescendantOfSelected As Boolean = False
-            Dim ancestor As TreeNode = node.Parent
-            While ancestor IsNot Nothing
-                ' 若某節點的任一祖先也在選中清單裡，表示該節點已被涵蓋，應跳過
-                If selectedSet.Contains(ancestor) Then isDescendantOfSelected = True : Exit While
-                ancestor = ancestor.Parent
-            End While
-            If Not isDescendantOfSelected Then dedupedNodes.Add(node)
-        Next
-        Return dedupedNodes
-    End Function
     Private Sub SelectFolderInListView(lv As ListView, targetFolder As Folder)
         ''' <summary>
         ''' 在指定的 ListView 中尋找並選取對應的 Folder 項目
@@ -1153,8 +1131,8 @@ Partial Class Form1
         SimTree1.ClearSelectedNodes()
         SimTree1.AddSelectedNode(foundNode)
 
-        Dim deduped As List(Of TreeNode) = GetDeDupedNodes(SimTree1.SelectedNodes)
-        Dim cToken As CancellationToken = OkayNowYouHaveToken()   ' 2026/07/07 by Simon/Claude: 行內取用改具名，才能在 Finally 歸還(運算中判定 token 化)
+        Dim deduped As List(Of TreeNode) = SimTree1.GetDedupedSelection()   ' 2026/07/10 by Simon/Claude: 改用 SimTree 內建版
+        Dim cToken As CancellationToken = OkayNowYouHaveToken()             ' 2026/07/07 by Simon/Claude: 行內取用改具名，才能在 Finally 歸還(運算中判定 token 化)
         Try
             Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(deduped, cToken)
             RenderLv1(items)
@@ -1195,7 +1173,7 @@ Partial Class Form1
     '     - TreeView2_AfterSelect()                 (已重寫)
     '     - SimTree2_AfterSelect()                  (已重寫，不再 commented out)
     '     - CheckSubFolder2_CheckedChanged()        (已重寫)
-    '     - GetYearCountsAsync_CL()                 (已由 CollectYearCounts 取代)
+    '     - GetYearCountsAsync_CL()                 (已由 CollectYearCount 取代)
     '     - CountMailByYearAsync_CLayer2()          (已由 GetYearCountsForFolderAsync 取代)
     '     - UpdateCounterProgress()                 (已改成 callback 機制，函數可刪除)
     '     - ShowProgressTab2()                      (簽章已更改，請替換)(2026/4/12 重構 v2 已刪除)
@@ -1204,7 +1182,7 @@ Partial Class Form1
     ' 2026/04/12 重構 v2 (render層拆分+導覽函數整合):
     '   刪除: ShowYearView, ShowMonthView, ShowResultTab2, ShowProgressTab2
     '         UpdateChart2forYearView, UpdateChart2forMonthView
-    '   新增: CollectMonthCounts            ← 月份資料收集 Layer2 (純計算，不碰UI) 
+    '   新增: CollectMonthCount            ← 月份資料收集 Layer2 (純計算，不碰UI) 
     '         GoToLv2YearView()                ← 共用導覽：返回年度視圖 (純 render from cache，DoubleClick/KeyPress 共用) 
     '         GoToLv2MonthView(year, cToken)   ← 共用導覽：進入月份視圖 (方案A cache，DoubleClick/KeyPress 共用) 
     '         RenderLv2YearView              ← 年度 ListView render (純UI，不計算) 
@@ -1216,7 +1194,7 @@ Partial Class Form1
     ' 分層架構 (更新後):
     '   Layer 1 (UI 事件層)       : SimTree2_AfterSelect, CheckSubFolder2_CheckStateChanged
     '                                Lv2_MouseDoubleClick (只兩行，委派 GoToLv2YearView/GoToLv2MonthView) 
-    '   Layer 2 (流程協調層)      : CollectYearCounts, CollectMonthCounts
+    '   Layer 2 (流程協調層)      : CollectYearCount, CollectMonthCount
     '                                RenderLv2YearView, RenderCt2YearView
     '                                RenderLv2MonthView, RenderCt2MonthView
     '                                GoToLv2YearView, GoToLv2MonthView
@@ -1262,7 +1240,7 @@ Partial Class Form1
             Dim progressTree = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             Dim folderList = Await GetUniqueFolderList(selectedNodes, _includeSubTab2, progress:=progressTree, cToken:=cToken)
             _lv2IsMonthView = False        ' 切換選取時，重置視圖狀態為年度視圖
-            _tv2FolderList = folderList    ' ✅ 記住本次統計的資料夾清單，供 GoToLv2MonthView (CollectMonthCounts) 使用
+            _tv2FolderList = folderList    ' ✅ 記住本次統計的資料夾清單，供 GoToLv2MonthView (CollectMonthCount) 使用
             ' 2026/04/16 by Gemini: 這裡的 f.fPath 已經是 Tuple 屬性，完全無 COM 開銷
             _tv2FolderPaths = folderList.Select(Function(f) f.fPath).ToList() ' ★ 記住對應路徑 (by Gemini 3.1 Pro, 2026/04/15)
 
@@ -1274,7 +1252,7 @@ Partial Class Form1
             '' 第一遍: GetSubtree()  → BFS 遍歷，存取每個 folder.Folders
             '' 第二遍: For Each allFolders → GetMailCountOOM() 再讀每個資料夾一次
 
-            ' --- 計算所有選定根資料夾的郵件總數，作為 CollectYearCounts 進度條的分母
+            ' --- 計算所有選定根資料夾的郵件總數，作為 CollectYearCount 進度條的分母
             ' 2026/04/16 by Gemini: 這裡優化為直接對 folderList (已展開的子資料夾) 進行一圈快速統計
             Dim totalMailCount As Long = 0
             Dim processedCountLocal As Integer = 0
@@ -1292,9 +1270,9 @@ Partial Class Form1
             Next
 
             ' 呼叫 Layer2 流程協調層執行統計；結果存入 _lv2DataYear session 快取，GoToLv2MonthView/GoToLv2YearView 直接 render 不重算
-            ListView2.Tag = totalMailCount    ' ★ 把總計數量快取起來，供 CollectMonthCounts 回報進度分母使用 (by Gemini 3.1 Pro, 2026/04/15)
+            ListView2.Tag = totalMailCount    ' ★ 把總計數量快取起來，供 CollectMonthCount 回報進度分母使用 (by Gemini 3.1 Pro, 2026/04/15)
             Dim progressYear = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
-            _lv2DataYear = Await CollectYearCounts(folderList, totalMailCount, progressYear, cToken:=cToken, _tv2FolderPaths)
+            _lv2DataYear = Await CollectYearCount(folderList, totalMailCount, progressYear, cToken:=cToken, _tv2FolderPaths)
 
             ' --- 序號校驗點 2 (核心運算完成後) ---
             If _tab2SelectSeq <> mySeq Then Return  ' _dbg("結束", "序號已不匹配，丟棄本次結果 (運算完畢中斷) ")
@@ -1539,7 +1517,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function CollectYearCounts(fList As List(Of (eid As String, sid As String, fPath As String)), totalMailCount As Long, progress As IProgress(Of ProgressReport), cToken As CancellationToken, Optional fPaths As List(Of String) = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
+    Private Async Function CollectYearCount(fList As List(Of (eid As String, sid As String, fPath As String)), totalMailCount As Long, progress As IProgress(Of ProgressReport), cToken As CancellationToken, Optional fPaths As List(Of String) = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
         ' ---------------------------------------------------------------
         ' === Layer 2: 流程協調層 ===
         ' 職責: BFS 遍歷 fList，管理快取，驅動 Layer3 計算，合併結果，回報進度
@@ -1570,7 +1548,7 @@ Partial Class Form1
                 ' ✅ 2026/04/10: 提前過濾沒有信件的資料夾 (by Gemini) 既然根本沒有信，就不必去查 DB 或打 COM，直接跳過
                 ' 改用免-folder 多載，完全避免觸碰 COM 物件
                 If GetMailCount(fPath, eid, sid) <= 0 Then ' 放個空快取避免下次又查 (<= 0 也包含 -1 的情況視同沒信防護)
-                    _cacheYearCounts(fPath) = New ConcurrentDictionary(Of Integer, Integer)()
+                    _cacheYearCount(fPath) = New ConcurrentDictionary(Of Integer, Integer)()
                     MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤 (空表本身不會產生 DB 列，標記只是保持行為一致)
                     processedFolders += 1 : Continue For
                 End If
@@ -1592,23 +1570,23 @@ Partial Class Form1
             Next
         Catch ex As OperationCanceledException
             ' by Gemini, 2026/04/11: 捕捉 ESC 中斷，回傳已計算的部分結果而不拋出異常
-            _dbg(" ├ 中斷", "ComputeYearCounts 已中斷")
+            _dbg(" ├ 中斷", "CollectYearCount 已中斷")
         End Try
         _dbg(" ├ 結束", $"共 {merged.Count:N0} 個年份 | 郵件總計: {merged.Values.Sum():N0}") ' by Gemini, 2026/04/10
         Return merged
 
     End Function
-    Private Async Function CollectMonthCounts(selectedYear As Integer, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
+    Private Async Function CollectMonthCount(selectedYear As Integer, cToken As CancellationToken) As Task(Of ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' 月份資料收集 Layer2 (2026/04/12 由 ShowMonthView 計算部分拆出) 
         ' 職責: 遍歷 _tv2FolderList，對每個資料夾呼叫 GetMonthCount(RDO優先,失敗fallback OOM)，合併結果，回報進度
         '       不碰 UI render (render 由 GoToLv2MonthView 的 RenderLv2MonthView / RenderCt2MonthView 負責) 
-        '       cToken 與 CollectYearCounts 同理，都需要傳入以支援 ESC 中斷
+        '       cToken 與 CollectYearCount 同理，都需要傳入以支援 ESC 中斷
         '       OperationCanceledException 由 caller (GoToLv2MonthView → DoubleClick / HandleListViewKeyPress) 的 Catch 攔截
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始", selectedYear.ToString())
 
-        Dim monthCounts As New ConcurrentDictionary(Of Integer, Integer)
+        Dim monthCount As New ConcurrentDictionary(Of Integer, Integer)
         Dim totalFolders As Integer = _tv2FolderList.Count
         Dim processedFolders As Integer = 0
         Dim totalMailCount As Long = ListView2.Tag    ' ★ 直接取用快取好的分母，省掉整個 For Each GetMailCount 迴圈
@@ -1623,8 +1601,8 @@ Partial Class Form1
             ' 2026/04/15 by Gemini 3.1 Pro: 傳入快取好的 fPath，消除 GetMonthCount 內的 COM 開銷
             ' 2026/04/17 by Claude: 改呼叫 GetMonthCount (L2.5)，提前過濾/快取/DB lazy 全封裝於內
             ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple,眼物化移除——folder 由免-folder 多載延後到 ③ 才建
-            Dim folderMonthCounts As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCount(fPath, eid, sid, selectedYear, cToken:=cToken)
-            monthCounts = MergeDictionaries(monthCounts, folderMonthCounts)
+            Dim folderMonthCount As ConcurrentDictionary(Of Integer, Integer) = Await GetMonthCount(fPath, eid, sid, selectedYear, cToken:=cToken)
+            monthCount = MergeDictionaries(monthCount, folderMonthCount)
 
             ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判
             Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
@@ -1633,8 +1611,8 @@ Partial Class Form1
                                           PgrsBar2.Text = $"正在統計 {selectedYear} 年月份分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (相依包含共計 {totalMailCount:N0} 封信)。"
                                       End Sub)
         Next
-        _dbg(" ├ 結束", $"{selectedYear} 年 | 月份數: {monthCounts.Count:N0}")
-        Return monthCounts
+        _dbg(" ├ 結束", $"{selectedYear} 年 | 月份數: {monthCount.Count:N0}")
+        Return monthCount
 
     End Function
     Private Async Function GoToLv2YearView() As Task
@@ -1674,7 +1652,7 @@ Partial Class Form1
     Private Async Function GoToLv2MonthView(selectedYear As Integer, cToken As CancellationToken) As Task
         ' ---------------------------------------------------------------
         ' 共用導覽：進入月份視圖 (2026/04/12 取代 ShowMonthView，供 DoubleClick 與 KeyPress 共用) 
-        ' 職責: 方案A _lv2DataMonth 快取判斷 → 命中時純 render；未命中時 CollectMonthCounts → render
+        ' 職責: 方案A _lv2DataMonth 快取判斷 → 命中時純 render；未命中時 CollectMonthCount → render
         '       _lv2MonthViewYear 同時作為「目前顯示年份」與「方案A快取 tag」
         ' OperationCanceledException 由 caller (DoubleClick / HandleListViewKeyPress) 的 Catch 攔截
         ' ---------------------------------------------------------------
@@ -1693,9 +1671,9 @@ Partial Class Form1
             PgrsBar1.Text = $"共 {_mHit:N0} 封"
             PgrsBar2.Text = $"({selectedYear} 年月份分佈 - 按 ESC 或雙擊標題橫列可返回視圖) "
         Else
-            ' ★ 快取未命中：CollectMonthCounts → _cacheMonthCounts 一定命中 → merge → render
+            ' ★ 快取未命中：CollectMonthCount → _cacheMonthCount 一定命中 → merge → render
             _dbg(" ├ _lv2DataMonth 快取未命中，開始計算", selectedYear.ToString())
-            Dim mc As ConcurrentDictionary(Of Integer, Integer) = Await CollectMonthCounts(selectedYear, cToken:=cToken)
+            Dim mc As ConcurrentDictionary(Of Integer, Integer) = Await CollectMonthCount(selectedYear, cToken:=cToken)
             _lv2DataMonth = mc : _lv2MonthViewYear = selectedYear : _lv2IsMonthView = True
             swM.Stop()
             RenderLv2MonthView(selectedYear, mc)
@@ -1713,23 +1691,23 @@ Partial Class Form1
     End Function
 #End Region
 #Region "  ├ UI 渲染"
-    Private Sub RenderLv2YearView(yearCounts As ConcurrentDictionary(Of Integer, Integer))
+    Private Sub RenderLv2YearView(yearCount As ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' 年度視圖 ListView2 渲染 (2026/04/12 由 ShowResultTab2 拆出) 
         ' 職責: 純 UI render，不做計算，不查快取，不碰 COM
         ' 對稱: RenderCt2YearView 負責同一視圖的 Chart2 部分
         ' ---------------------------------------------------------------
-        _dbg(" ├ 開始", yearCounts?.Count)
+        _dbg(" ├ 開始", yearCount?.Count)
 
         ListView2.Items.Clear()
-        If yearCounts Is Nothing OrElse yearCounts.IsEmpty Then
+        If yearCount Is Nothing OrElse yearCount.IsEmpty Then
             ClearCt2Series()     ' ★ 空資料夾時也要清除 Chart2，否則前一個資料夾的圖表會殘留
             ListView2.Items.Add(New ListViewItem("找不到郵件"))
         Else
             ' 預分配容量為 64，優化 Tab2 年度/月份視圖的 UI 項目渲染 (by Gemini 3 Flash, 2026/05/04)
             Dim items As New List(Of ListViewItem)(64)
-            Dim sortedYearCounts = yearCounts.OrderBy(Function(pair) pair.Key).ToList()
-            For Each pair In sortedYearCounts
+            Dim sortedYearCount = yearCount.OrderBy(Function(pair) pair.Key).ToList()
+            For Each pair In sortedYearCount
                 items.Add(New ListViewItem({pair.Key, pair.Value.ToString("N0") & " "}))
             Next
             ListView2.Items.AddRange(items.ToArray())
@@ -1737,7 +1715,7 @@ Partial Class Form1
         _dbg(" ├ 結束")
 
     End Sub
-    Private Sub RenderLv2MonthView(selectedYear As Integer, monthCounts As ConcurrentDictionary(Of Integer, Integer))
+    Private Sub RenderLv2MonthView(selectedYear As Integer, monthCount As ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' 月份視圖 ListView2 渲染 (2026/04/12 由 ShowMonthView render 部分拆出) 
         ' 職責: 純 UI render，不做計算，不查快取，不碰 COM
@@ -1758,7 +1736,7 @@ Partial Class Form1
 
         ' 第二行: 年份標題
         Dim titleItem As New ListViewItem($"── {selectedYear} 年月份分佈 ──")
-        titleItem.SubItems.Add($"共 {monthCounts.Values.Sum:N0}  封")  ' 字串結尾補上空白防止選取時切邊，與下方對齊
+        titleItem.SubItems.Add($"共 {monthCount.Values.Sum:N0}  封")  ' 字串結尾補上空白防止選取時切邊，與下方對齊
         titleItem.ForeColor = Color.DimGray
         titleItem.Font = New Font(_fontDefault, _fontBold)
         itemsList.Add(titleItem)
@@ -1766,7 +1744,7 @@ Partial Class Form1
         ' 逐月顯示 (只顯示有郵件的月份) 
         For month As Integer = 1 To 12
             Dim count As Integer = 0
-            If monthCounts.TryGetValue(month, count) AndAlso count > 0 Then ' 稍微優化 TryGetValue 判斷式
+            If monthCount.TryGetValue(month, count) AndAlso count > 0 Then ' 稍微優化 TryGetValue 判斷式
                 Dim monthItem As New ListViewItem($"{selectedYear} /  {month:D2}月")
                 monthItem.SubItems.Add(count.ToString("N0") & " ")  ' 字串結尾一律補一格空白
                 itemsList.Add(monthItem)
@@ -1776,7 +1754,7 @@ Partial Class Form1
         _dbg(" ├ 結束", selectedYear.ToString())
 
     End Sub
-    Private Sub RenderCt2YearView(yearCounts As ConcurrentDictionary(Of Integer, Integer))
+    Private Sub RenderCt2YearView(yearCount As ConcurrentDictionary(Of Integer, Integer))
         ' ---------------------------------------------------------------
         ' 年度視圖 Chart2 渲染 (2026/04/12 由 UpdateChart2forYearView 改名重構) 
         ' 職責: 純 UI render；接受 ConcurrentDictionary，內部自行排序 (原版由 caller 排序後傳 List，現改為自己排序讓介面更乾淨) 
@@ -1784,19 +1762,19 @@ Partial Class Form1
         ' ---------------------------------------------------------------
         _dbg(" ├ 開始")
         ClearCt2Series()     ' 清除之前的統計結果，包括 Series Points、平均線 Series、平均值標籤 Annotation
-        If yearCounts Is Nothing OrElse yearCounts.IsEmpty Then Return
-        Dim sortedYearCounts = yearCounts.OrderBy(Function(p) p.Key).ToList()
+        If yearCount Is Nothing OrElse yearCount.IsEmpty Then Return
+        Dim sortedYearCount = yearCount.OrderBy(Function(p) p.Key).ToList()
 
         ' 添加數據到 Series, 在 Chart2 中顯示統計結果
         Dim series As Series = Chart2.Series(0)
-        For Each pair In sortedYearCounts
+        For Each pair In sortedYearCount
             series.Points.AddXY(pair.Key, pair.Value)
         Next
 
         ' 依內容大小來設置 Chart2 的 X 軸上下限
         With Chart2.ChartAreas(0).AxisX
-            .Minimum = sortedYearCounts.Min(Function(p) p.Key) - 0.5
-            .Maximum = sortedYearCounts.Max(Function(p) p.Key) + 0.5
+            .Minimum = sortedYearCount.Min(Function(p) p.Key) - 0.5
+            .Maximum = sortedYearCount.Max(Function(p) p.Key) + 0.5
             .Interval = 1
             .IntervalOffset = 0                 ' ✅ 還原年度視圖的長條置中偏移
             .LabelStyle.Format = "####"         ' ✅ 還原年份格式
@@ -1807,9 +1785,9 @@ Partial Class Form1
 
         ' 添加一條代表平均值的線 (獨立 Series 才能控制線型，StripLine 不支援虛線) 
         ' 2026/3/6 by Claude Code；2026/04/12 移入 RenderCt2YearView
-        Dim average As Double = sortedYearCounts.Average(Function(pair) pair.Value)
-        Dim xMin As Double = sortedYearCounts.Min(Function(pair) pair.Key)
-        Dim xMax As Double = sortedYearCounts.Max(Function(pair) pair.Key)
+        Dim average As Double = sortedYearCount.Average(Function(pair) pair.Value)
+        Dim xMin As Double = sortedYearCount.Min(Function(pair) pair.Key)
+        Dim xMax As Double = sortedYearCount.Max(Function(pair) pair.Key)
 
         Dim avgSeries As New Series("平均線") With {.ChartType = SeriesChartType.Line,
                                                     .Color = ThemeColors.avgLineColor,
@@ -1838,7 +1816,7 @@ Partial Class Form1
         _dbg(" ├ 結束")
 
     End Sub
-    Private Sub RenderCt2MonthView(monthCounts As ConcurrentDictionary(Of Integer, Integer), year As Integer)
+    Private Sub RenderCt2MonthView(monthCount As ConcurrentDictionary(Of Integer, Integer), year As Integer)
         ' ---------------------------------------------------------------
         ' 月份視圖 Chart2 渲染 (2026/04/12 由 UpdateChart2forMonthView 改名) 
         ' 月份長條圖：只畫 1~12 月，X 軸標籤顯示「M月」，不畫平均線
@@ -1852,7 +1830,7 @@ Partial Class Form1
         Dim series As Series = Chart2.Series(0)
         For month As Integer = 1 To 12
             Dim count As Integer = 0
-            monthCounts.TryGetValue(month, count)
+            monthCount.TryGetValue(month, count)
             Dim pt As New DataPoint()
             pt.SetValueXY(month, count)
             pt.AxisLabel = $"{month}月"     ' ✅ 用月份名稱當 X 軸標籤，比純數字 1~12 更易讀

@@ -444,6 +444,7 @@ Partial Class Form1
         tv.Indent = 25                  ' 樹狀目錄縮排距離
         tv.EnableHoverHighlight = True  ' 啟用滑鼠懸停高亮
         tv.HoverColor = Form1.ThemeColors.MercuryGray
+        tv.SuppressAutoHScroll = True   ' 2026/07/10 by Simon/Claude: 保留水平捲軸，但抑制選取長節點時的自動水平位移
 
         ' 雙重緩衝區優化
         SendMessage(tv.Handle, TVM_SETEXTENDEDSTYLE, New IntPtr(TVS_EX_DOUBLEBUFFER), New IntPtr(TVS_EX_DOUBLEBUFFER))
@@ -725,7 +726,6 @@ Partial Class Form1
         _dbg("開始")
 
         InitTreeView(SimTree4)
-        SimTree4.HideHorizontalScrollBar = True ' by Gemini 3.0 Flash, 2026/04/21: 隱藏水平捲軸並防止位移
         InitListView(Listview4)
         InitSplitter(SplitContainer4)
 
@@ -1444,14 +1444,9 @@ Partial Class Form1
             If GetCurrentTv() Is SimTree1 Then Await ForceLv1Refresh()
             ' by Gemini 3.5 Flash, 2026/05/29: 限制 Await ForceLv1Refresh() 只有在當前是 Tab1 (SimTree1) 的時候才需要執行
 
-        ElseIf e.KeyCode = Keys.Space Then  ' 按Space切換展開/收合
-            ' by Claude Sonnet 4.6, 2026/05/19: 從 HandleTvKeyPress 移至此處
-            ' KeyDown 比 KeyPress 更早觸發，搭配 SuppressKeyPress 可確實阻止系統捲動行為
-            Dim node As TreeNode = tv.SelectedNode
-            If node IsNot Nothing Then
-                If node.IsExpanded Then node.Collapse() Else node.Expand()
-                e.Handled = True : e.SuppressKeyPress = True  ' ✅ 阻止後續 KeyPress 觸發系統捲動
-            End If
+            ' 按Space切換展開/收合
+            ' by Claude Sonnet 4.6, 2026/05/19: 從 HandleTvKeyPress 移至此處, KeyDown 比 KeyPress 更早觸發，搭配 SuppressKeyPress 可確實阻止系統捲動行為
+            ' 2026/7/10 by simon, 讓SimTree內部自己去處理key.space
 
         ElseIf e.KeyCode = Keys.Enter Then
             If tv Is SimTree4 Then
@@ -2243,8 +2238,8 @@ Partial Class Form1
         _cacheFolderSize.Clear()
         _cacheFolderSizeAll.Clear()
 
-        _cacheYearCounts.Clear()
-        _cacheMonthCounts.Clear()
+        _cacheYearCount.Clear()
+        _cacheMonthCount.Clear()
         _cacheAttMailList.Clear()
         _cacheAttFilename.Clear()
 

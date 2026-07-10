@@ -962,7 +962,7 @@ Partial Class Form1
             InvalidateMailCache(fPath)     ' 刪除後手動清理快取資料，避免殘留已刪除郵件的資訊
             ' 2026/07/06 by Simon/Claude Fable 5: 原 DbDeleteMailInfoByPath 只清 mail_info 一張表 —
             '   att_maillist 的 snap 比對是「att 列 snap vs folder_info.mc」兩邊同一次 SaveCache 寫入、同源必相等，
-            '   year/month_counts 更是完全無驗證，三張表都會把已刪郵件從 DB lazy 原樣復活。改走統一失效入口一次清乾淨。
+            '   year_count/month_count 更是完全無驗證，三張表都會把已刪郵件從 DB lazy 原樣復活。改走統一失效入口一次清乾淨。
             DbPurgeFolderMailRows(fPath)
         Next
         ' 2026/07/06 by Simon/Claude Fable 5: 昂貴表 surgical — 刪除當下手上就有確切 entryID 清單，
@@ -1480,12 +1480,8 @@ Partial Class Form1
         _cacheFolderSizeAll.TryRemove(fPath, dummy2)
         _cacheFolderCommitMax.TryRemove(fPath, dummy2)   ' 2026/07/06 by Simon/Claude Fable 5: commit 基準一併失效，否則 SaveCache 的 COALESCE 會拿記憶體舊值把 PoisonFolderSnapDb 清掉的 commit_max 寫回
 
-        _cacheYearCounts.TryRemove(fPath, Nothing)
-
-        ' month_counts key 格式為 "fPath_YYYY"，不知道是哪年，清所有匹配的
-        For Each mk In _cacheMonthCounts.Keys.Where(Function(k) k.StartsWith(fPath & "_")).ToList()
-            _cacheMonthCounts.TryRemove(mk, Nothing)
-        Next
+        _cacheYearCount.TryRemove(fPath, Nothing)
+        ClearMonthCountMemory(fPath)
 
         _cacheAttMailList.TryRemove(fPath, Nothing)
 
@@ -1533,7 +1529,7 @@ Partial Class Form1
     Private Async Sub LoadCache_Click(sender As Object, e As EventArgs) Handles LoadCache.Click
         Await LoadCachesFromDB()
         Dim st = GetDBSummary()
-        PgrsBar2.Text = $"DB 統計 — folder_info:{st.fc} 筆 / att_maillist:{st.mb} 筆 / att_filenames:{st.at} 筆 / year_counts:{st.yc} 筆 / month_counts:{st.mc} 筆 / {st.kb} KB"
+        PgrsBar2.Text = $"DB 統計 — folder_info:{st.fc} 筆 / att_maillist:{st.mb} 筆 / att_filenames:{st.at} 筆 / year_count:{st.yc} 筆 / month_count:{st.mc} 筆 / {st.kb} KB"
 
     End Sub
     Private Async Sub ClearCache_Click(sender As Object, e As EventArgs) Handles ClearCache.Click
@@ -1610,7 +1606,7 @@ Partial Class Form1
     Private Async Sub RenewCache_Click(sender As Object, e As EventArgs) Handles RenewCache.Click
         ' 2026/04/09 重構: 原本只做孤兒清除，現在改呼叫完整的 RenewCacheToDB
         '   RenewCacheToDB 內含: Phase1 BFS → Phase2 snapshot 比對 → Phase3 dirty 重算
-        '                        Phase4 ancestor 聚合清除 → Phase5 month_counts DB 清除
+        '                        Phase4 ancestor 聚合清除 → Phase5 month_count DB 清除
         '                        Phase6 CleanupOrphan + SaveCachesToDB
         '   RenewIncludeSize 勾選時才重算 folder_size (GetTable 遍歷，大資料夾較慢)
         ' 2026/6/7: by simon/Gemini: 直接在這裡計時顯示整體耗時, 去除原本在 RenewCacheToDB 內的多段計時, 避免重構後的邏輯分散導致耗時統計不完整或混亂
@@ -1671,8 +1667,8 @@ Partial Class Form1
             AddLv6StatLine("_cacheMailCountAll", $"{_cacheMailCountAll.Count:N0} 筆")
             AddLv6StatLine("_cacheFolderCount", $"{_cacheFolderCount.Count:N0} 筆")
             AddLv6StatLine("_cacheFolderCountAll", $"{_cacheFolderCountAll.Count:N0} 筆")
-            AddLv6StatLine("_cacheYearCounts", $"{_cacheYearCounts.Count:N0} 筆")
-            AddLv6StatLine("_cacheMonthCounts", $"{_cacheMonthCounts.Count:N0} 筆")
+            AddLv6StatLine("_cacheYearCount", $"{_cacheYearCount.Count:N0} 筆")
+            AddLv6StatLine("_cacheMonthCount", $"{_cacheMonthCount.Count:N0} 筆")
             AddLv6StatLine("_cacheAttMailList", $"{_cacheAttMailList.Count:N0} 筆")
             AddLv6StatLine("_cacheAttFilename", $"{_cacheAttFilename.Count:N0} 筆")
             AddLv6StatLine("_cacheFolderSize", $"{_cacheFolderSize.Count:N0} 筆")
@@ -1692,8 +1688,8 @@ Partial Class Form1
             AddLv6StatLine("folder_info", $"{st.fc:N0} 筆")
             AddLv6StatLine("senders", $"{st.senders:N0} 筆")     ' 2026/06/14 by Simon/Claude Opus 4.8: 補上 senders，與 DbShowDbFileStat 順序一致
             AddLv6StatLine("mail_info", $"{st.basic:N0} 筆")     ' by Gemini 3 Flash, 2026/04/22
-            AddLv6StatLine("year_counts", $"{st.yc:N0} 筆")
-            AddLv6StatLine("month_counts", $"{st.mc:N0} 筆")
+            AddLv6StatLine("year_count", $"{st.yc:N0} 筆")
+            AddLv6StatLine("month_count", $"{st.mc:N0} 筆")
             AddLv6StatLine("att_maillist", $"{st.mb:N0} 筆")
             AddLv6StatLine("─── OLAcacheMail.db ────", "", True) ' 2026/06/21 by Simon/Claude: att_filenames/mail_simhash 住此檔
             AddLv6StatLine("att_filenames", $"{st.at:N0} 筆")
@@ -1743,10 +1739,10 @@ Partial Class Form1
                 targetTableName = "att_maillist"
             ElseIf selectedLabel.Contains("att_filenames") Then
                 targetTableName = "att_filenames"
-            ElseIf selectedLabel.Contains("year_counts") Then   ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
-                targetTableName = "year_counts"
-            ElseIf selectedLabel.Contains("month_counts") Then  ' 2026/06/12 by Simon/Claude Opus 4.8: 修正 typo (month_stats → month_counts)
-                targetTableName = "month_counts"
+            ElseIf selectedLabel.Contains("year_count") Then   ' 2026/06/12 by Simon/Claude Opus 4.8: 補上缺漏的分支
+                targetTableName = "year_count"
+            ElseIf selectedLabel.Contains("month_count") Then  ' 2026/06/12 by Simon/Claude Opus 4.8: 修正 typo (month_stats → month_count)
+                targetTableName = "month_count"
             ElseIf selectedLabel.Contains("mail_simhash") Then  ' 2026/06/21 by Simon/Claude: 新增 mail_simhash 分支(DbShowTableStat 內部會路由到 _dbMail)
                 targetTableName = "mail_simhash"
             ElseIf selectedLabel.Contains("bigram_set") Then    ' 2026/07/07 by Simon/Claude: bigram_set 是 mail_simhash 表內的欄位，筆數/大小跟全表不同，需獨立統計而非整表路由
@@ -1827,14 +1823,209 @@ Partial Class Form1
     End Function
 #End Region
 #Region "  ├ Debug 測試區"
-    Private Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
+    Private Async Sub DebugButton_Click(sender As Object, e As EventArgs) Handles DebugButton.Click
         ' 2026/07/07 by Simon/Claude: 快速預覽功能已提升為正式功能(見 ShowMailQuickPreview/GetSelectedMailInfos in Form1_MainTab34.vb，
         '   右鍵選單「快速預覽選取項目」與 Ctrl/Shift+Enter 皆可觸發)。這裡保留兩支純比較用診斷探針：
         '   平常點擊 = 手工 TextBox 陽春預覽(.Body 純文字，比較基準)；按住 Shift = 測試 RDO 獨立 session 自己的 Display()(已證實無效，見備忘)；
         '   按住 Ctrl = 呼叫正式版 ShowMailQuickPreview，方便跟前兩者同批次比較耗時
 
-
+        ' PROBE_PARSCAN ↓↓↓ 整塊可刪(連同下方三支 ProbeParScan 函式) ↓↓↓
+        Await ProbeParScanAsync()
+        ' PROBE_PARSCAN ↑↑↑ 整塊可刪 ↑↑↑
     End Sub
+
+    ' ═════════════════ PROBE_PARSCAN ↓↓↓ 整塊可刪 ↓↓↓ ═════════════════
+    ' 2026/07/10 by Simon/Claude Fable 5: GetMailInfoRdo 全庫冷掃平行化效益實測。
+    '   問題: 已知單線 RDO 批次 ≈19µs/封(306ms/15,865封)，全庫 35 萬封估 7~10s；舊結論平行增益上限 1.4~1.5×，
+    '         但當時未區分「跨 PST」vs「同 PST 內」平行 — 若瓶頸是單一 store 內部序列化，跨 store 切法可能突破。
+    '   設計: 6 個 pass — S1a 循序基準 → P2/P4/P8 round-robin 平行 → PS 每store一執行緒 → S1b 循序複測。
+    '         A/B/A 結構: S1a vs S1b 差異大 = OS 檔案快取暖化污染，增益數字要打折看。
+    '   讀取核心 = 複製 production GetMailInfoRdo 的 COLS+GetRows(5000)+MailItemInfo 完整解析(含 XxHash)，
+    '         誠實付出同等 CPU 成本，但「不寫任何 production 快取」(_cacheMailInfo/_cacheAttMailList 一概不碰)。
+    '   執行緒紀律: 每 worker 自建/自 Logoff 獨立 RDOSession(鐵律)，比照 SimHashParallelWorker 既有 production 模式。
+    '   看門狗: CTS 8 分鐘硬上限；探針執行中再按一次 Debug 鈕 = 手動取消。中斷時回報已完成的 pass。
+    Private _probeParScanCts As CancellationTokenSource = Nothing
+
+    Private Async Function ProbeParScanAsync() As Task
+        If _probeParScanCts IsNot Nothing Then
+            _dbg("PROBE_PARSCAN", "收到第二次點擊 → 手動取消進行中的探針")
+            _probeParScanCts.Cancel() : Return
+        End If
+        If _olNS Is Nothing Then _dbg("PROBE_PARSCAN", "Outlook session 未就緒，中止") : Return
+
+        ' 母體: DB folder_info 全部郵件夾(eid/sid 齊全者)。不經 UI 樹、不物化 OOM folder。
+        Dim allRows = LoadAllFolderInfo().Where(Function(r) r.isMail = 1 AndAlso r.eid <> "" AndAlso r.sid <> "").ToList()
+        If allRows.Count = 0 Then _dbg("PROBE_PARSCAN", "folder_info 無資料，請先 RenewCache 建庫") : Return
+
+        Dim profileName As String = _olNS.CurrentProfileName
+        _probeParScanCts = New CancellationTokenSource(TimeSpan.FromMinutes(8))   ' 看門狗: 8 分鐘硬上限
+        Dim ct As CancellationToken = _probeParScanCts.Token
+
+        ' pass 清單: K=0 + ByStore=True 代表「每個 store 一條 worker」
+        Dim passes As New List(Of (Label As String, K As Integer, ByStore As Boolean)) From {
+            ("S1a 循序基準", 1, False), ("P2 round-robin", 2, False), ("P4 round-robin", 4, False),
+            ("P8 round-robin", 8, False), ("PS 每store一緒", 0, True), ("S1b 循序複測", 1, False)}
+        Dim lines As New List(Of String)
+        Dim serialScanSecs As New List(Of Double)                       ' S1a/S1b 純掃秒數，算 speedup 分母
+        Dim passScan As New List(Of (Label As String, Secs As Double))  ' 各 pass 純掃秒數
+        Dim basePerFolder As Dictionary(Of String, Integer) = Nothing   ' S1a 每夾列數，供 parity 比對
+        Dim swTotal As Stopwatch = Stopwatch.StartNew()
+        _dbg("PROBE_PARSCAN 開始", $"母體 {allRows.Count} 夾 | 6 pass A/B/A | 看門狗 8 分鐘")
+        Try
+            For Each p In passes
+                ct.ThrowIfCancellationRequested()
+                PgrsBar2.Text = $"PROBE_PARSCAN: {p.Label} 掃描中 ({allRows.Count} 夾)..."
+
+                ' 分工: ByStore = 按 PST 分組(測跨 store 平行極限)；否則 round-robin 交錯發牌(打散 store 聚集)
+                Dim chunks As List(Of List(Of FolderInfoDbRow))
+                If p.ByStore Then
+                    chunks = allRows.GroupBy(Function(r) GetStoreNameFromPath(r.path)).Select(Function(g) g.ToList()).ToList()
+                Else
+                    chunks = Enumerable.Range(0, p.K).Select(Function(w) New List(Of FolderInfoDbRow)).ToList()
+                    For i As Integer = 0 To allRows.Count - 1 : chunks(i Mod p.K).Add(allRows(i)) : Next
+                End If
+
+                Dim sw As Stopwatch = Stopwatch.StartNew()
+                Dim tasks = chunks.Select(Function(c) Task.Run(Function() ProbeParScanWorker(profileName, c, ct))).ToList()
+                Dim workerResults = Await Task.WhenAll(tasks)
+                sw.Stop()
+
+                Dim rows As Long = workerResults.Sum(Function(w) w.Rows)
+                Dim fails As Integer = workerResults.Sum(Function(w) w.Fails)
+                Dim scanSecs As Double = workerResults.Max(Function(w) w.ScanMs) / 1000.0   ' 最慢 worker 的純掃時間(排除 Logon/store dict 建置)
+                Dim perFolder As New Dictionary(Of String, Integer)(allRows.Count)
+                For Each w In workerResults : For Each kv In w.PerFolder : perFolder(kv.Key) = kv.Value : Next : Next
+
+                ' parity: 各 pass 每夾列數 vs S1a 基準(掃描期間信箱若有增刪會出現少量差異,屬正常,回報數字自行判讀)
+                Dim parityStr As String = ""
+                If basePerFolder Is Nothing Then
+                    basePerFolder = perFolder
+                Else
+                    Dim mismatch As Integer = perFolder.Where(Function(kv) Not basePerFolder.ContainsKey(kv.Key) OrElse basePerFolder(kv.Key) <> kv.Value).Count()
+                    parityStr = $", parity差異 {mismatch} 夾"
+                End If
+
+                If Not p.ByStore AndAlso p.K = 1 Then serialScanSecs.Add(scanSecs)
+                passScan.Add((p.Label, scanSecs))
+                Dim line As String = $"{p.Label} K={chunks.Count}: wall {sw.Elapsed.TotalSeconds:0.00}s (純掃 {scanSecs:0.00}s), {rows:N0} 列, {If(scanSecs > 0, rows / scanSecs, 0):N0} 列/s, 失敗夾 {fails}{parityStr}"
+                lines.Add(line)
+                _dbg(" ├ pass 完成", line)
+            Next
+
+            ' 總結: speedup 分母 = S1a/S1b 純掃平均(A/B/A 消快取暖化偏差)
+            Dim baseAvg As Double = serialScanSecs.Average()
+            Dim warmBias As String = If(serialScanSecs.Count = 2 AndAlso serialScanSecs(0) > 0,
+                $"S1a→S1b 暖化比 {serialScanSecs(1) / serialScanSecs(0):0.00} (≪1 = OS快取暖化明顯,平行數字要打折)", "")
+            _dbg("PROBE_PARSCAN 總結", $"總耗時 {swTotal.Elapsed.TotalSeconds:0.0}s | 循序基準(平均) {baseAvg:0.00}s | {warmBias}")
+            For Each ps In passScan
+                If ps.Secs > 0 Then _dbg(" ├ speedup", $"{ps.Label}: {baseAvg / ps.Secs:0.00}× (省 {baseAvg - ps.Secs:0.00}s)")
+            Next
+            PgrsBar1.Text = $"PROBE_PARSCAN 完成 — 循序 {baseAvg:0.00}s，詳見 Debug log" : PgrsBar2.Text = ""
+        Catch ex As OperationCanceledException
+            _dbg("PROBE_PARSCAN", $"已中斷(看門狗超時或手動取消)，已完成 {lines.Count}/{passes.Count} pass")
+            For Each l In lines : _dbg(" ├ 部分結果", l) : Next
+            PgrsBar1.Text = "PROBE_PARSCAN 已中斷" : PgrsBar2.Text = ""
+        Catch ex As System.Exception
+            _dbg("PROBE_PARSCAN 例外", ex.Message)
+            PgrsBar1.Text = "PROBE_PARSCAN 失敗，見 Debug log" : PgrsBar2.Text = ""
+        Finally
+            _probeParScanCts.Dispose() : _probeParScanCts = Nothing
+        End Try
+    End Function
+
+    Private Function ProbeParScanWorker(profileName As String, subset As List(Of FolderInfoDbRow), ct As CancellationToken) _
+                                       As (Rows As Long, Fails As Integer, ScanMs As Long, PerFolder As Dictionary(Of String, Integer))
+        ' worker: 自建獨立 RDOSession(鐵律)，逐夾呼叫 ProbeParScanOneFolder。ScanMs 只計純掃描(Logon/store dict 建置排除)。
+        Dim perFolder As New Dictionary(Of String, Integer)(subset.Count)
+        Dim fails As Integer = 0, totalRows As Long = 0
+        Dim session As Redemption.RDOSession = Nothing
+        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
+        Try
+            Try
+                session = New Redemption.RDOSession()
+                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
+                storeByName = BuildRdoStoreByNameDict(session)
+            Catch ex As System.Exception
+                _dbg("PROBE_PARSCAN worker", "Logon失敗: " & ex.Message)
+                Return (0L, subset.Count, 0L, perFolder)
+            End Try
+
+            Dim sw As Stopwatch = Stopwatch.StartNew()
+            For Each r In subset
+                ct.ThrowIfCancellationRequested()
+                Dim n As Integer = ProbeParScanOneFolder(storeByName, r)
+                If n < 0 Then fails += 1 Else totalRows += n : perFolder(r.path) = n
+            Next
+            sw.Stop()
+            Return (totalRows, fails, sw.ElapsedMilliseconds, perFolder)
+        Finally
+            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
+            If session IsNot Nothing Then
+                Try : session.Logoff() : Catch : End Try
+                Dim so As Object = session : TryMarshalRelease(so)
+            End If
+        End Try
+    End Function
+
+    Private Function ProbeParScanOneFolder(storeByName As Dictionary(Of String, Redemption.RDOStore), r As FolderInfoDbRow) As Integer
+        ' 單夾掃描核心 — 逐行複製 production GetMailInfoRdo 的讀取+解析形狀(COLS/GetRows(5000)/MailItemInfo 全欄含 XxHash)，
+        '   誠實付同等成本；差異僅: 結果丟棄、不寫任何 production 快取。回傳列數；-1 = 失敗(store 缺/GetFolderFromID 失敗/例外)。
+        Const COLS As String = "EntryID, " & PR_SUBJECT & ", " & PR_MESSAGE_SIZE & ", " & PR_MESSAGE_DELIVERY_TIME & ", " & PR_SENDER_NAME & ", " & PR_INTERNET_MESSAGE_ID_W & ", " & PR_SENDER_EMAIL_ADDRESS_W & ", " & PR_HASATTACH & ", " & DASL_SMARTNOATTACH
+        Dim store As Redemption.RDOStore = Nothing
+        If Not storeByName.TryGetValue(GetStoreNameFromPath(r.path), store) Then Return -1
+
+        Dim rdoFolder As Redemption.RDOFolder = Nothing
+        Dim items As Object = Nothing, tbl As Object = Nothing
+        Try
+            rdoFolder = TryCast(store.GetFolderFromID(r.eid), Redemption.RDOFolder)
+            If rdoFolder Is Nothing Then Return -1
+            items = rdoFolder.Items
+            tbl = items.MAPITable
+            If CInt(tbl.RowCount) = 0 Then Return 0
+
+            tbl.Columns = COLS : tbl.GoToFirst()
+            Dim cnt As Integer = 0
+            Do
+                Dim chunk As Array = TryCast(tbl.GetRows(5000), Array)
+                If chunk Is Nothing Then Exit Do
+                Dim got As Integer = 0
+                For i As Integer = chunk.GetLowerBound(0) To chunk.GetUpperBound(0)
+                    got += 1
+                    Dim row As Array = TryCast(chunk.GetValue(i), Array)
+                    If row Is Nothing Then Continue For
+                    Dim lb As Integer = row.GetLowerBound(0)
+                    Dim entryID As String = RdoTableEidToHex(row.GetValue(lb))
+                    If entryID = "" Then Continue For
+                    Dim msgIdRaw As String = TryCast(row.GetValue(lb + 5), String)
+                    Dim rcvTime As DateTime = DateTime.MinValue
+                    If TypeOf row.GetValue(lb + 3) Is DateTime Then
+                        rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
+                    End If
+                    Dim info As New MailItemInfo With {.EntryID = entryID,
+                                                       .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
+                                                       .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
+                                                       .RcvTime = rcvTime,
+                                                       .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
+                                                       .FolderPath = r.path,
+                                                       .MsgIDhash = StringToXxHash64Hex(If(msgIdRaw, "")),
+                                                       .SenderEmail = If(TryCast(row.GetValue(lb + 6), String), "")}
+                    ' 迴紋針兩欄照讀照判(付出與 production 相同成本)，結果同樣丟棄
+                    Dim vHas As Object = row.GetValue(lb + 7)
+                    Dim vSmart As Object = row.GetValue(lb + 8)
+                    Dim isAtt As Boolean = (TypeOf vHas Is Boolean AndAlso CBool(vHas)) AndAlso Not (TypeOf vSmart Is Boolean AndAlso CBool(vSmart))
+                    If isAtt OrElse info.EntryID <> "" Then cnt += 1   ' 恆真,防最佳化剔除,兼計列數
+                Next
+                If got < 5000 Then Exit Do
+            Loop
+            Return cnt
+        Catch ex As System.Exception
+            Return -1
+        Finally
+            TryMarshalRelease(tbl) : TryMarshalRelease(items)
+            Dim o As Object = rdoFolder : TryMarshalRelease(o)
+        End Try
+    End Function
+    ' ═════════════════ PROBE_PARSCAN ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
 
 #End Region
 #End Region

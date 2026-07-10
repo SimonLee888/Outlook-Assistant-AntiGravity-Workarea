@@ -425,9 +425,10 @@ Partial Class Form1
         '   (2) F5 強制重刷的 UI 畫面需要同時呈現 Root 與其所有「直屬子資料夾」的獨立統計數據。
         '       為了取得各直屬子資料夾個別的 DirectMailCount 與 TotalMailCount/TotalSubCount 數據，必須逐一尋訪直屬子資料夾 (child)，
         '       對其單獨呼叫 GetMailCountAllOOM(child) 以取得其子樹總數，寫入其 childPath 對應的快取字典中，並將個別的 FolderBfsEntry 包入 rows 回傳。
-        For Each child As Folder In GetSortedSubFolders(folder, rootPath, skipCache:=True)
+        For Each sf In GetSortedSubFolders(folder, rootPath, skipCache:=True)  ' 2026/07/10: tuple 版, childPath 直接取 sf.fPath 免 COM 讀 Name
             cToken.ThrowIfCancellationRequested()
-            Dim childPath As String = rootPath & "\" & child.Name
+            Dim child As Folder = sf.f
+            Dim childPath As String = sf.fPath
             ' 2026/06/13 by Simon/Claude Opus 4.8: 同上，子資料夾亦以 skipCache:=True 強制重掃
             ' 2026/06/23 by Simon/Claude: 同上,F5 子夾改 proxy skipCache
             _cacheMailCount(childPath) = GetMailCount(child, childPath, skipCache:=True)

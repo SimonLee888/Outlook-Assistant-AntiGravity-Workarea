@@ -499,8 +499,8 @@ Partial Class Form1
         If Not selfKnownToDb Then
             Dim pFolder As Folder = GetFolderById(parentEid, parentSid)
             If pFolder IsNot Nothing Then
-                For Each subF In GetSortedSubFolders(pFolder, fPath, skipCache:=True)
-                    result.Add((fPath & "\" & subF.Name, subF.EntryID, subF.StoreID))
+                For Each sf In GetSortedSubFolders(pFolder, fPath, skipCache:=True)  ' 2026/07/10: tuple 版, 路徑直接取 sf.fPath 免 COM 讀 Name
+                    result.Add((sf.fPath, sf.f.EntryID, sf.f.StoreID))
                 Next
             End If
         End If

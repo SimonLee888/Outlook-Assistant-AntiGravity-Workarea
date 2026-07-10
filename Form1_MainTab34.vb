@@ -444,13 +444,10 @@ Partial Class Form1
         Dim sw As Stopwatch = Stopwatch.StartNew()
         For Each mi In mailInfos
             Dim details = GetMailPreviewDetails(mi.EntryID, mi.FolderPath)
-            Dim frm As New Form With {
-                .Text = mi.Subject,
-                .Width = 1200,
-                .Height = 900,
-                .StartPosition = FormStartPosition.CenterScreen,
-                .Icon = Me.Icon
-            }
+            Dim frm As New Form With {.Text = mi.Subject,
+                                      .Width = 1200, .Height = 900,
+                                      .StartPosition = FormStartPosition.CenterScreen,
+                                      .Icon = Me.Icon}
 
             ' 工具列 (仿 Outlook 閱讀窗格上方的快速動作，回覆/轉寄走真正的 Outlook 撰寫視窗，這是使用者主動撰寫才會觸發的少量操作)
             Dim toolbar As New Panel With {.Dock = DockStyle.Top, .Height = 36, .BackColor = Color.FromArgb(243, 242, 241)}
@@ -490,17 +487,19 @@ Partial Class Form1
             ' 附件膠囊列 (檔名 + 大小，仿原生附件 chip，供判斷該不該刪信)
             Dim attFlow As FlowLayoutPanel = Nothing
             If hasAtt Then
-                attFlow = New FlowLayoutPanel With {.Location = New Point(60, 102), .Height = 34, .AutoScroll = False, .WrapContents = False, .BackColor = Color.White}
+                attFlow = New FlowLayoutPanel With {.Location = New Point(60, 102),
+                                                    .Height = 34,
+                                                    .AutoScroll = False,
+                                                    .WrapContents = False,
+                                                    .BackColor = Color.White}
                 For Each att In details.Attachments
-                    Dim chip As New Label With {
-                        .Text = $"  {att.Name}   {FormatFileSize(att.Size)}  ",
-                        .AutoSize = True,
-                        .Padding = New Padding(4, 6, 4, 6),
-                        .Margin = New Padding(0, 0, 8, 0),
-                        .BackColor = Color.FromArgb(245, 245, 245),
-                        .BorderStyle = BorderStyle.FixedSingle,
-                        .Font = New Font("Segoe UI", 8.5F)
-                    }
+                    Dim chip As New Label With {.Text = $"  {att.Name}   {FormatFileSize(att.Size)}  ",
+                                                .AutoSize = True,
+                                                .Padding = New Padding(4, 6, 4, 6),
+                                                .Margin = New Padding(0, 0, 8, 0),
+                                                .BackColor = Color.FromArgb(245, 245, 245),
+                                                .BorderStyle = BorderStyle.FixedSingle,
+                                                .Font = New Font("Segoe UI", 8.5F)}
                     attFlow.Controls.Add(chip)
                 Next
             End If
@@ -759,6 +758,7 @@ Partial Class Form1
             Next
             Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, progress:=progress4, cToken:=cToken)
             Await PreLoadMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
+            Await PreLoadMailCacheRdoAsync(targetTupleList, progress4, cToken)   ' 2026/07/10 by Simon/Claude Fable 5: 冷夾 RDO by-store 平行預熱(PROBE_PARSCAN 實測 net 3.3×),之後主迴圈全 ① 記憶體命中
 
             ' 2026/06/29 by Simon/Claude [Stage2]: 移除整批眼物化，直接走 id-tuple；folder 由免-folder 多載延後到 ③ 才建
             Dim processed As Integer = 0

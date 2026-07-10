@@ -88,6 +88,12 @@ Partial Class Form1
     ' 2026/07/06 by Simon/Claude: 「啟動花費」計時改為量到 Tab1 完整顯示(SimTree1_AfterSelect 首次 RenderLv1 完成)為止，
     '   不再只量到 Me.Show() 視窗容器出現那一刻。_startupElapsedMsg 由 SimTree1_AfterSelect 寫入，Form1_Shown 收尾時讀取顯示。
     Private _startupStopwatch As Stopwatch = Nothing
+    ' 2026/07/10 by Simon/Claude Fable 5: 啟動階段時間戳 — 停錶(SimTree1 首次 RenderLv1 完成)之後 Elapsed 讀值凍結，
+    '   特別標註讓 log 一眼分辨哪些階段落在「啟動花費 x.xx 秒」計時窗口內、哪些在停錶之後才執行
+    Private Function BootMark() As String
+        If _startupStopwatch Is Nothing Then Return "n/a"
+        Return $"{_startupStopwatch.ElapsedMilliseconds} ms{If(_startupStopwatch.IsRunning, "", " (已停錶,窗口外)")}"
+    End Function
     Private _startupElapsedMsg As String = ""
     Private _inSizeMove As Boolean = False              ' 2026/06/19 by Simon/Claude: 是否處於拖曳 size/move modal loop；供 Form1_Resize 區分「拖曳縮放」與「瞬間頂天/最大化」
 
@@ -189,8 +195,12 @@ Partial Class Form1
         If _isDebugMode Then DebugForm.ActiveInstance = DebugForm
         _dbg("開始") ' debugForm 開始計時
         _startupStopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
+        ' 2026/07/10 by Simon/Claude Fable 5: 拆解 Form1_Load 開頭的 ~89ms 不明空隙 (log: _dbg開始 → InitLookAndFeel _dbg開始 之間) —
+        '   若下面這行顯示 ~0ms，空隙就在「進入 InitLookAndFeel 之前」的方法 JIT/型別載入；若這行就已 ~89ms，兇手是 Cursor 設定或 _dbg 本身
+        _dbg(" ├ 啟動計時", $"Stopwatch+Cursor 完成 @ {BootMark()}")
 
         InitLookAndFeel()       ' 設計程式外觀
+        _dbg(" ├ 啟動計時", $"InitLookAndFeel 完成 @ {BootMark()}")
         InitPgrsBarEvents()     ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
 
         ' 2026/04/18 by Claude: Form 自身背景繪製的雙緩衝
@@ -199,39 +209,13 @@ Partial Class Form1
         Me.KeyPreview = True    ' ✅ 讓 Form 優先攔截 ESC，否則 ESC 會先被 TreeView/ListBox 等子控制項消耗
         Me.BringToFront()       ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
         Me.Show()
+        _dbg(" ├ 啟動計時", $"Me.Show 完成 @ {BootMark()}")
 
         Cursor = Cursors.Default        ' 視窗容器已顯示，但 Tab1 資料尚未載入完成，計時繼續跑，交給 SimTree1_AfterSelect 首次完成時停錶
         PgrsBar1.Text = "正在載入..."   ' 蓋掉 Designer 預設的 "ProgressBar1"，實際啟動秒數待 Tab1 完整顯示後才寫入
         PgrsBar2.Text = ""
         _dbg("結束")
 
-    End Sub
-    Private Sub Form1_Resize(sender As Object, e As EventArgs) Handles Me.Resize
-        ' 2026/05/09 by Gemini 3 Flash: 整合最大化/還原偵測與節流機制
-        ' 若 WindowState 改變，不直接呼叫，而是轉發給當前 ListView 的 Resize 處理器併入 100ms 節流。
-        Static lastState As FormWindowState = Me.WindowState
-        If Me.WindowState <> lastState Then
-            Dim activeLv = GetCurrentLv()
-            If activeLv IsNot Nothing Then HandleLvResize(activeLv, EventArgs.Empty)
-            lastState = Me.WindowState
-        End If
-
-        ' 2026/06/19 by Simon/Claude Opus 4.8: 改以「是否在拖曳 size/move modal loop」(_inSizeMove) 判定同步策略 —
-        '   拖曳中只搬位置(平滑)，完整貼齊由 ResizeEnd 收尾；
-        '   非拖曳的尺寸變化(邊緣 double-click 垂直頂天 / Shift+Win+↑↓ / 最大化還原)瞬間完成、不進 loop 也無 ResizeEnd，
-        '   故 _inSizeMove=False 時在此立即完整貼齊。
-        If _inSizeMove Then SyncDebugFormMoveOnly() Else SyncDebugFormResize()
-
-    End Sub
-    Private Sub Form1_ResizeEnd(sender As Object, e As EventArgs) Handles Me.ResizeEnd
-        ' 原本的 ListView1 寬度調整邏輯已移至 HandleLvResize 中，由 ListView 自行處理 Resize 事件
-        ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
-
-        If Me.Left < 0 Then Me.Left = 0 ' 2026/6/23 by simon: 防止 Form1 被拖到螢幕左邊界外
-
-        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
-        SyncDebugFormResize()          ' 2026/06/19 by Simon/Claude: 拖曳(移動/縮放)結束後，一次完整貼齊右緣(含寬度/高度)
-        _dbg("結束", sender.Width & "x" & sender.Height)
     End Sub
     Private Sub Form1_KeyDown(sender As Object, e As KeyEventArgs) Handles MyBase.KeyDown
         ' ── ESC 全域中斷 ──────────────────────────────────────────────
@@ -266,14 +250,45 @@ Partial Class Form1
         End If
 
     End Sub
+    Private Sub Form1_Resize(sender As Object, e As EventArgs) Handles Me.Resize
+        ' 2026/05/09 by Gemini 3 Flash: 整合最大化/還原偵測與節流機制
+        ' 若 WindowState 改變，不直接呼叫，而是轉發給當前 ListView 的 Resize 處理器併入 100ms 節流。
+        Static lastState As FormWindowState = Me.WindowState
+        If Me.WindowState <> lastState Then
+            Dim activeLv = GetCurrentLv()
+            If activeLv IsNot Nothing Then HandleLvResize(activeLv, EventArgs.Empty)
+            lastState = Me.WindowState
+        End If
+
+        ' 2026/06/19 by Simon/Claude Opus 4.8: 改以「是否在拖曳 size/move modal loop」(_inSizeMove) 判定同步策略 —
+        '   拖曳中只搬位置(平滑)，完整貼齊由 ResizeEnd 收尾；
+        '   非拖曳的尺寸變化(邊緣 double-click 垂直頂天 / Shift+Win+↑↓ / 最大化還原)瞬間完成、不進 loop 也無 ResizeEnd，
+        '   故 _inSizeMove=False 時在此立即完整貼齊。
+        If _inSizeMove Then SyncDebugFormMoveOnly() Else SyncDebugFormResize()
+
+    End Sub
+    Private Sub Form1_ResizeEnd(sender As Object, e As EventArgs) Handles Me.ResizeEnd
+        ' 原本的 ListView1 寬度調整邏輯已移至 HandleLvResize 中，由 ListView 自行處理 Resize 事件
+        ' Tab3 GroupBox3 顯示邏輯已改由 _pnlOptionsTab3.Resize 獨立處理，不再依賴 Form1_Resize
+
+        If Me.Left < 0 Then Me.Left = 0 ' 2026/6/23 by simon: 防止 Form1 被拖到螢幕左邊界外
+
+        ' 視窗縮放時同步 DebugForm — 2026/3/26 by Gemini
+        SyncDebugFormResize()          ' 2026/06/19 by Simon/Claude: 拖曳(移動/縮放)結束後，一次完整貼齊右緣(含寬度/高度)
+        _dbg("結束", sender.Width & "x" & sender.Height)
+    End Sub
     Private Async Sub Form1_Shown(sender As Object, e As EventArgs) Handles Me.Shown
         _dbg("開始")
 
         ' by Gemini, 2026/04/01: 利用背景躲藏時間，預先載入其他 Tab 的 UI 與目錄樹，實現「切換瞬間無感」的流暢體驗
         ' 讓第一頁先穩穩地顯示出來，不要與使用者剛啟動後的第一波對 TreeView1 的操作搶資源
         InitMapiNamespace()
+        _dbg(" ├ 啟動計時", $"InitMapiNamespace 完成 @ {BootMark()}")
         InitDatabase()          ' by Gemini, 2026/04/06: 初始化 SQLite 快取資料庫
-        CheckRDO.Checked = True ' added by simon 2026/6/25, to init RDO by default
+        _dbg(" ├ 啟動計時", $"InitDatabase 完成 @ {BootMark()}")
+        ' 2026/07/10 by Simon/Claude Fable 5 [A]: CheckRDO.Checked = True 從這裡搬到 Tab1 首次統計完成之後 (見下方 Tab2 預載前) —
+        '   InitRdoSessionWithoutEULA 內部無 Await、全程同步佔 UI 執行緒 ~460ms (New RDOSession+Logon 就 ~390ms)，
+        '   原本卡在啟動計時窗口正中央，是 0.98s 裡最大單筆。窗口內沒人需要 RDO：所有 RDO proxy 在 _rdo2 Is Nothing 時本就 fallback OOM。
 
         If _isDebugMode Then    ' by Gemini, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
             CheckDebug.Visible = True
@@ -304,7 +319,9 @@ Partial Class Form1
         ' 只有當使用者點開 "+" 號展開節點時, 才真正去讀該項目的子資料夾, 不要一開始就花時間全讀
         ' 2026/04/13 by Simon/Claude: SimTree1 與 TreeView1 同步載入 PST 目錄樹
         LoadStoreToTreeView(_pstStoreList, SimTree1)
+        _dbg(" ├ 啟動計時", $"LoadStoreToTreeView(SimTree1) 完成 @ {BootMark()}")
         GotoDefaultInbox(SimTree1)
+        _dbg(" ├ 啟動計時", $"GotoDefaultInbox(SimTree1) 同步段完成 @ {BootMark()}")
         Await Task.Yield()
 
         ' Tab1 順利載入後，才開始載入 Tab2~Tab5 的 UI 與資料，避免一開始就全部載入造成卡頓
@@ -313,26 +330,39 @@ Partial Class Form1
         ' by Gemini, 2026/04/03: 增加載入各 Tab 之間的視覺區隔
 
         Dim delaySame As Integer = 100  ' 每個 Tab 之間的預載延遲，單位毫秒 (ms)，可以根據需要調整
+
+        ' 2026/07/10 by Simon/Claude Fable 5 [A]: RDO 初始化移到這裡 — TryToRelaxFor 會等 _isUserBusy=False (Tab1 首次統計
+        '   結束、停錶之後) 才放行，同步的 ~460ms RDO init 就此移出啟動計時窗口，且仍在 Tab2~5 預載與使用者操作之前完成。
+        Await TryToRelaxFor(delaySame)
+        _dbg(" ├ 啟動計時", $"CheckRDO(RDO init) 開始 @ {BootMark()}")
+        CheckRDO.Checked = True ' added by simon 2026/6/25, to init RDO by default (2026/07/10 由 Form1_Shown 開頭搬到 Tab1 完成後)
+        _dbg(" ├ 啟動計時", $"CheckRDO(RDO init) 完成 @ {BootMark()}")
+
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(2) Then
+            _dbg(" ├ 啟動計時", $"Tab2 預載開始 @ {BootMark()}")
             InitTab2UI() : _isTabInitialized(2) = True
             LoadStoreToTreeView(_pstStoreList, SimTree2) : GotoDefaultInbox(SimTree2)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(3) Then
+            _dbg(" ├ 啟動計時", $"Tab3 預載開始 @ {BootMark()}")
             InitTab3UI() : _isTabInitialized(3) = True
             LoadStoreToTreeView(_pstStoreList, SimTree3) : GotoDefaultInbox(SimTree3)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(4) Then
+            _dbg(" ├ 啟動計時", $"Tab4 預載開始 @ {BootMark()}")
             InitTab4UI() : _isTabInitialized(4) = True
             LoadStoreToTreeView(_pstStoreList, SimTree4) : GotoDefaultInbox(SimTree4)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(5) Then
+            _dbg(" ├ 啟動計時", $"Tab5 預載開始 @ {BootMark()}")
             InitTab5UI() : _isTabInitialized(5) = True
             ' 2026/05/02 by Claude: Tab5 改用 SimTree5，對齊 Tab1~4
             LoadStoreToTreeView(_pstStoreList, SimTree5) : GotoDefaultInbox(SimTree5)
         End If
+        _dbg(" ├ 啟動計時", $"全部 Tab 預載完成 @ {BootMark()}")
         _dbg("結束", "全部 Tab 背景載入完畢") ' by Gemini, 2026/04/11: UI 頂層 Level 0
 
         ' 2026/07/06 by Simon/Claude: 在所有的背景預載跟 Tab 初始化完成後，把啟動計時訊息顯示到 ProgressBar 上
@@ -360,7 +390,7 @@ Partial Class Form1
 
             ' 釋放所有的 COM 物件占用資源
             If _pstStoreList IsNot Nothing Then
-                For Each store In _pstStoreList : Marshal.FinalReleaseComObject(store) : Next
+                For Each s In _pstStoreList : Marshal.FinalReleaseComObject(s.store) : Next   ' 2026/07/10 [C]: _pstStoreList 改 (store, name) tuple
                 _pstStoreList.Clear() : _pstStoreList = Nothing
             End If
 
@@ -405,6 +435,7 @@ Partial Class Form1
             Dim modeStr As String = If(_isDebugMode, "(Debug)", "(Release)")
             Me.Text = $"Outlook Assistant - by Simon Lee Studio (build {infoReader.LastWriteTime:yyyy/MM/dd HH:mm:ss}) {modeStr}"
         End If
+        _dbg(" ├ 計時", $"標題/版本讀檔 (Dropbox I/O) @ {BootMark()}")   ' 2026/07/10: 拆解 InitLookAndFeel 前段 ~44ms
 
         ' ── 視窗位置與背景色 ──
         If Screen.FromControl(Me).Bounds.Height > 2560 Then
@@ -420,6 +451,7 @@ Partial Class Form1
         Next
         TabControl1.Font = New Font(_fontDefault, _fontBold)
         TabControl1.Padding = New Point(12, 8)
+        _dbg(" ├ 計時", $"TabControl 名稱×7/字型/Padding @ {BootMark()}")   ' 2026/07/10: 拆解 InitLookAndFeel 前段 ~44ms
 
         ' ── 容器化佈局與動態控制項掛載 ──
         ' by Gemini, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
@@ -447,7 +479,11 @@ Partial Class Form1
         tv.SuppressAutoHScroll = True   ' 2026/07/10 by Simon/Claude: 保留水平捲軸，但抑制選取長節點時的自動水平位移
 
         ' 雙重緩衝區優化
-        SendMessage(tv.Handle, TVM_SETEXTENDEDSTYLE, New IntPtr(TVS_EX_DOUBLEBUFFER), New IntPtr(TVS_EX_DOUBLEBUFFER))
+        ' 2026/07/10 by Simon/Claude Fable 5: 不主動摸 .Handle — getter 會強制立刻 CreateWindowEx，隱藏 Tab 上的控制項被迫在預載期提早建原生視窗。
+        '   改掛 HandleCreated 等第一次真正顯示才送；已建立者 (Tab1 這種已顯示的) 立即補送一次。
+        '   紅利: WinForms 某些屬性變更會砍掉重建 handle (RecreateHandle)，舊寫法樣式會默默遺失，事件版每次重建自動重套。
+        AddHandler tv.HandleCreated, Sub() SendMessage(tv.Handle, TVM_SETEXTENDEDSTYLE, New IntPtr(TVS_EX_DOUBLEBUFFER), New IntPtr(TVS_EX_DOUBLEBUFFER))
+        If tv.IsHandleCreated Then SendMessage(tv.Handle, TVM_SETEXTENDEDSTYLE, New IntPtr(TVS_EX_DOUBLEBUFFER), New IntPtr(TVS_EX_DOUBLEBUFFER))
 
         AddHandler tv.GotFocus, AddressOf HandleTvGotFocus  ' 2026/05/30, added by Simon/Claude
         AddHandler tv.BeforeExpand, AddressOf LoadSubFolderToTreeView
@@ -470,7 +506,9 @@ Partial Class Form1
         lv.Cursor = Cursors.Default
 
         ' 雙重緩衝區優化
-        SendMessage(lv.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+        ' 2026/07/10 by Simon/Claude Fable 5: 同 InitTreeView — 不摸 .Handle 避免強制提早 CreateWindowEx，HandleCreated 時才送 (重建 handle 也會自動重套)
+        AddHandler lv.HandleCreated, Sub() SendMessage(lv.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+        If lv.IsHandleCreated Then SendMessage(lv.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
 
         ' by Gemini, 2026/04/10: 使用反射開啟隱藏的 DoubleBuffered 屬性，解決虛擬模式下的重繪閃爍問題
         GetType(ListView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance Or System.Reflection.BindingFlags.NonPublic).SetValue(lv, True, Nothing)
@@ -589,6 +627,10 @@ Partial Class Form1
         ' ── Tab2 (日期統計) 佈局重構 (2026/3/27 by Gemini) ──
         _dbg("開始")
 
+        ' 2026/07/10 by Simon/Claude Fable 5: 統一規則 — TabPage + SplitContainer + 兩個 Panel 全 Suspend，結尾反向 Resume、最外層 TabPage.ResumeLayout(True) 一次結算
+        TabPage2.SuspendLayout()
+        SplitContainer2.SuspendLayout() : SplitContainer2.Panel1.SuspendLayout() : SplitContainer2.Panel2.SuspendLayout()
+
         InitTreeView(SimTree2)
         InitListView(ListView2)
         InitSplitter(SplitContainer2)
@@ -618,21 +660,27 @@ Partial Class Form1
         pnlCheckbox_tab2.SendToBack()   ' 2. 面板移至最後方
         ListView2.SendToBack()          ' 1. 列表最後被移至最後方 (最優先 Dock=Top，確保在最上面)
 
+        SplitContainer2.Panel1.ResumeLayout(False) : SplitContainer2.Panel2.ResumeLayout(False) : SplitContainer2.ResumeLayout(False)
+        TabPage2.ResumeLayout(True)
         _dbg("結束")
 
     End Sub
     Private Sub InitTab3UI()
         ' ── Tab3 (尋找附件) 佈局優化 ──
         _dbg("開始")
+
+        ' 2026/07/10 by Simon/Claude Fable 5: 統一規則 — TabPage + SplitContainer + 兩個 Panel 全 Suspend，結尾反向 Resume、最外層 TabPage.ResumeLayout(True) 一次結算
+        TabPage3.SuspendLayout()
+        SplitContainer3.SuspendLayout() : SplitContainer3.Panel1.SuspendLayout() : SplitContainer3.Panel2.SuspendLayout()
+
         InitTreeView(SimTree3)
         InitListView(ListView3)
         InitSplitter(SplitContainer3)
         ' 建立頂部面板，將所有原本散落在 Panel2 的搜尋控制項集中
         'Dim layoutPanel3 As Panel
-        layoutPanel3 = New Panel With {.Dock = DockStyle.Top,
-                                          .Height = 115,
-                                          .BackColor = ThemeColors.Gray95,
-                                          .Font = New Font(_fontDefault, _fontRegular)}
+        layoutPanel3 = New Panel With {.Dock = DockStyle.Top, .Height = 115,
+                                       .BackColor = ThemeColors.Gray95,
+                                       .Font = New Font(_fontDefault, _fontRegular)}
 
         ' 將原本 Panel2 中的控制項移入新增的 layoutPanel3
         ' 這些控制項原本的 Location 已經適合在 Top Panel 中運作
@@ -719,11 +767,17 @@ Partial Class Form1
             .OwnerDraw = True ' by Gemini 3 Flash, 2026/04/26: 開啟 OwnerDraw 以在 VirtualMode 下實作流暢的 MouseHover 效果
         End With
 
+        SplitContainer3.Panel1.ResumeLayout(False) : SplitContainer3.Panel2.ResumeLayout(False) : SplitContainer3.ResumeLayout(False)
+        TabPage3.ResumeLayout(True)
         _dbg("結束")
 
     End Sub
     Private Sub InitTab4UI()
         _dbg("開始")
+
+        ' 2026/07/10 by Simon/Claude Fable 5: 統一規則 — TabPage + SplitContainer + 兩個 Panel 全 Suspend，結尾反向 Resume、最外層 TabPage.ResumeLayout(True) 一次結算
+        TabPage4.SuspendLayout()
+        SplitContainer4.SuspendLayout() : SplitContainer4.Panel1.SuspendLayout() : SplitContainer4.Panel2.SuspendLayout()
 
         InitTreeView(SimTree4)
         InitListView(Listview4)
@@ -746,7 +800,9 @@ Partial Class Form1
         Lv4Topic.VirtualMode = True     ' 💡 2026/05/30 by Gemini: 新增這行開啟虛擬模式
 
         ' 雙重緩衝區優化
-        SendMessage(Lv4Topic.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+        ' 2026/07/10 by Simon/Claude Fable 5: 同 InitTreeView — 不摸 .Handle 避免強制提早 CreateWindowEx，HandleCreated 時才送 (重建 handle 也會自動重套)
+        AddHandler Lv4Topic.HandleCreated, Sub() SendMessage(Lv4Topic.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
+        If Lv4Topic.IsHandleCreated Then SendMessage(Lv4Topic.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, New IntPtr(LVS_EX_DOUBLEBUFFER), New IntPtr(LVS_EX_DOUBLEBUFFER))
         ' by Gemini, 2026/04/10: 使用反射開啟隱藏的 DoubleBuffered 屬性，解決虛擬模式下的重繪閃爍問題
         GetType(ListView).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance Or System.Reflection.BindingFlags.NonPublic).SetValue(Lv4Topic, True, Nothing)
 
@@ -772,8 +828,7 @@ Partial Class Form1
 
         ' 3. 右側：選項面板 + 列表
         ' 建立面板 (還原原始高度 80px)
-        Dim layoutPanel4 = New Panel With {.Name = "layoutPanel4",
-                                           .Height = 80,
+        Dim layoutPanel4 = New Panel With {.Name = "layoutPanel4", .Height = 80,
                                            .Dock = DockStyle.Top,
                                            .BackColor = ThemeColors.Gray95}
 
@@ -815,6 +870,9 @@ Partial Class Form1
             .Columns("相似").Width = .Width * 0.08 : .Columns("相似").TextAlign = HorizontalAlignment.Center
             .Columns("EntryID").Width = 0   ' 隱藏，僅供 OpenMailByEntryID 使用
         End With
+
+        SplitContainer4.Panel1.ResumeLayout(False) : SplitContainer4.Panel2.ResumeLayout(False) : SplitContainer4.ResumeLayout(False)
+        TabPage4.ResumeLayout(True)
         _dbg("結束")
 
     End Sub
@@ -826,6 +884,10 @@ Partial Class Form1
         ' ---------------------------------------------------------------------------------------------------------
         _dbg("開始")
 
+        ' 2026/07/10 by Simon/Claude Fable 5: 統一規則 — TabPage + SplitContainer + 兩個 Panel 全 Suspend，結尾反向 Resume、最外層 TabPage.ResumeLayout(True) 一次結算
+        TabPage5.SuspendLayout()
+        SplitContainer5.SuspendLayout() : SplitContainer5.Panel1.SuspendLayout() : SplitContainer5.Panel2.SuspendLayout()
+
         ' 1. 初始化基礎控制項
         InitTreeView(SimTree5)
         InitListView(ListView5)
@@ -834,10 +896,9 @@ Partial Class Form1
         'TreeView5.Visible = False ' 使用 SimTree5 取代，TreeView5 設為不可見
 
         ' 2. 準備右側選項面板 (layoutPanel5)
-        Dim layoutPanel5 As New Panel With {.Name = "layoutPanel5",
-                                           .Dock = DockStyle.Top,
-                                           .Height = 110, ' 2026/05/05 by Gemini 3 Flash: 增加高度以容納 CheckSubFolder5
-                                           .BackColor = ThemeColors.Gray95}
+        Dim layoutPanel5 As New Panel With {.Name = "layoutPanel5", .Height = 110, ' 2026/05/05 by Gemini 3 Flash: 增加高度以容納 CheckSubFolder5
+                                            .Dock = DockStyle.Top,
+                                            .BackColor = ThemeColors.Gray95}
         ' 設定 RadioButtons 樣式與位置
         rbExactMatch.Text = "精確模式比對 (主旨+大小+時間+寄件者篩選)"
         rbExactMatch.Location = New Point(20, 15)
@@ -934,6 +995,8 @@ Partial Class Form1
         End With
         AddHandler ListView5.ColumnClick, AddressOf Lv5_ColumnClick
 
+        SplitContainer5.Panel1.ResumeLayout(False) : SplitContainer5.Panel2.ResumeLayout(False) : SplitContainer5.ResumeLayout(False)
+        TabPage5.ResumeLayout(True)
         _dbg("結束")
 
     End Sub

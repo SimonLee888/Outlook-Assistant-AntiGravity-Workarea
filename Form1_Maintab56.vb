@@ -133,6 +133,7 @@ Partial Class Form1
 
         ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
         Await PreLoadMailCacheAsync(folderList, cToken)
+        Await PreLoadMailCacheRdoAsync(folderList, progress, cToken)   ' 2026/07/10 by Simon/Claude Fable 5: 冷夾 RDO by-store 平行預熱(PROBE_PARSCAN 實測 net 3.3×),之後主迴圈全 ① 記憶體命中
 
         For i As Integer = 0 To folderList.Count - 1
             ' 2026/06/29 by Simon/Claude [Stage2]: 改走 id-tuple，眼物化移除——folder 由免-folder 多載延後到 ③ 才建
@@ -1431,7 +1432,7 @@ Partial Class Form1
         If String.IsNullOrEmpty(fPath) Then Return
 
         Dim isInSub = Function(k As String) k = fPath OrElse k.StartsWith(fPath & "\") OrElse k.StartsWith(fPath & "|")
-        Dim dummyFolderList As List(Of Folder) = Nothing
+        Dim dummyFolderList As List(Of (f As Folder, name As String, fPath As String)) = Nothing  ' 2026/07/10: 跟著 _cacheFolderTree 值型別升級為 tuple
         Dim dL As Long
 
         ' 1. 清除該資料夾與其所有子資料夾的快取

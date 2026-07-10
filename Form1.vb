@@ -116,6 +116,10 @@ Partial Class Form1
     Private _includeSubTab2 As Boolean = False
     Private _includeSubTab3 As Boolean = False
     Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
+    ' ⚠ 2026/07/10 [F5串行化] 範圍警告: 本旗標只在 ForceTvRefresh 的「同步重建期間」為 True (Finally 即關閉)，
+    '   唯一讀取點是樹展開鏈 (BeforeExpand → LoadSubFolderToTreeView → GetSortedSubFolders)。
+    '   F5 的統計流程 (ForceLv1Refresh) 執行時本旗標已是 False — 統計繞過快取靠的是明確的 skipCache:=True 參數，
+    '   不是本旗標。新增讀取點前務必確認時序，勿假設「F5 期間全程為 True」。
     Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
     Private _lvResizePending As ListView = Nothing
     Private _lvResizeTimer As New Forms.Timer() With {.Interval = 100}
@@ -1518,8 +1522,18 @@ Partial Class Form1
             ' 2026/05/29 by Simon/Claude: 拆分SimTree4的雙重模式, 讓SimTree4回復到純粹的資料夾樹行為
 
             e.Handled = True : e.SuppressKeyPress = True
-            ForceTvRefresh(tv)
-            If GetCurrentTv() Is SimTree1 Then Await ForceLv1Refresh()
+            ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化]: SimTree1 的 F5 統計只算一遍 —
+            '   樹重建不觸發 AfterSelect (fireAfterSelect:=False)，統計交給下方 ForceLv1Refresh 單一入口 (skipCache 直讀 COM)。
+            '   修正前: RestoreTreeState 觸發 AfterSelect 全樹 BFS (工作A) 與 ForceLv1Refresh (工作B) 在 UI 執行緒交錯，
+            '   同一批選取算兩遍，且 A 的本層數字其實是 BuildBfsFolderTree DB lazy 回填的舊值 (PROBE_F5TIMING 實測 A=0.29s 全程未打 COM)。
+            '   罕見 fallback (原選取資料夾已消失): ForceTvRefresh 內 GotoDefaultInbox 照舊觸發 AfterSelect 補顯示，
+            '   此時 ForceLv1Refresh 讀到空選取會提早 Return (fallback 的 AddSelectedNode 在 Task.Yield 之後才執行)，不會重複計算。
+            If tv Is SimTree1 Then
+                ForceTvRefresh(tv, fireAfterSelect:=False)
+                Await ForceLv1Refresh()
+            Else
+                ForceTvRefresh(tv)
+            End If
             ' by Gemini 3.5 Flash, 2026/05/29: 限制 Await ForceLv1Refresh() 只有在當前是 Tab1 (SimTree1) 的時候才需要執行
 
             ' 按Space切換展開/收合
@@ -1872,9 +1886,14 @@ Partial Class Form1
         _dbg("結束", $"已刷新 {processedCount} 個 TreeView")
         'PgrsBar1.Text = "UI 刷新完成 ✔"
     End Function
-    Private Sub ForceTvRefresh(tv As SimTree)
+    Private Sub ForceTvRefresh(tv As SimTree, Optional fireAfterSelect As Boolean = True)
         ' ── F5 強制刷新整棵 SimTree ──────────────────────────────────────────────
-        ' 職責: 不讀任何快取，重新從 Outlook COM 讀取整棵資料夾樹並更新 _cacheFolderTree
+        ' 職責: 「樹結構」強制重讀 Outlook COM 並重建；「統計數字」的新鮮度不歸本函式管 —
+        '       SimTree1 由呼叫端接續的 ForceLv1Refresh (skipCache 直讀) 負責，
+        '       SimTree2-5 由 fireAfterSelect 觸發的標準 AfterSelect 流程負責 (快取已清，會重新計算)。
+        ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化]:
+        '   fireAfterSelect:=False 時 RestoreTreeState 只還原選取不觸發統計 (SimTree1 F5 專用，
+        '   避免 AfterSelect BFS 與 ForceLv1Refresh 雙重計算)。fallback 的 GotoDefaultInbox 不受此參數控制 (見呼叫端註解)。
         '       ① 記錄目前展開路徑 + 選取路徑
         '       ② 清 _cacheFolderTree (確保 LoadSubFolderToTreeView 重讀 COM)
         '       ③ Nodes.Clear + LoadStoreToTreeView (重建 root 層)
@@ -1904,13 +1923,15 @@ Partial Class Form1
         Dim currentTvState = tv.SaveTreeStateByPath()   ' ① 快照狀態收集（展開路徑 + 選取路徑，Nodes.Clear 後仍有效）
         Try
             '_cacheFolderTree.Clear()                   ' ② 清快取，確保 GetSortedSubFolders 重讀 Outlook
-            ClearMemoryCachesCore()                     ' 【修復關鍵 1】徹底清除所有快取，包含 _cacheFolderIDs，防止幽靈復活, 2026/6/1 by Simon/Gemini 3.1 Pro
+            ClearFolderCachesCore()                     ' 【修復關鍵 1】清除資料夾結構+統計快取，包含 _cacheFolderIDs，防止幽靈復活, 2026/6/1 by Simon/Gemini 3.1 Pro
+            ' 2026/07/10 [F5串行化 Step4]: 原呼叫 ClearMemoryCachesCore 整批清空，連 _cacheMailBody/_cacheMailInfo 等
+            '   郵件層快取都陪葬。統計新鮮度現由 ForceLv1Refresh 的 skipCache 直讀保證，郵件層快取得以保留。
             _isForceRefreshing = True                   ' 確保繞過 SSD 快取，強制打 COM (若原 codebase 沒加這行請務必補上), 2026/6/1 by Simon/Gemini 3.1 Pro
             tv.ClearSelectedNodes()
             tv.Nodes.Clear()
 
             LoadStoreToTreeView(_pstStoreList, tv)      ' ③ 重建 root 層
-            tv.RestoreTreeState(currentTvState)         ' ④ 重展開 + 還原選取 + 觸發 AfterSelect
+            tv.RestoreTreeState(currentTvState, selectAndFire:=fireAfterSelect)   ' ④ 重展開 + 還原選取 (+ 依參數觸發 AfterSelect)
             If tv.SelectedNodes.Count = 0 Then GotoDefaultInbox(tv) ' ⑤ Fallback: 找不到舊選取時退回預設 Inbox
 
             PgrsBar1.Text = $"F5: {tv.Name} 重整完成，花費 {sw.Elapsed.TotalSeconds:0.00} 秒。" : PgrsBar2.Text = ""
@@ -2304,11 +2325,14 @@ Partial Class Form1
         End If
 
     End Sub
-    Private Sub ClearMemoryCachesCore()
+    Private Sub ClearFolderCachesCore()
         ' ---------------------------------------------------------------
-        ' ClearMemoryCachesCore — [記憶體層] 統一清理所有 ConcurrentDictionary
+        ' ClearFolderCachesCore — [記憶體層] 只清「資料夾結構 + 統計」相關快取
+        ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化 Step4]: 從 ClearMemoryCachesCore 拆出，供 ForceTvRefresh (F5 樹重刷) 使用 —
+        '   郵件層快取 (_cacheMailBody/_cacheMailInfo/_cacheCleanSubject/_dirtyMailFolders) 與資料夾結構無關，F5 不必陪葬。
+        '   注意: _cacheFolderTree/_cacheSubTreeList/_cacheFolderIDs 仍必清 — 樹結構幽靈復活防護 (2026/6/1) 語意不變。
         ' ---------------------------------------------------------------
-        _dbg("開始", "清理所有快取")
+        _dbg("開始", "清理資料夾結構+統計快取")
         _cacheMailCount.Clear()
         _cacheMailCountAll.Clear()
         _cacheFolderCount.Clear()
@@ -2324,6 +2348,15 @@ Partial Class Form1
         _cacheFolderTree.Clear()
         _cacheSubTreeList.Clear()
         _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理 (2026/07/03: 已併入 isMail，_cacheIsMailFolder 汰除)
+        _dbg("結束", "清理資料夾結構+統計快取")
+    End Sub
+    Private Sub ClearMemoryCachesCore()
+        ' ---------------------------------------------------------------
+        ' ClearMemoryCachesCore — [記憶體層] 統一清理所有 ConcurrentDictionary
+        ' 2026/07/10 [F5串行化 Step4]: 資料夾層拆至 ClearFolderCachesCore，本函式 = 資料夾層 + 郵件層 全清 (語意不變)
+        ' ---------------------------------------------------------------
+        _dbg("開始", "清理所有快取")
+        ClearFolderCachesCore()
 
         _cacheMailBody.Clear()      ' 2026/6/18 by simon, 之前漏掉了現在補上
         _cacheMailInfo.Clear() ' 2026/6/18 by simon, 之前漏掉了現在補上

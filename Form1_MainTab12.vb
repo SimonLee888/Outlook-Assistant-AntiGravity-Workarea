@@ -808,6 +808,10 @@ Partial Class Form1
         Dim selectedNodes As List(Of TreeNode) = SimTree1.SelectedNodes
         If selectedNodes.Count = 0 Then Return
 
+        ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化 Step2]: 遞增序號 — F5 之前尚未跑完的 AfterSelect 統計 (使用者快速點選後立刻按 F5)
+        '   會在下一個序號檢查點自動放棄，不會與本次 F5 的結果交錯搶 RenderLv1。本函式內的 CollectTab1FolderInfo 讀到的是遞增後的新值，不受影響。
+        System.Threading.Interlocked.Increment(_tab1SelectSeq)
+
         _isUserBusy = True : Cursor = Cursors.WaitCursor
         PgrsBar1.Text = "F5 強制更新中..." : PgrsBar2.Text = ""
 

@@ -60,6 +60,17 @@ Partial Class Form1
         ' (CallerMemberName 回傳純方法名不含前綴，此行對它為 no-op；僅 GetCallerName 路徑會 strip)
         If realCaller.StartsWith("Form1.") Then realCaller = realCaller.Substring(6)
 
+        ' 2026/07/10 by Simon/Claude Fable 5 [臨時探針落檔]: 啟動計時 / RDO init 訊息同步寫入 %TEMP%\OLA_BootProbe.log，
+        '   供無人值守的自動化測試直接讀數據 (DebugForm 是純 UI 佇列無檔案輸出)。驗證完成後可整段移除。
+        If msg.Contains("計時") OrElse realCaller = "InitRdoSessionWithoutEULA" Then
+            Try
+                Static bootLogPath As String = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OLA_BootProbe.log")
+                Static bootLogInited As Boolean = False
+                If Not bootLogInited Then System.IO.File.WriteAllText(bootLogPath, $"=== {Now:yyyy/MM/dd HH:mm:ss} 啟動 ==={vbCrLf}") : bootLogInited = True
+                System.IO.File.AppendAllText(bootLogPath, $"{Now:HH:mm:ss.fff} [{realCaller}] {msg} {detail}{vbCrLf}")
+            Catch : End Try
+        End If
+
         ' by Gemini 3.5 Flash, 2026/06/19: 優先使用 ActiveInstance 以避免背景執行緒對 VB 預設實例的 Thread-Local 存取問題
         If DebugForm.ActiveInstance IsNot Nothing Then
             DebugForm.ActiveInstance.AddMessage3(msg, detail, realCaller)
@@ -336,7 +347,7 @@ Partial Class Form1
         Await TryToRelaxFor(delaySame)
         _dbg(" ├ 啟動計時", $"CheckRDO(RDO init) 開始 @ {BootMark()}")
         CheckRDO.Checked = True ' added by simon 2026/6/25, to init RDO by default (2026/07/10 由 Form1_Shown 開頭搬到 Tab1 完成後)
-        _dbg(" ├ 啟動計時", $"CheckRDO(RDO init) 完成 @ {BootMark()}")
+        _dbg(" ├ 啟動計時", $"CheckRDO 觸發完成 (RDO 於背景 init 中) @ {BootMark()}")   ' 2026/07/10 [RDO 非同步化]: 真正完成點看 InitRdoSessionWithoutEULA 的 _rdo2 init OK
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(2) Then
             _dbg(" ├ 啟動計時", $"Tab2 預載開始 @ {BootMark()}")

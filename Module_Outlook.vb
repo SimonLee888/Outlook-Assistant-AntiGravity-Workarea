@@ -60,6 +60,9 @@ Partial Class Form1
     ' Outlook.MailItem	    Redemption.RDOMail	    對應單封郵件層級。
     ' Outlook.Store	        Redemption.RDOStore	    對應 PST 或 Exchange 帳戶。
     Private _rdo2 As Redemption.RDOSession = Nothing    ' 2026/6/22 新增 by simon, 測試 Redemption 獨立 Session 資料隔離與效能差異
+    ' 2026/07/10 by Simon/Claude Fable 5 [RDO 非同步化]: 背景執行緒完成 Logon 的 session。_rdo2 改為 UI 執行緒建的「殼」，
+    '   以 MAPIOBJECT 掛在本 session 的 logon 上；Logoff 責任歸本 holder (ReleaseRdoSession 一併釋放)
+    Private _rdo2LogonHolder As Redemption.RDOSession = Nothing
     ' 2026/06/23 by Simon/Claude: _rdo2 store-scoped resolve 用的對照快取(生命週期綁 _rdo2,於 CheckRDO 取消 / FormClosing 由 ReleaseRdoSession 釋放)
     Private _rdo2StoreByName As Dictionary(Of String, Redemption.RDOStore) = Nothing   ' store 顯示名 → RDOStore(權威,擁有 COM ref)
     Private _rdo2StoreByPath As Dictionary(Of String, Redemption.RDOStore) = Nothing   ' FolderPath → RDOStore(記憶化,免熱路徑重跑解析;值為 byName 參考,不另釋放)
@@ -241,11 +244,34 @@ Partial Class Form1
 
             ' 2026/7/1 by simon, 所有RDO都已切換至獨立session的 _rdo2, 不再沿用 Outlook MAPI session, 讓原有的 _rdo 完全退役
             ' 2026/6/23 by Simon/Claude: 測試 Redemption 獨立 Session 資料隔離與效能差異
-            Dim session2 As Redemption.RDOSession = Nothing
-            session2 = New Redemption.RDOSession()
-            session2.Logon(ProfileName:=_olNS.CurrentProfileName, Password:="", ShowDialog:=False, NewSession:=True)    ' 獨立session, 不沿用 Outlook MAPI session
-            _rdo2 = session2
-            _dbg(" ├ _rdo2 init OK", $"Version={_rdo2.Version}")
+            '
+            ' 2026/07/10 by Simon/Claude Fable 5 [RDO 非同步化]: New RDOSession + Logon (~390ms) 移到背景執行緒，UI 不再凍結。
+            '   跨執行緒模式兩條腿都踩在 repo 已驗證的做法上:
+            '   ① 背景執行緒自建 session 自己 Logon = Maintab56 平行掃描 worker 同款 (2000封/s 實戰驗證)
+            '   ② UI 執行緒建「殼」session 掛 MAPIOBJECT = 退役 _rdo attach Outlook session 同款 (Module_Win32API 192-193 舊註解)
+            '   EULA 隱藏機制不受影響: TEULAForm 會出現在背景執行緒，但 WinEvent hook 與 AutoDismiss 都是
+            '   全程序視窗層級 (hwnd) 操作，本來就不在乎視窗活在哪條執行緒。
+            Dim profile As String = _olNS.CurrentProfileName    ' 先在 UI 執行緒讀好，背景 lambda 不碰 _olNS (Outlook OOM 有 STA 執行緒親和性)
+            Dim bgSession As Redemption.RDOSession = Await Task.Run(
+                Function()
+                    Dim s As New Redemption.RDOSession()
+                    s.Logon(ProfileName:=profile, Password:="", ShowDialog:=False, NewSession:=True)    ' 獨立session, 不沿用 Outlook MAPI session
+                    Return s
+                End Function)
+
+            If _isClosing Then
+                ' 防呆: 使用者在背景 init 完成前就關程式 → 就地釋放，不寫入 _rdo2 (ReleaseRdoSession 可能已跑完)
+                Try : bgSession.Logoff() : Catch : End Try
+                Dim bg As Object = bgSession : TryMarshalRelease(bg)
+                _dbg(" ├ 中止", "程式關閉中，背景 RDO session 就地釋放")
+                Return
+            End If
+
+            Dim uiSession As New Redemption.RDOSession()
+            uiSession.MAPIOBJECT = bgSession.MAPIOBJECT     ' 殼 session 掛上背景已建立的 MAPI session (輕量，UI 執行緒 <10ms)
+            _rdo2LogonHolder = bgSession
+            _rdo2 = uiSession
+            _dbg(" ├ _rdo2 init OK", $"Version={_rdo2.Version} (Logon 於背景執行緒完成，UI 零凍結)")
 
         Catch ex As System.Exception
             _rdo2 = Nothing
@@ -390,10 +416,20 @@ Partial Class Form1
         _dbg(" ├ _rdo2StoreByPath 釋放完成")
 
         If _rdo2 IsNot Nothing Then
-            Try : _rdo2.Logoff() : Catch ex As System.Exception : _dbg("_rdo2.Logoff 異常", ex.Message) : End Try
-            _dbg(" ├ _rdo2 Logoff 完成")
+            ' 2026/07/10 [RDO 非同步化]: _rdo2 現為殼 session (MAPIOBJECT 掛在 _rdo2LogonHolder 的 logon 上)，
+            '   Logoff 責任歸 holder，殼只釋放 COM ref；若 holder 不存在 (理論上不會) 則維持原 Logoff 行為當保險。
+            If _rdo2LogonHolder Is Nothing Then
+                Try : _rdo2.Logoff() : Catch ex As System.Exception : _dbg("_rdo2.Logoff 異常", ex.Message) : End Try
+                _dbg(" ├ _rdo2 Logoff 完成")
+            End If
             Dim r As Object = _rdo2 : TryMarshalRelease(r) : _rdo2 = Nothing
             _dbg(" ├ _rdo2 物件完整釋放")
+        End If
+
+        If _rdo2LogonHolder IsNot Nothing Then
+            Try : _rdo2LogonHolder.Logoff() : Catch ex As System.Exception : _dbg("_rdo2LogonHolder.Logoff 異常", ex.Message) : End Try
+            Dim h As Object = _rdo2LogonHolder : TryMarshalRelease(h) : _rdo2LogonHolder = Nothing
+            _dbg(" ├ _rdo2LogonHolder (背景 logon session) Logoff+釋放完成")
         End If
         ' 2026/6/23 by Simon/AntiGravity: _rdo 是 piggyback 在 Outlook session 上，不需要 Logoff，但要確保 COM ref 釋放且欄位歸 Nothing
         ' 2026/7/1 by simon, 所有RDO都已切換至獨立session的 _rdo2, 不再沿用 Outlook MAPI session, 讓原有的 _rdo 完全退役

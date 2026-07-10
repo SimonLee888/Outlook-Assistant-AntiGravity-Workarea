@@ -2028,6 +2028,102 @@ Partial Class Form1
     End Function
     ' ═════════════════ PROBE_PARSCAN ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
 
+    ' ═════════════════ PROBE_F5TIMING ↓↓↓ 整塊可刪(連同 Form1_Shown 尾端的觸發行) ↓↓↓ ═════════════════
+    ' 2026/07/10 by Simon/Claude Fable 5: 量測「SimTree1 全選 → F5」端到端耗時，F5 重複計算修正的前後對比用。
+    '   背景: 修正前 SimTree F5 = ForceTvRefresh(RestoreTreeState 觸發 AfterSelect 全樹 BFS = 工作A)
+    '         + ForceLv1Refresh(L3 強掃 = 工作B)，A/B 在 UI 執行緒交錯、統計算兩遍；修正後應只剩 B。
+    '   量法: 掛 PgrsBar1/2.TextChanged 記錄每則進度訊息的時間戳(A 的「統計花費」與 B 的「F5 強制更新完成」都會被捕捉)，
+    '         以「連續 4 秒無文字變化 且 _isUserBusy=False」判定收斂，單 pass 總耗時 = 觸發 → 最後一次文字變化。
+    '   流程: 等啟動就緒(Tab1 統計完成+RDO init 完成) → 靜默全選 SimTree1 可見節點(不觸發 AfterSelect)
+    '         → Pass1 SimTree F5 → Pass2 SimTree F5(第二次) → Pass3 ListView1 F5(對照組)
+    '         → 結果寫 %TEMP%\OutlookAssistant_ProbeResult_F5Timing.txt → 有 /autoclose 就走正常關閉流程
+    '   觸發: 命令列 /autoprobef5timing (+ /autoclose)。看門狗: 就緒等待 3 分鐘、單 pass 4 分鐘硬上限。
+    Private _probeF5Lines As New List(Of String)
+    Private _probeF5LastChange As Date = Date.MinValue
+
+    Private Sub ProbeF5Log(s As String)
+        _probeF5Lines.Add($"{Now:HH:mm:ss.fff} {s}")
+        Try
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_F5Timing.txt"), _probeF5Lines)
+        Catch : End Try
+    End Sub
+
+    Private Sub ProbeF5OnBarText(sender As Object, e As EventArgs)
+        _probeF5LastChange = Now
+        Dim item As ToolStripItem = TryCast(sender, ToolStripItem)
+        If item IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(item.Text) Then ProbeF5Log($"      [{item.Name}] {item.Text}")
+    End Sub
+
+    Private Async Function ProbeF5RunPass(label As String, trigger As System.Action) As Task(Of Double)
+        ProbeF5Log($"── {label}: 觸發")
+        Dim t0 As Date = Now
+        _probeF5LastChange = t0
+        Dim swPass As Stopwatch = Stopwatch.StartNew()
+        trigger()
+        Do
+            Await Task.Delay(250)
+            If (Now - _probeF5LastChange).TotalSeconds >= 4 AndAlso Not _isUserBusy Then Exit Do
+            If swPass.Elapsed.TotalMinutes > 4 Then
+                ProbeF5Log($"── {label}: ⚠ 超過 4 分鐘看門狗，強制結束本 pass")
+                Exit Do
+            End If
+        Loop
+        Dim total As Double = (_probeF5LastChange - t0).TotalSeconds
+        ProbeF5Log($"── {label}: 完成，總耗時 {total:0.00}s (觸發 → 最後一次 PgrsBar 變化)")
+        Return total
+    End Function
+
+    Private Async Sub ProbeF5TimingAsync()
+        Dim autoClose As Boolean = Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase))
+        Dim swAll As Stopwatch = Stopwatch.StartNew()
+        ProbeF5Log($"=== PROBE_F5TIMING 啟動 (autoClose={autoClose}) ===")
+        Try
+            ' ① 等啟動就緒: Tab1 首次統計完成(停錶) + RDO 背景 init 完成 + 無進行中運算 (上限 3 分鐘)
+            Do
+                If _startupStopwatch IsNot Nothing AndAlso Not _startupStopwatch.IsRunning AndAlso
+                   _rdo2 IsNot Nothing AndAlso ListView1.Items.Count > 0 AndAlso Not _isUserBusy Then Exit Do
+                If swAll.Elapsed.TotalMinutes > 3 Then
+                    ProbeF5Log("⚠ 等待啟動就緒逾時 3 分鐘，中止")
+                    Return
+                End If
+                Await Task.Delay(500)
+            Loop
+            ProbeF5Log($"啟動就緒 @ +{swAll.Elapsed.TotalSeconds:0.0}s (ListView1 {ListView1.Items.Count} 列)")
+            Await Task.Delay(2000)
+
+            ' ② 靜默全選 SimTree1 全部可見節點 (等同 Ctrl+A 的範圍，但不觸發 AfterSelect，讓 F5 成為唯一計時對象)
+            SimTree1.ClearSelectedNodes()
+            Dim nd As TreeNode = SimTree1.Nodes(0)
+            Dim cnt As Integer = 0
+            Do While nd IsNot Nothing
+                SimTree1.AddSelectedNode(nd) : cnt += 1
+                nd = nd.NextVisibleNode
+            Loop
+            ProbeF5Log($"全選完成: {cnt} 個可見節點，父子去重後 {SimTree1.GetDedupedSelection().Count} 個")
+
+            ' ③ 三個 pass；PgrsBar TextChanged 全程掛鉤記錄訊息時間戳
+            AddHandler PgrsBar1.TextChanged, AddressOf ProbeF5OnBarText
+            AddHandler PgrsBar2.TextChanged, AddressOf ProbeF5OnBarText
+            Try
+                Dim t1 As Double = Await ProbeF5RunPass("Pass1 SimTree F5 (第一次)", Sub() HandleTvKeyDown(SimTree1, New KeyEventArgs(Keys.F5)))
+                Await Task.Delay(1500)
+                Dim t2 As Double = Await ProbeF5RunPass("Pass2 SimTree F5 (第二次)", Sub() HandleTvKeyDown(SimTree1, New KeyEventArgs(Keys.F5)))
+                Await Task.Delay(1500)
+                Dim t3 As Double = Await ProbeF5RunPass("Pass3 ListView1 F5 (對照組, 只走 ForceLv1Refresh)", Sub() Call ForceLv1Refresh())
+                ProbeF5Log($"=== 總結: Pass1={t1:0.00}s | Pass2={t2:0.00}s | Pass3={t3:0.00}s ===")
+            Finally
+                RemoveHandler PgrsBar1.TextChanged, AddressOf ProbeF5OnBarText
+                RemoveHandler PgrsBar2.TextChanged, AddressOf ProbeF5OnBarText
+            End Try
+        Catch ex As System.Exception
+            ProbeF5Log("例外: " & ex.ToString())
+        Finally
+            ProbeF5Log($"=== PROBE_F5TIMING 結束，全程 {swAll.Elapsed.TotalSeconds:0.0}s ===")
+            If autoClose Then Me.BeginInvoke(Sub() Me.Close())
+        End Try
+    End Sub
+    ' ═════════════════ PROBE_F5TIMING ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
+
 #End Region
 #End Region
 

@@ -385,6 +385,10 @@ Partial Class Form1
         End If
         If Not String.IsNullOrEmpty(_startupElapsedMsg) Then PgrsBar1.Text = _startupElapsedMsg
 
+        ' PROBE_F5TIMING ↓↓↓ 整塊可刪 (本體在 Form1_Maintab56.vb 探針區) ↓↓↓
+        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoprobef5timing", StringComparison.OrdinalIgnoreCase)) Then ProbeF5TimingAsync()
+        ' PROBE_F5TIMING ↑↑↑ 整塊可刪 ↑↑↑
+
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
 

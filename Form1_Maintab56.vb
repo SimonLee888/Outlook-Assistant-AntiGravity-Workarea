@@ -443,6 +443,12 @@ Partial Class Form1
             tasks.Add(Task.Run(Function() SimHashParallelWorker(profileName, chunks(idx), processedCounter, totalCount, swEta, lastReportMs, reportGate, progress, numThread, cToken)))
         Next
         Dim rdoFailedLists = Await Task.WhenAll(tasks)
+        ' 2026/07/11 by Simon/Claude Fable 5 [ESC 偵錯器誤斷修正]: worker 是同步函數,跑在 ThreadPool 裸堆疊上 —
+        '   若在 worker 內 ThrowIfCancellationRequested,拋出當下該執行緒堆疊上沒有任何使用者 catch(Bt5_Click 的 Catch OCE 在 UI 緒 async 鏈上),
+        '   VS 偵錯器「使用者未處理例外」判定只看實體堆疊 → 每次 ESC 都誤觸發中斷(App 本身其實接得住,執行期無害)。
+        '   改為 worker 合作式退出(IsCancellationRequested → Exit For,不拋例外),取消例外統一在這裡(UI 緒 async 續體)拋出 —
+        '   與序列版同一條路徑,偵錯器的 async 感知判定看得到上層 Catch,不會誤斷。
+        cToken.ThrowIfCancellationRequested()
         Dim rdoFailed = rdoFailedLists.SelectMany(Function(x) x).ToList()
 
         _dbg("[SimHash]", $"平行化(K={numThread}) 完成 {todo.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
@@ -481,7 +487,7 @@ Partial Class Form1
 
             Dim batch As New List(Of (EntryID As String, SimHash As Long, BigramCount As Integer))(1024)
             For i As Integer = 0 To subset.Count - 1
-                If (i And 127) = 0 Then cToken.ThrowIfCancellationRequested()
+                If (i And 127) = 0 AndAlso cToken.IsCancellationRequested Then Exit For   ' 2026/07/11: 合作式退出,背景緒不拋例外(拋出點交還協調函數的 async 續體,免 VS 偵錯器誤斷)
                 Dim m As MailItemInfo = subset(i)
                 Dim store As Redemption.RDOStore = Nothing
                 Dim body As String = Nothing
@@ -518,7 +524,7 @@ Partial Class Form1
                             If nowMs - lastReportMs(0) >= ThrottleFreq.Mid Then   ' 進鎖後再驗一次，避免重複回報(雙重檢查)
                                 lastReportMs(0) = nowMs
                                 Dim eta = CalculateSpeedAndETA(totalCount, done, swEta.Elapsed.TotalSeconds)
-                                progress?.Report(New ProgressReport With {.Message = $"計算內文指紋(平行化(K={thread_K}): {done}/{totalCount} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
+                                progress?.Report(New ProgressReport With {.Message = $"計算內文指紋(平行化 K={thread_K}): {done}/{totalCount} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
                             End If
                         Finally
                             Monitor.Exit(reportGate)
@@ -620,6 +626,7 @@ Partial Class Form1
                 tasks.Add(Task.Run(Function() MailBodyParallelWorker(profileName, chunks(idx), processedCounter, missing.Count, dbHitCount, swEta, lastReportMs, reportGate, progress, wK, cToken)))
             Next
             Dim results = Await Task.WhenAll(tasks)
+            cToken.ThrowIfCancellationRequested()   ' 2026/07/11 by Simon/Claude Fable 5: 同 S3 — worker 合作式退出不拋例外,取消統一在 UI 緒 async 續體拋出(原因詳見 PreComputeSimHashParallel 同位置註解)
 
             Dim rdoFailed As New List(Of MailItemInfo)()
             For Each r In results
@@ -723,7 +730,7 @@ Partial Class Form1
             storeByName = BuildRdoStoreByNameDict(session)
 
             For i As Integer = 0 To subset.Count - 1
-                If (i And 127) = 0 Then cToken.ThrowIfCancellationRequested()
+                If (i And 127) = 0 AndAlso cToken.IsCancellationRequested Then Exit For   ' 2026/07/11: 合作式退出,背景緒不拋例外(拋出點交還協調函數的 async 續體,免 VS 偵錯器誤斷)
                 Dim m As MailItemInfo = subset(i)
                 Dim store As Redemption.RDOStore = Nothing
                 Dim body As String = Nothing
@@ -2123,6 +2130,149 @@ Partial Class Form1
         End Try
     End Sub
     ' ═════════════════ PROBE_F5TIMING ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
+
+    ' ═════════════════ PROBE_S3CANCEL ↓↓↓ 整塊可刪(連同 Form1_Shown 尾端的觸發行) ↓↓↓ ═════════════════
+    ' 2026/07/11 by Simon/Claude Fable 5: 驗證「ESC 取消 SimHash/body 平行化不再從 worker 執行緒拋 OCE」修正。
+    '   原理: VS 偵錯器「使用者未處理」誤斷 = OCE 拋出當下 worker 實體堆疊上無使用者 catch。
+    '   本探針掛 AppDomain.FirstChanceException 監看測試期間每一顆 OCE 的拋出點堆疊:
+    '   只要沒有任何 OCE 從 SimHashParallelWorker / MailBodyParallelWorker 框架內拋出,偵錯器就沒有可斷之點 → PASS。
+    '   Test A: 直呼 PreComputeSimHashParallel(合成 todo 繞過快取過濾),平行段進度出現後 1.5s 取消 → 應快速中止、OCE 由 async 鏈傳回探針 catch。
+    '   Test B: 600 封不取消 → 應正常完成且指紋全數入快取(驗證沒改壞 happy path)。
+    '   Test C: 直呼 FilterCandidates(合成候選對) 對 S5-1b 平行段做同樣的取消測試。
+    '   觸發: 命令列 /autoprobes3cancel (+ /autoclose)。結果: %TEMP%\OutlookAssistant_ProbeResult_S3Cancel.txt
+    Private _probeS3Lines As New List(Of String)
+    Private _probeS3BadOce As Integer          ' 從 worker 堆疊拋出的 OCE 數(= 偵錯器會誤斷的點數,必須為 0)
+    Private _probeS3OceLog As New System.Collections.Concurrent.ConcurrentQueue(Of String)
+
+    Private Sub ProbeS3Log(s As String)
+        _probeS3Lines.Add($"{Now:HH:mm:ss.fff} {s}")
+        Try
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_S3Cancel.txt"), _probeS3Lines)
+        Catch : End Try
+    End Sub
+
+    Private Sub ProbeS3OnFirstChance(sender As Object, e As System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs)
+        ' 注意: first-chance 時 e.Exception.StackTrace 尚未填入(例外還沒開始傳播),要用 Environment.StackTrace 抓「拋出當下」的執行緒堆疊
+        If Not (TypeOf e.Exception Is OperationCanceledException) Then Return
+        Dim stk As String = Environment.StackTrace
+        Dim bad As Boolean = stk.Contains("SimHashParallelWorker") OrElse stk.Contains("MailBodyParallelWorker")
+        If bad Then Interlocked.Increment(_probeS3BadOce)
+        Dim userFrames = stk.Split(CChar(vbLf)).Where(Function(l) l.Contains("Outlook_Assistant.")).Take(2).Select(Function(l) l.Trim())
+        _probeS3OceLog.Enqueue($"{Now:HH:mm:ss.fff} OCE {If(bad, "❌worker堆疊", "○async鏈(預期)")} @ {String.Join(" ← ", userFrames)}")
+    End Sub
+
+    Private Function ProbeS3ArmedProgress(cts As CancellationTokenSource, armKeyword As String, delayMs As Integer, armedFlag As Boolean()) As IProgress(Of ProgressReport)
+        ' 等目標平行段的進度訊息真的出現才起算取消倒數 — 確保取消訊號落在 worker 迴圈執行中,而非之前的準備階段
+        Return New Progress(Of ProgressReport)(Sub(p)
+                                                   PgrsBar2.Text = p.Message
+                                                   If Not armedFlag(0) AndAlso p.Message IsNot Nothing AndAlso p.Message.Contains(armKeyword) Then
+                                                       armedFlag(0) = True
+                                                       ProbeS3Log($"   進度出現「{armKeyword}」→ {delayMs}ms 後取消")
+                                                       cts.CancelAfter(delayMs)
+                                                   End If
+                                               End Sub)
+    End Function
+
+    Private Async Sub ProbeS3CancelAsync()
+        Dim autoClose As Boolean = Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase))
+        Dim swAll As Stopwatch = Stopwatch.StartNew()
+        ProbeS3Log($"=== PROBE_S3CANCEL 啟動 (autoClose={autoClose}) ===")
+        AddHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf ProbeS3OnFirstChance
+        Try
+            ' ① 等啟動就緒(同 PROBE_F5TIMING 條件),上限 3 分鐘
+            Do
+                If _startupStopwatch IsNot Nothing AndAlso Not _startupStopwatch.IsRunning AndAlso
+                   _rdo2 IsNot Nothing AndAlso _olNS IsNot Nothing AndAlso ListView1.Items.Count > 0 AndAlso Not _isUserBusy Then Exit Do
+                If swAll.Elapsed.TotalMinutes > 3 Then ProbeS3Log("⚠ 等待啟動就緒逾時 3 分鐘,中止") : Return
+                Await Task.Delay(500)
+            Loop
+            ProbeS3Log($"啟動就緒 @ +{swAll.Elapsed.TotalSeconds:0.0}s")
+
+            ' ② 蒐集測試母體: SimTree1 全部可見節點 → 資料夾清單 → S1/S2 掃描攤平(與 Bt5_Click 同路徑)
+            Dim nodes As New List(Of TreeNode)
+            Dim nd As TreeNode = SimTree1.Nodes(0)
+            Do While nd IsNot Nothing : nodes.Add(nd) : nd = nd.NextVisibleNode : Loop
+            Dim prog As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
+            Dim folderList = Await GetUniqueFolderList(nodes, includeSub:=True, cToken:=CancellationToken.None, progress:=prog)
+            Dim scanned = Await ScanMailsToGroupDict(folderList, False, prog, CancellationToken.None)
+            Dim allMails = scanned.Values.SelectMany(Function(x) x).ToList()
+            ProbeS3Log($"母體就緒: {folderList.Count} 夾 / {allMails.Count:N0} 封 @ +{swAll.Elapsed.TotalSeconds:0.0}s")
+            Dim K As Integer = GetThreadCount()
+
+            ' ③ Test A: S3 平行段取消 — 合成 todo 直呼(繞過 _cacheSimHash 過濾,強迫 worker 真的讀 body)
+            Dim todoA = allMails.Take(40000).ToList()
+            ProbeS3Log($"Test A: PreComputeSimHashParallel todo={todoA.Count:N0} K={K},平行段進度出現後 1.5s 取消")
+            Dim badBefore As Integer = _probeS3BadOce
+            Using ctsA As New CancellationTokenSource()
+                ctsA.CancelAfter(60000)   ' 看門狗: 進度訊息萬一沒出現,60s 也強制取消,測試不掛死
+                Dim armedA(0) As Boolean
+                Dim progA = ProbeS3ArmedProgress(ctsA, "計算內文指紋(平行化", 1500, armedA)
+                Dim swA As Stopwatch = Stopwatch.StartNew()
+                Dim outcomeA As String
+                Try
+                    Await PreComputeSimHashParallel(todoA, progA, K, ctsA.Token)
+                    outcomeA = If(armedA(0), "❌ 取消後仍跑完,未中止", "⚠ 平行段進度未出現就跑完(母體太小?),取消未涵蓋")
+                Catch ex As OperationCanceledException
+                    outcomeA = $"✅ OCE 由 async 鏈傳回探針 catch(與 Bt5_Click 行99 同路徑),總耗時 {swA.Elapsed.TotalSeconds:0.0}s"
+                Catch ex As System.Exception
+                    outcomeA = "❌ 非預期例外: " & ex.ToString()
+                End Try
+                ProbeS3Log($"Test A 結果: {outcomeA}")
+            End Using
+            Dim badA As Integer = _probeS3BadOce - badBefore
+            ProbeS3Log($"Test A worker堆疊OCE數: {badA} {If(badA = 0, "✅(偵錯器無可斷點)", "❌(偵錯器仍會誤斷)")}")
+
+            ' ④ Test B: happy path — 600 封不取消,應正常完成且全數入快取
+            Dim todoB = allMails.Skip(40000).Take(600).ToList()
+            If todoB.Count = 0 Then todoB = allMails.Take(600).ToList()
+            ProbeS3Log($"Test B: todo={todoB.Count} 不取消,驗證 happy path")
+            Try
+                Await PreComputeSimHashParallel(todoB, prog, K, CancellationToken.None)
+                Dim covered = todoB.Where(Function(m) _cacheSimHash.ContainsKey(m.EntryID)).Count
+                ProbeS3Log($"Test B 結果: 正常完成,指紋覆蓋 {covered}/{todoB.Count} {If(covered = todoB.Count, "✅", "❌")}")
+            Catch ex As System.Exception
+                ProbeS3Log("Test B ❌ 例外: " & ex.ToString())
+            End Try
+
+            ' ⑤ Test C: S5-1b 平行段取消 — 合成候選對直呼 FilterCandidates
+            Dim candSrc = allMails.Take(30000).ToList()
+            Dim candPairs As New List(Of (A As MailItemInfo, B As MailItemInfo))
+            For i As Integer = 0 To candSrc.Count - 2 Step 2 : candPairs.Add((candSrc(i), candSrc(i + 1))) : Next
+            ProbeS3Log($"Test C: FilterCandidates 候選 {candPairs.Count:N0} 對,S5-1b 平行段進度出現後 1.5s 取消")
+            badBefore = _probeS3BadOce
+            Using ctsC As New CancellationTokenSource()
+                ctsC.CancelAfter(90000)   ' 看門狗
+                Dim armedC(0) As Boolean
+                Dim progC = ProbeS3ArmedProgress(ctsC, "開始過濾候選內文(平行", 1500, armedC)
+                Dim swC As Stopwatch = Stopwatch.StartNew()
+                Dim outcomeC As String
+                Try
+                    Await FilterCandidates(candPairs, GetFuzzyTargetT(), progC, K, ctsC.Token)
+                    outcomeC = If(armedC(0), "❌ 取消後仍跑完,未中止", "⚠ S5-1b 平行段未出現(候選集合可能全在 DB 快取),取消未涵蓋")
+                Catch ex As OperationCanceledException
+                    outcomeC = $"✅ OCE 由 async 鏈傳回探針 catch,總耗時 {swC.Elapsed.TotalSeconds:0.0}s"
+                Catch ex As System.Exception
+                    outcomeC = "❌ 非預期例外: " & ex.ToString()
+                End Try
+                ProbeS3Log($"Test C 結果: {outcomeC}")
+            End Using
+            Dim badC As Integer = _probeS3BadOce - badBefore
+            ProbeS3Log($"Test C worker堆疊OCE數: {badC} {If(badC = 0, "✅(偵錯器無可斷點)", "❌(偵錯器仍會誤斷)")}")
+
+            ' ⑥ OCE 拋出點清單 + 總判定
+            ProbeS3Log($"── OCE 拋出點清單(共 {_probeS3OceLog.Count} 筆,最多列 60):")
+            Dim listed As Integer = 0, oceLine As String = Nothing
+            Do While listed < 60 AndAlso _probeS3OceLog.TryDequeue(oceLine) : ProbeS3Log("   " & oceLine) : listed += 1 : Loop
+            ProbeS3Log($"=== 總判定: {If(_probeS3BadOce = 0, "✅ PASS — 測試期間沒有任何 OCE 從平行 worker 堆疊拋出", $"❌ FAIL — {_probeS3BadOce} 筆 worker 堆疊 OCE")} ===")
+        Catch ex As System.Exception
+            ProbeS3Log("探針例外: " & ex.ToString())
+        Finally
+            RemoveHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf ProbeS3OnFirstChance
+            ProbeS3Log($"=== PROBE_S3CANCEL 結束,全程 {swAll.Elapsed.TotalSeconds:0.0}s ===")
+            If autoClose Then Me.BeginInvoke(Sub() Me.Close())
+        End Try
+    End Sub
+    ' ═════════════════ PROBE_S3CANCEL ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
 
 #End Region
 #End Region

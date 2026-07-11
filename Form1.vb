@@ -1,8 +1,7 @@
-﻿Imports System.Numerics
-Imports System.Runtime.InteropServices
-Imports System.Threading
+﻿Imports System.Threading
 Imports System.Windows
 Imports System.Windows.Forms.DataVisualization.Charting
+Imports System.Runtime.InteropServices
 Imports Microsoft.Office.Interop.Outlook
 
 Partial Class Form1
@@ -55,27 +54,14 @@ Partial Class Form1
         Dim realCaller As String = caller
         If _useStackCaller Then realCaller = DebugForm.GetCallerName()
 
-        ' 2026/06/10 by Simon/Claude Opus 4.8: GetCallerName() 回傳 "Form1.MethodName"，
-        ' 因所有呼叫端都在 Form1，"Form1." 前綴是冗餘資訊，直接 strip
+        ' 2026/06/10 by Simon/Claude Opus 4.8: GetCallerName() 回傳 "Form1.MethodName"，因所有呼叫端都在 Form1，"Form1." 前綴是冗餘資訊，直接 strip
         ' (CallerMemberName 回傳純方法名不含前綴，此行對它為 no-op；僅 GetCallerName 路徑會 strip)
         If realCaller.StartsWith("Form1.") Then realCaller = realCaller.Substring(6)
 
-        ' 2026/07/10 by Simon/Claude Fable 5 [臨時探針落檔]: 啟動計時 / RDO init 訊息同步寫入 %TEMP%\OLA_BootProbe.log，
-        '   供無人值守的自動化測試直接讀數據 (DebugForm 是純 UI 佇列無檔案輸出)。驗證完成後可整段移除。
-        If msg.Contains("計時") OrElse realCaller = "InitRdoSessionWithoutEULA" Then
-            Try
-                Static bootLogPath As String = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OLA_BootProbe.log")
-                Static bootLogInited As Boolean = False
-                If Not bootLogInited Then System.IO.File.WriteAllText(bootLogPath, $"=== {Now:yyyy/MM/dd HH:mm:ss} 啟動 ==={vbCrLf}") : bootLogInited = True
-                System.IO.File.AppendAllText(bootLogPath, $"{Now:HH:mm:ss.fff} [{realCaller}] {msg} {detail}{vbCrLf}")
-            Catch : End Try
-        End If
-
-        ' by Gemini 3.5 Flash, 2026/06/19: 優先使用 ActiveInstance 以避免背景執行緒對 VB 預設實例的 Thread-Local 存取問題
         If DebugForm.ActiveInstance IsNot Nothing Then
-            DebugForm.ActiveInstance.AddMessage3(msg, detail, realCaller)
+            DebugForm.ActiveInstance.AddMessage3(msg, detail, realCaller)   ' by Gemini 3.5 Flash, 2026/06/19: 優先使用 ActiveInstance 以避免背景執行緒對 VB 預設實例的 Thread-Local 存取問題
         Else
-            DebugForm.AddMessage3(msg, detail, realCaller)   ' fallback: ActiveInstance 未設(Load 前/已關閉), 退回原行為
+            DebugForm.AddMessage3(msg, detail, realCaller)                  ' 2026/06/19 fallback: ActiveInstance 未設(Load 前/已關閉), 退回原行為
         End If
     End Sub
 
@@ -96,16 +82,6 @@ Partial Class Form1
     ' Private _cancelRequested As Boolean = False       ' ESC 全域中斷旗標: Tab1/Tab2/Tab3 共用，按 ESC 立刻設 True，各操作在 Yield 點檢查 (2026/04/10 by simon&claude&gemini: 全域改用 CancellationTokenSource 發送取消信號，取代布林旗標)
     ' Private _cacheSnifferCts As New System.Threading.CancellationTokenSource  ' B4 CacheSniffer 取消令牌，FormClosing 時呼叫 Cancel()
     Private _cts As CancellationTokenSource             ' ✅ 2026/04/10: 導入現代化非同步中斷信號源作ESC中斷取代布林旗標
-    ' 2026/07/06 by Simon/Claude: 「啟動花費」計時改為量到 Tab1 完整顯示(SimTree1_AfterSelect 首次 RenderLv1 完成)為止，
-    '   不再只量到 Me.Show() 視窗容器出現那一刻。_startupElapsedMsg 由 SimTree1_AfterSelect 寫入，Form1_Shown 收尾時讀取顯示。
-    Private _startupStopwatch As Stopwatch = Nothing
-    ' 2026/07/10 by Simon/Claude Fable 5: 啟動階段時間戳 — 停錶(SimTree1 首次 RenderLv1 完成)之後 Elapsed 讀值凍結，
-    '   特別標註讓 log 一眼分辨哪些階段落在「啟動花費 x.xx 秒」計時窗口內、哪些在停錶之後才執行
-    Private Function BootMark() As String
-        If _startupStopwatch Is Nothing Then Return "n/a"
-        Return $"{_startupStopwatch.ElapsedMilliseconds} ms{If(_startupStopwatch.IsRunning, "", " (已停錶,窗口外)")}"
-    End Function
-    Private _startupElapsedMsg As String = ""
     Private _inSizeMove As Boolean = False              ' 2026/06/19 by Simon/Claude: 是否處於拖曳 size/move modal loop；供 Form1_Resize 區分「拖曳縮放」與「瞬間頂天/最大化」
 
     ' ── 全域勾選狀態變數 (by Gemini, 2026/04/10: 優化效能，避免頻繁讀取 UI) ──
@@ -115,11 +91,12 @@ Partial Class Form1
     Private _showAllFolders As Boolean = False
     Private _includeSubTab2 As Boolean = False
     Private _includeSubTab3 As Boolean = False
-    Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
+
     ' ⚠ 2026/07/10 [F5串行化] 範圍警告: 本旗標只在 ForceTvRefresh 的「同步重建期間」為 True (Finally 即關閉)，
     '   唯一讀取點是樹展開鏈 (BeforeExpand → LoadSubFolderToTreeView → GetSortedSubFolders)。
     '   F5 的統計流程 (ForceLv1Refresh) 執行時本旗標已是 False — 統計繞過快取靠的是明確的 skipCache:=True 參數，
     '   不是本旗標。新增讀取點前務必確認時序，勿假設「F5 期間全程為 True」。
+    Private _isForceRefreshing As Boolean = False       ' ✅ 2026/05/31 新增：F5 強制更新旗標，指示底層完全繞過 SSD 快取
     Private _isResizingLv As Boolean = False            ' ✅ 2026/05/09 by Gemini 3 Flash: 用於在欄位縮放期間暫停 OwnerDraw 繪製，消除 Reflow 殘影
     Private _lvResizePending As ListView = Nothing
     Private _lvResizeTimer As New Forms.Timer() With {.Interval = 100}
@@ -129,6 +106,8 @@ Partial Class Form1
     Private _lastHoveredPointIndex As Integer = -1      ' 記住上一個 hover 的點，-1 表示沒有
     'Private _lastHoveredTreeNode As TreeNode = Nothing ' 2026/5/14 by simon/Gemini: 將mouse hover作成內建功能
     Private _lastHoveredLvItem As ListViewItem = Nothing
+    Private _startupStopwatch As Stopwatch = Nothing    ' 2026/07/06 by Simon/Claude: 「啟動程序耗時」計時改為量到 Tab1 完整顯示(SimTree1_AfterSelect 首次 RenderLv1 完成)為止，
+    Private _startupElapsedMsg As String = ""           ' 2026/07/06 by Simon/Claude: 不再只量到 Me.Show() 視窗容器出現那一刻。_startupElapsedMsg 由 SimTree1_AfterSelect 寫入，Form1_Shown 收尾時讀取顯示。
 
     ' [新增ProgressBar歷史紀錄 2026/4/2, by Gemini]
     Private Const MAX_HISTORY_COUNT As Integer = 100
@@ -136,7 +115,6 @@ Partial Class Form1
     Private _historyHoverIndex As Integer = -1
     Private _historyPopup As ToolStripDropDown
     Private _statusHistory As New List(Of StatusHistoryItem)(1024)
-
     Private Structure StatusHistoryItem
         Dim Time As DateTime
         Dim Message As String
@@ -208,14 +186,11 @@ Partial Class Form1
         '   fallback 路徑時，會各自建立「幽靈 DebugForm」，訊息進了沒人看得到的佇列 (2026/07/03 實測: RDO init
         '   期間背景執行緒 log 全數消失)。從 UI 執行緒先建立預設實例並登記，訊息就會累積在真實例的佇列，待顯示時流出。
         If _isDebugMode Then DebugForm.ActiveInstance = DebugForm
+
         _dbg("開始") ' debugForm 開始計時
         _startupStopwatch = Stopwatch.StartNew() : Cursor = Cursors.AppStarting  ' by Claude Sonnet 4.6, 2026/06/07
-        ' 2026/07/10 by Simon/Claude Fable 5: 拆解 Form1_Load 開頭的 ~89ms 不明空隙 (log: _dbg開始 → InitLookAndFeel _dbg開始 之間) —
-        '   若下面這行顯示 ~0ms，空隙就在「進入 InitLookAndFeel 之前」的方法 JIT/型別載入；若這行就已 ~89ms，兇手是 Cursor 設定或 _dbg 本身
-        _dbg(" ├ 啟動計時", $"Stopwatch+Cursor 完成 @ {BootMark()}")
 
         InitLookAndFeel()       ' 設計程式外觀
-        _dbg(" ├ 啟動計時", $"InitLookAndFeel 完成 @ {BootMark()}")
         InitPgrsBarEvents()     ' 2026/04/02 by Gemini: 集中掛載 ProgressBar 互動事件 (取代 Handles 宣告)
 
         ' 2026/04/18 by Claude: Form 自身背景繪製的雙緩衝
@@ -224,7 +199,6 @@ Partial Class Form1
         Me.KeyPreview = True    ' ✅ 讓 Form 優先攔截 ESC，否則 ESC 會先被 TreeView/ListBox 等子控制項消耗
         Me.BringToFront()       ' 先將表單顯示後, 再以背景執行緒加入資料夾, 提高操作反應速度
         Me.Show()
-        _dbg(" ├ 啟動計時", $"Me.Show 完成 @ {BootMark()}")
 
         Cursor = Cursors.Default        ' 視窗容器已顯示，但 Tab1 資料尚未載入完成，計時繼續跑，交給 SimTree1_AfterSelect 首次完成時停錶
         PgrsBar1.Text = "正在載入..."   ' 蓋掉 Designer 預設的 "ProgressBar1"，實際啟動秒數待 Tab1 完整顯示後才寫入
@@ -295,20 +269,21 @@ Partial Class Form1
     Private Async Sub Form1_Shown(sender As Object, e As EventArgs) Handles Me.Shown
         _dbg("開始")
 
+
         ' by Gemini, 2026/04/01: 利用背景躲藏時間，預先載入其他 Tab 的 UI 與目錄樹，實現「切換瞬間無感」的流暢體驗
         ' 讓第一頁先穩穩地顯示出來，不要與使用者剛啟動後的第一波對 TreeView1 的操作搶資源
         InitMapiNamespace()
-        _dbg(" ├ 啟動計時", $"InitMapiNamespace 完成 @ {BootMark()}")
         InitDatabase()          ' by Gemini, 2026/04/06: 初始化 SQLite 快取資料庫
-        _dbg(" ├ 啟動計時", $"InitDatabase 完成 @ {BootMark()}")
+
         ' 2026/07/10 by Simon/Claude Fable 5 [A]: CheckRDO.Checked = True 從這裡搬到 Tab1 首次統計完成之後 (見下方 Tab2 預載前) —
         '   InitRdoSessionWithoutEULA 內部無 Await、全程同步佔 UI 執行緒 ~460ms (New RDOSession+Logon 就 ~390ms)，
         '   原本卡在啟動計時窗口正中央，是 0.98s 裡最大單筆。窗口內沒人需要 RDO：所有 RDO proxy 在 _rdo2 Is Nothing 時本就 fallback OOM。
 
-        If _isDebugMode Then    ' by Gemini, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
-            CheckDebug.Visible = True
-            ' ✅ 2026/03/30 by Gemini: 改用 BeginInvoke 延遲啟動，避免 Load 期間同步觸發事件造成 UI 卡頓或 Handle 競爭, 移除原本導致Exception 的Task.Run 呼叫
+        ' by Gemini, 2026/04/01: 如果是 debug mode，就顯示 debugForm跟 debug button
+        ' ✅ 2026/03/30 by Gemini: 改用 BeginInvoke 延遲啟動，避免 Load 期間同步觸發事件造成 UI 卡頓或 Handle 競爭, 移除原本導致Exception 的Task.Run 呼叫
+        If _isDebugMode Then
             Me.BeginInvoke(Sub() CheckDebug.Checked = True) ' Memo: 這裡設成True 就會預設開啟 DebugForm，False 不開啟，設計階段方便debug
+            CheckDebug.Visible = True
         End If
 
         ' by Gemini, 2026/04/05: 將表單移動與縮放事件改為 AddHandler，保持類別簡潔
@@ -330,62 +305,55 @@ Partial Class Form1
         Await Task.Yield()
 
         ' 2024/5/17, PST檔太多, 啟動速度愈來愈差, 全部重寫. 依照20年前的做法動態載入:
-        ' 啟動時只載入第一層表皮, 若下層有subFolders=True 則暫塞一個假的":::" 讓它能顯示"+"加號表示還有子資料夾就好
-        ' 只有當使用者點開 "+" 號展開節點時, 才真正去讀該項目的子資料夾, 不要一開始就花時間全讀
+        '   啟動時只載入第一層表皮, 若下層有subFolders=True 則暫塞一個假的":::" 讓它能顯示"+"加號表示還有子資料夾就好
+        '   只有當使用者點開 "+" 號展開節點時, 才真正去讀該項目的子資料夾, 不要一開始就花時間全讀
         ' 2026/04/13 by Simon/Claude: SimTree1 與 TreeView1 同步載入 PST 目錄樹
         LoadStoreToTreeView(_pstStoreList, SimTree1)
-        _dbg(" ├ 啟動計時", $"LoadStoreToTreeView(SimTree1) 完成 @ {BootMark()}")
         GotoDefaultInbox(SimTree1)
-        _dbg(" ├ 啟動計時", $"GotoDefaultInbox(SimTree1) 同步段完成 @ {BootMark()}")
         Await Task.Yield()
 
-        ' Tab1 順利載入後，才開始載入 Tab2~Tab5 的 UI 與資料，避免一開始就全部載入造成卡頓
-        ' 使用 TryToRelaxFor 確保使用者正在操作時會暫緩預載
-        ' 依序初始化後面的標籤頁，拉出間隔避免卡住使用者剛進入畫面的第一波操作
-        ' by Gemini, 2026/04/03: 增加載入各 Tab 之間的視覺區隔
-
-        Dim delaySame As Integer = 100  ' 每個 Tab 之間的預載延遲，單位毫秒 (ms)，可以根據需要調整
-
-        ' 2026/07/10 by Simon/Claude Fable 5 [A]: RDO 初始化移到這裡 — TryToRelaxFor 會等 _isUserBusy=False (Tab1 首次統計
-        '   結束、停錶之後) 才放行，同步的 ~460ms RDO init 就此移出啟動計時窗口，且仍在 Tab2~5 預載與使用者操作之前完成。
-        Await TryToRelaxFor(delaySame)
-        _dbg(" ├ 啟動計時", $"CheckRDO(RDO init) 開始 @ {BootMark()}")
+        ' 2026/07/10 by Simon/Claude Fable 5 [A]: RDO 初始化移到這裡 — TryToRelaxFor 會等 _isUserBusy=False (Tab1 首次統計結束、停錶之後) 才放行，
+        '   同步的 ~460ms RDO init 就此移出啟動計時窗口，且仍在 Tab2~5 預載與使用者操作之前完成。
         CheckRDO.Checked = True ' added by simon 2026/6/25, to init RDO by default (2026/07/10 由 Form1_Shown 開頭搬到 Tab1 完成後)
-        _dbg(" ├ 啟動計時", $"CheckRDO 觸發完成 (RDO 於背景 init 中) @ {BootMark()}")   ' 2026/07/10 [RDO 非同步化]: 真正完成點看 InitRdoSessionWithoutEULA 的 _rdo2 init OK
 
+        ' Tab1 順利載入後，才開始載入 Tab2~Tab5 的 UI 與資料，避免一開始就全部載入造成卡頓
+        ' 使用 TryToRelaxFor 確保使用者正在操作時會暫緩預載，依序初始化後面的標籤頁，拉出間隔避免卡住使用者剛進入畫面的第一波操作
+        ' by Gemini, 2026/04/03: 增加載入各 Tab 之間的視覺區隔
+        Const delaySame As Integer = 50     ' 每個 Tab 之間的預載延遲，單位毫秒 (ms)，可以根據需要調整
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(2) Then
-            _dbg(" ├ 啟動計時", $"Tab2 預載開始 @ {BootMark()}")
             InitTab2UI() : _isTabInitialized(2) = True
             LoadStoreToTreeView(_pstStoreList, SimTree2) : GotoDefaultInbox(SimTree2)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(3) Then
-            _dbg(" ├ 啟動計時", $"Tab3 預載開始 @ {BootMark()}")
             InitTab3UI() : _isTabInitialized(3) = True
             LoadStoreToTreeView(_pstStoreList, SimTree3) : GotoDefaultInbox(SimTree3)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(4) Then
-            _dbg(" ├ 啟動計時", $"Tab4 預載開始 @ {BootMark()}")
             InitTab4UI() : _isTabInitialized(4) = True
             LoadStoreToTreeView(_pstStoreList, SimTree4) : GotoDefaultInbox(SimTree4)
         End If
 
         Await TryToRelaxFor(delaySame) : If Not _isTabInitialized(5) Then
-            _dbg(" ├ 啟動計時", $"Tab5 預載開始 @ {BootMark()}")
-            InitTab5UI() : _isTabInitialized(5) = True
-            ' 2026/05/02 by Claude: Tab5 改用 SimTree5，對齊 Tab1~4
+            InitTab5UI() : _isTabInitialized(5) = True  ' 2026/05/02 by Claude: Tab5 改用 SimTree5，對齊 Tab1~4
             LoadStoreToTreeView(_pstStoreList, SimTree5) : GotoDefaultInbox(SimTree5)
         End If
-        _dbg(" ├ 啟動計時", $"全部 Tab 預載完成 @ {BootMark()}")
         _dbg("結束", "全部 Tab 背景載入完畢") ' by Gemini, 2026/04/11: UI 頂層 Level 0
+
+        ' PROBE_F5ESC ↓↓↓ 整塊可刪 (探針本體在 Form1_Maintab56.vb) ↓↓↓
+        Dim probeArgs As String() = Environment.GetCommandLineArgs()
+        If probeArgs.Any(Function(a) String.Equals(a, "/autoprobef5esc", StringComparison.OrdinalIgnoreCase)) Then
+            StartProbeF5Esc(autoClose:=probeArgs.Any(Function(a) String.Equals(a, "/autoclose", StringComparison.OrdinalIgnoreCase)))
+        End If
+        ' PROBE_F5ESC ↑↑↑ 整塊可刪 ↑↑↑
 
         ' 2026/07/06 by Simon/Claude: 在所有的背景預載跟 Tab 初始化完成後，把啟動計時訊息顯示到 ProgressBar 上
         '   正常情況下 _startupElapsedMsg 已在 SimTree1_AfterSelect 首次 RenderLv1 完成時寫入；
         '   萬一 Tab1 找不到預設收件匣 (GotoDefaultInbox 提前 Return) 導致從未觸發，這裡當作備援，就地停錶顯示。
         If _startupStopwatch IsNot Nothing AndAlso _startupStopwatch.IsRunning Then
             _startupStopwatch.Stop()
-            _startupElapsedMsg = "啟動花費 " & _startupStopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。(備援計時，Tab1 未觸發預設選取)"
+            _startupElapsedMsg = "啟動程序耗時 " & _startupStopwatch.Elapsed.TotalSeconds.ToString("0.00") & " 秒。(備援計時，Tab1 未觸發預設選取)"
         End If
         If Not String.IsNullOrEmpty(_startupElapsedMsg) Then PgrsBar1.Text = _startupElapsedMsg
 
@@ -440,8 +408,8 @@ Partial Class Form1
         _dbg("開始")
         ' 2026-03-17 拆分: TreeView / ListView 各司其職的外觀設定移到獨立函數
         '   InitLookAndFeel()   ← 視窗位置、TabControl、ContextMenu、Chart2、Button、雜項
-        '   InitTreeview()  ← TreeView / SimTree 字型、顏色、雙緩衝
-        '   InitListview()  ← ListView 字型、基本樣式、雙緩衝、欄位定義
+        '   InitTreeview()      ← TreeView / SimTree 字型、顏色、雙緩衝
+        '   InitListview()      ← ListView 字型、基本樣式、雙緩衝、欄位定義
 
         ' 設定程式標題 (如何設置版本號自動遞增 'myApp.MinorRevision += 1?? --> 在專案目錄維護一個ver.log 檔案裡面寫版本號, 每次編譯前就自動讀取, 加一再寫回)
         Dim strApp As String = My.Application.Info.DirectoryPath & "\" & My.Application.Info.ProductName & ".EXE"
@@ -450,7 +418,6 @@ Partial Class Form1
             Dim modeStr As String = If(_isDebugMode, "(Debug)", "(Release)")
             Me.Text = $"Outlook Assistant - by Simon Lee Studio (build {infoReader.LastWriteTime:yyyy/MM/dd HH:mm:ss}) {modeStr}"
         End If
-        _dbg(" ├ 計時", $"標題/版本讀檔 (Dropbox I/O) @ {BootMark()}")   ' 2026/07/10: 拆解 InitLookAndFeel 前段 ~44ms
 
         ' ── 視窗位置與背景色 ──
         If Screen.FromControl(Me).Bounds.Height > 2560 Then
@@ -464,9 +431,8 @@ Partial Class Form1
         For i As Integer = 0 To strTabName.Length - 1
             TabControl1.TabPages(i).Text = strTabName(i)
         Next
-        TabControl1.Font = New Font(_fontDefault, _fontBold)
-        TabControl1.Padding = New Point(12, 8)
-        _dbg(" ├ 計時", $"TabControl 名稱×7/字型/Padding @ {BootMark()}")   ' 2026/07/10: 拆解 InitLookAndFeel 前段 ~44ms
+        'TabControl1.Font = New Font(_fontDefault, _fontBold)
+        'TabControl1.Padding = New Point(12, 8)
 
         ' ── 容器化佈局與動態控制項掛載 ──
         ' by Gemini, 2026/04/01: 只初始化 Tab1，其餘 Tab 在切換時才載入 (Lazy Load)
@@ -1017,15 +983,26 @@ Partial Class Form1
     End Sub
     Private Sub InitTab6UI()
 
-        ' 2026/7/11 by simon, 把 ListView6 的初始化移到這裡
-        ListView6.BorderStyle = BorderStyle.None
-        ListView6.BackColor = Color.White
-        ListView6.Columns.Add("Item", 200)
-        ListView6.Columns.Add("Value", 120, HorizontalAlignment.Right)
-        ListView6.BringToFront()
+        ' 2026/07/11 by Simon/Claude: 新增ListView6 右鍵選單，冪等 (重複呼叫只建一次)；僅支援單選單一資料表刪除
+        If ctxMenuLv6 IsNot Nothing Then Return Else ctxMenuLv6 = New ContextMenuStrip()
 
-        ' 2026/07/11 by Simon/Claude: 掛上「刪除這個 Table」右鍵選單 (單選單一資料表刪除)
-        InitLv6ContextMenu()
+        Dim mnuDeleteTable As New ToolStripMenuItem("刪除這個資料表(&D)")
+        ctxMenuLv6.Items.Add(mnuDeleteTable)
+
+        AddHandler mnuDeleteTable.Click, Async Sub(sender, e)
+                                             If ListView6.SelectedItems.Count <> 1 Then Return
+                                             Dim label = ListView6.SelectedItems(0).Text
+                                             Dim tbl = ResolveLv6DeletableTable(label)
+                                             If tbl <> "" Then Await DeleteLv6Table(tbl, label)
+                                         End Sub
+
+        ' 只有單選且選中項目對應到真正可刪除的資料表時才顯示選單
+        AddHandler ctxMenuLv6.Opening, Sub(s, ev)
+                                           If ListView6.SelectedItems.Count <> 1 Then ev.Cancel = True : Return
+                                           If ResolveLv6DeletableTable(ListView6.SelectedItems(0).Text) = "" Then ev.Cancel = True
+                                       End Sub
+
+        ' 2026/07/11 by Simon/Claude: 掛上「刪除這個資料表」右鍵選單 (單選單一資料表刪除)
         ListView6.ContextMenuStrip = ctxMenuLv6
 
     End Sub
@@ -1125,6 +1102,15 @@ Partial Class Form1
         _cts = New CancellationTokenSource()
         Return _cts.Token
     End Function
+
+    ' 2026/07/11 by Simon/Claude Opus 4.8 [F5-ESC 修復b]:
+    '   _probeF5EscBaselineMode: PROBE_F5ESC 的 A/B 對照開關 — True = 停用 GetSubtree 重掃前的真讓出點(重現修復前行為)。
+    '                            production 恆 False；探針刪除後本欄位保留無害(唯一寫入者是探針)。
+    '   _throttleColdCount     : 真讓出診斷計數 — SmartThrottleCore 每走一次冷路徑(真的 Task.Delay(1) 讓出訊息泵)加 1。
+    '                            純診斷用、UI 執行緒為主，容忍少算，不用 Interlocked。
+    Friend _probeF5EscBaselineMode As Boolean = False
+    Friend _throttleColdCount As Long = 0
+
     Private Function SmartThrottle(sw As Stopwatch, Optional intervalMs As Integer = ThrottleFreq.Mid, Optional onThrottled As System.Action = Nothing, Optional cToken As CancellationToken = Nothing) As Task
 
         ' '' <summary>
@@ -1168,6 +1154,7 @@ Partial Class Form1
     End Sub
     Private Async Function SmartThrottleCore(sw As Stopwatch, onThrottled As System.Action, cToken As CancellationToken) As Task
 
+        _throttleColdCount += 1   ' 2026/07/11 [F5-ESC]: 真讓出診斷計數 (見宣告處)
         onThrottled?.Invoke() : sw.Restart()
 
         ' ✅ 進入節流時暫時將系統計時器解析度拉高到 1ms，確保 Task.Delay(1) 真的只停 ~1ms 而非 15.6ms (by Gemini 3.0 flash, 2026/04/19)
@@ -1294,7 +1281,6 @@ Partial Class Form1
         ' 2026/06/15 by Simon/Claude Opus 4.8: 改用 SaveTreeStateByPath 快照「所有」展開路徑，
         '   取代舊版僅備份單一選取節點 (oldPath/wasExpanded)，
         '   使切換 _showAllFolders 後已展開的節點保持展開、不被擅自收合。
-        ' todo: 為什麼只備份 Tab1 的狀態？
         Dim st1State = SimTree1.SaveTreeStateByPath()
 
         ' B. 清理所有 TreeView
@@ -1305,8 +1291,7 @@ Partial Class Form1
             tv.Nodes.Clear()
         Next
 
-        ' C. 重新載入 Tab1 的樹 (其餘 Tab 採 Lazy Load，切換時才重載)
-        ' todo: 若這裡強制重載全部Lv會不會又有副作用?
+        ' C. 重新載入 Tab1 的樹 (其餘 Tab 採 Lazy Load，切換時才重載，這裡強制重載全部Lv會有副作用)
         LoadStoreToTreeView(_pstStoreList, SimTree1)
 
         ' D. 還原所有展開路徑 + 選取，並觸發統計 (RestoreTreeState 對已消失資料夾天然容錯)
@@ -1455,14 +1440,14 @@ Partial Class Form1
         _historyHoverIndex = -1
         HistoryListBox.Items.Clear()
         For Each item In filteredHistory
-            HistoryListBox.Items.Add($"[{item.Time:HH:mm:ss}] {item.Message}")
+            HistoryListBox.Items.Add($"[{Item.Time:HH:mm:ss}] {Item.Message}")
         Next
 
         ' 動態計算最佳寬度與高度
         Dim maxWidth As Integer = 300
         Using g = HistoryListBox.CreateGraphics()
-            For Each item In HistoryListBox.Items
-                Dim sz = g.MeasureString(item.ToString(), HistoryListBox.Font)
+            For Each Item In HistoryListBox.Items
+                Dim sz = g.MeasureString(Item.ToString(), HistoryListBox.Font)
                 If sz.Width > maxWidth Then maxWidth = CInt(sz.Width)
             Next
         End Using
@@ -2331,31 +2316,34 @@ Partial Class Form1
     Private Sub ClearFolderCachesCore()
         ' ---------------------------------------------------------------
         ' ClearFolderCachesCore — [記憶體層] 只清「資料夾結構 + 統計」相關快取
-        ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化 Step4]: 從 ClearMemoryCachesCore 拆出，供 ForceTvRefresh (F5 樹重刷) 使用 —
+        ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化 Step4]: 從 ClearMemoryCachesCore 拆出，供 ForceTvRefresh (F5 樹重刷) 使用
         '   郵件層快取 (_cacheMailBody/_cacheMailInfo/_cacheCleanSubject/_dirtyMailFolders) 與資料夾結構無關，F5 不必陪葬。
         '   注意: _cacheFolderTree/_cacheSubTreeList/_cacheFolderIDs 仍必清 — 樹結構幽靈復活防護 (2026/6/1) 語意不變。
+        '
         ' 2026/07/11 [F5串行化 補遺] 郵件層三者的過期機制盤點 (F5 不清的正當性依據):
-        '   _cacheMailInfo    → F5 路徑由 InvalidateStaleMailInfoByFreshMc 以真實 mc 比對 Snap 手術式失效;
-        '                       程式內刪信/改信走 InvalidateMailCache/原地 patch;完整驗證歸 RenewCache 狀況A。
-        '   _cacheMailBody    → key=EntryID,只有「就地修改」會過期,由 RenewCache 的 msg_size 修改偵測精準清除。
-        '   _cacheCleanSubject→ key=subject 字串本身 (內容定址 memoization),邏輯上不可能過期,清除純屬記憶體衛生。
+        '   _cacheMailInfo      → F5 路徑由 InvalidateStaleMailInfoByFreshMc 以真實 mc 比對 Snap 手術式失效;
+        '                         程式內刪信/改信走 InvalidateMailCache/原地 patch;完整驗證歸 RenewCache 狀況A。
+        '   _cacheMailBody      → key=EntryID,只有「就地修改」會過期,由 RenewCache 的 msg_size 修改偵測精準清除。
+        '   _cacheCleanSubject  → key=subject 字串本身 (內容定址 memoization),邏輯上不可能過期,清除純屬記憶體衛生。
         ' ---------------------------------------------------------------
         _dbg("開始", "清理資料夾結構+統計快取")
+
         _cacheMailCount.Clear()
-        _cacheMailCountAll.Clear()
-        _cacheFolderCount.Clear()
-        _cacheFolderCountAll.Clear()
         _cacheFolderSize.Clear()
+        _cacheFolderCount.Clear()
+        _cacheMailCountAll.Clear()
         _cacheFolderSizeAll.Clear()
+        _cacheFolderCountAll.Clear()
 
         _cacheYearCount.Clear()
         _cacheMonthCount.Clear()
         _cacheAttMailList.Clear()
         _cacheAttFilename.Clear()
 
+        _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理 (2026/07/03: 已併入 isMail，_cacheIsMailFolder 汰除)
         _cacheFolderTree.Clear()
         _cacheSubTreeList.Clear()
-        _cacheFolderIDs.Clear()     ' 2026/04/10 新增 ID 快取清理 (2026/07/03: 已併入 isMail，_cacheIsMailFolder 汰除)
+
         _dbg("結束", "清理資料夾結構+統計快取")
     End Sub
     Private Sub ClearMemoryCachesCore()
@@ -2364,14 +2352,15 @@ Partial Class Form1
         ' 2026/07/10 [F5串行化 Step4]: 資料夾層拆至 ClearFolderCachesCore，本函式 = 資料夾層 + 郵件層 全清 (語意不變)
         ' ---------------------------------------------------------------
         _dbg("開始", "清理所有快取")
+
         ClearFolderCachesCore()
 
-        _cacheMailBody.Clear()      ' 2026/6/18 by simon, 之前漏掉了現在補上
-        _cacheMailInfo.Clear() ' 2026/6/18 by simon, 之前漏掉了現在補上
+        _cacheMailInfo.Clear()  ' 2026/6/18 by simon, 之前漏掉了現在補上
+        _cacheMailBody.Clear()  ' 2026/6/18 by simon, 之前漏掉了現在補上
 
-        ' 2026/07/03 by Simon/Claude Fable 5: 記憶體被整批清空，尚未存檔的 dirty 標記已無資料可寫，一併清除避免殘留幽靈標記
-        _dirtyMailFolders.Clear()
         _cacheCleanSubject.Clear()  ' GetCleanSubject 的 memoization 快取，同批清理
+        _dirtyMailFolders.Clear()   ' 2026/07/03 by Simon/Claude Fable 5: 記憶體被整批清空，尚未存檔的 dirty 標記已無資料可寫，一併清除避免殘留幽靈標記
+
         _dbg("結束", "清理所有快取")
     End Sub
 

@@ -82,6 +82,10 @@ Partial Class Form1
     '   只用 Byte 當 Value 純粹借 ConcurrentDictionary 當執行緒安全的 Set 用，Value 本身無意義。
     Private Shared _dirtyMailFolders As New ConcurrentDictionary(Of String, Byte)
     Private _isAutoSavingCache As Boolean = False  ' 2026/07/05 by Simon/Claude: timerSaveCache_Tick 重入防護，避免上一輪存檔還沒跑完就疊加下一輪
+    ' 2026/07/11 by Simon/Claude Fable 5: Lv6 統計查詢互斥旗標 — DbShowDbFileStat/DbShowTableStat/DbShowBigramSetStat/RefreshLv6DbStats
+    '   都會把查詢丟進 Task.Run，同一條 SqliteConnection 不允許並發使用；旗標僅在 UI 執行緒讀寫(所有入口都是 UI 事件)，
+    '   忙碌中直接跳過並提示，比 SemaphoreSlim 排隊簡單且不會累積點擊積壓。
+    Private _lv6StatBusy As Boolean = False
     ' 2026/07/04 by Simon/Claude Fable 5: PR_LOCAL_COMMIT_TIME_MAX 快照 (UTC Ticks)，RenewCache 第二 dirty 訊號。
     '   純 count 快照抓不到「數量不變但內容已置換」(copy→修改→放回→刪原始 = 淨零變動)，commit_max 任何增/刪/改都會推高。
     '   僅作寫入暫存 (RenewCache 掃描時填入 → SaveFolderInfoBatch 落 DB)，啟動時不需載回記憶體，比對一律以 DB row 為準。
@@ -501,14 +505,27 @@ Partial Class Form1
             _dbg("       ├ 錯誤", ex.Message)
         End Try
     End Sub
-    Private Sub DeleteDbMail()
-        ' 供「清快取」對話框那顆 checkbox 勾選時呼叫：關閉連線 → 刪檔。(預設不呼叫；使用者主動勾選才清)
+    Private Sub DeleteDbMail(Optional backupZip As Boolean = True)
+        ' 供「清快取」對話框「郵件快取 / 兩者全清」呼叫：關閉連線 → 備份 → 刪檔 → 清記憶體 → 重建空表
         ' 2026/06/21 by Simon/Claude Opus 4.8: 本檔(OLAcacheMail.db)現含 att_filenames，整檔刪除會一併清掉 → 須同步清 _cacheAttFilename
+        ' 2026/07/11 by Simon/Claude Fable 5: 加 zip 備份 (本檔重建成本高：att_filenames/SimHash 都要逐封讀取)。
+        '   backupZip:=False 供「兩者全清」路徑使用 —— ZipAndRebuildDB 的主 zip 已打包本檔舊檔，不必重複備份第二份。
         Try
             If _dbMail IsNot Nothing Then _dbMail.Close() : _dbMail.Dispose() : _dbMail = Nothing
             SqliteConnection.ClearAllPools()
 
-            If Not String.IsNullOrEmpty(_dbMailPath) AndAlso IO.File.Exists(_dbMailPath) Then IO.File.Delete(_dbMailPath)
+            If Not String.IsNullOrEmpty(_dbMailPath) AndAlso IO.File.Exists(_dbMailPath) Then
+                If backupZip Then
+                    Dim zipPath = IO.Path.Combine(IO.Path.GetDirectoryName(_dbMailPath), $"OLAcacheMailZipBackup_{DateTime.Now:yyyyMMdd_HHmmss}.zip")
+                    Using zipFileStream As New System.IO.FileStream(zipPath, System.IO.FileMode.Create)
+                        Using archive As New System.IO.Compression.ZipArchive(zipFileStream, System.IO.Compression.ZipArchiveMode.Create)
+                            AddFileToZipArchive(archive, _dbMailPath, "OLAcacheMail.db")
+                        End Using
+                    End Using
+                    _dbg("", $"OLAcacheMail.db 已壓縮備份至: {IO.Path.GetFileName(zipPath)}")
+                End If
+                IO.File.Delete(_dbMailPath)
+            End If
             _cacheSimHash.Clear() : _cacheAttFilename.Clear() : _simHashLoaded = False
 
             InitDbMail()   ' 重建空表，後續仍可重新累積
@@ -768,7 +785,6 @@ Partial Class Form1
             For Each row In dbList
                 cToken.ThrowIfCancellationRequested()
                 Dim fPath = row.path
-                If _probeRenewArmed Then _probeRenewCurrentPath = fPath   ' PROBE_RENEWEX breadcrumb(整塊可刪,本體在 Form1_Maintab56.vb 探針區)
 
                 ' 2. 【Rule 7】精確打擊，用 ID 抓取物件，不使用 BFS 展開
                 Dim folder As Outlook.Folder = Nothing
@@ -878,7 +894,6 @@ Partial Class Form1
                 processed += 1
                 Await SmartThrottle(swThrottle, ThrottleFreq.Low, Sub() PgrsBar2.Text = $"對帳中 {processed}/{dbList.Count}...", cToken:=cToken)
             Next
-            If _probeRenewArmed Then _probeRenewCurrentPath = ""   ' PROBE_RENEWEX breadcrumb 清空(整塊可刪) — 迴圈後的例外不再歸因到最後一夾
 
             ' 6. 【Rule 3】安全無縫套用：直接呼叫您原本寫好的 CleanupOrphanPath 清理 5 個資料表
             _dbg("清理孤兒資料夾路徑...")
@@ -1063,9 +1078,9 @@ Partial Class Form1
                 Dim fh As Long = FolderPathToHash64(fPath)   ' 2026/07/03 by Simon/Claude: 提到迴圈外每夾算一次，原本每列重算徒增 GC 壓力
                 For Each item In kvp.Value
                     pFh.Value = fh
-                    pYr.Value = If(onlyYearCount, item.Key, yearVal)
-                    If Not onlyYearCount Then pMo.Value = item.Key
-                    pCnt.Value = item.Value
+                    pYr.Value = If(onlyYearCount, Item.Key, yearVal)
+                    If Not onlyYearCount Then pMo.Value = Item.Key
+                    pCnt.Value = Item.Value
                     cmd.ExecuteNonQuery() : count += 1
                 Next
             Next
@@ -1222,8 +1237,8 @@ Partial Class Form1
         Dim allEmails As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         For Each kvp In _cacheMailInfo
             If Not dirtyPaths.Contains(kvp.Key) Then Continue For   ' 2026/07/03 by Simon/Claude Fable 5: dirty 過濾
-            For Each item In kvp.Value.Mails
-                Dim email = item.Mail.SenderEmail?.Trim()
+            For Each Item In kvp.Value.Mails
+                Dim email = Item.Mail.SenderEmail?.Trim()
                 If Not String.IsNullOrEmpty(email) Then allEmails.Add(email.ToLower())
             Next
         Next
@@ -1293,9 +1308,9 @@ Partial Class Form1
                     pPr.Value = snap
                     cmd.ExecuteNonQuery() : count += 1
                 Else
-                    For Each item In mails
+                    For Each Item In mails
                         ' 2026/06/12 by Simon/Claude Opus 4.8: 查 _dictEmailToSenderId，無 email 時存 NULL
-                        Dim emailKey = item.Mail.SenderEmail?.Trim()?.ToLower()
+                        Dim emailKey = Item.Mail.SenderEmail?.Trim()?.ToLower()
                         Dim sid As Object
                         Dim foundId As Integer
                         If Not String.IsNullOrEmpty(emailKey) AndAlso _dictEmailToSenderId.TryGetValue(emailKey, foundId) Then
@@ -1304,14 +1319,14 @@ Partial Class Form1
                             sid = DBNull.Value
                         End If
 
-                        pEid.Value = HexStringToByteArray(item.Mail.EntryID)
+                        pEid.Value = HexStringToByteArray(Item.Mail.EntryID)
                         pFh.Value = fh
-                        pSubj.Value = If(item.Mail.Subject, "")
-                        pSz.Value = item.Mail.Size
-                        pRt.Value = LocalTimeToUnixSeconds(item.Mail.RcvTime) ' 2026/06/12 by Simon/Claude Opus 4.8: 本機時間轉 Unix 秒
-                        pSn.Value = If(item.Mail.SenderName, "")
+                        pSubj.Value = If(Item.Mail.Subject, "")
+                        pSz.Value = Item.Mail.Size
+                        pRt.Value = LocalTimeToUnixSeconds(Item.Mail.RcvTime) ' 2026/06/12 by Simon/Claude Opus 4.8: 本機時間轉 Unix 秒
+                        pSn.Value = If(Item.Mail.SenderName, "")
                         pSid.Value = sid
-                        pMid.Value = HexStringToByteArray(If(item.Mail.MsgIDhash, ""))
+                        pMid.Value = HexStringToByteArray(If(Item.Mail.MsgIDhash, ""))
                         pPr.Value = snap
                         cmd.ExecuteNonQuery() : count += 1
                     Next
@@ -2328,6 +2343,8 @@ Partial Class Form1
         ''' 2026/06/13 by Simon/Claude Opus 4.8 / 2026/06/21 by Simon/Claude: 拆 OLAcacheMail.db 後改雙檔分區塊
         ''' </summary>
         If _dbCache Is Nothing Then Return
+        If _lv6StatBusy Then _dbg("略過", "另一個 Lv6 統計查詢進行中，稍後再點 [DB 檔案大小]") : Return   ' 2026/07/11 by Simon/Claude Fable 5: 同連線不允許並發，見 _lv6StatBusy 宣告處
+        _lv6StatBusy = True
 
         ' Task.Run 內呼叫 _dbg 的 stack trace 會抓到編譯器生成的 lambda 名稱，故預先封裝 forwarder
         ' 直接走 DebugForm.AddMessage3 並傳入 forcedCaller，與 _dbg() 的 Release-build 行為等效
@@ -2352,6 +2369,8 @@ Partial Class Form1
 
         Catch ex As System.Exception
             _dbgFwd(" ├ 錯誤", $"DbShowDbFileStat: {ex.Message}")
+        Finally
+            _lv6StatBusy = False
         End Try
     End Function
     Private Async Function DbShowDbFileStatCore(conn As SqliteConnection, dbPath As String, dbLabel As String, dbgFwd As Action(Of String, String)) As Task(Of (fileMB As Single, netMB As Single))
@@ -2475,77 +2494,71 @@ Partial Class Form1
     End Function
     Private Async Function DbShowTableStat(tableName As String) As Task
         ''' <summary>
-        ''' 深度分析快取表：動態計算精準 Bytes 淨容量、並還原真實的實體 SSD 大小誤差 (壓縮邏輯)
+        ''' 深度分析快取表：動態計算精準 Bytes 淨容量 (CAST AS BLOB 破解中文字元數陷阱)
+        ''' 2026/07/11 by Simon/Claude Fable 5: 查詢全數移入 Task.Run — mail_info 35萬列全欄位
+        '''   SUM(length(CAST AS BLOB)) 原本同步跑在 UI 執行緒會凍結數秒 (BC42356 警告即此)。
+        '''   dbstat 分支移除：e_sqlite3.dll 未編譯 SQLITE_ENABLE_DBSTAT_VTAB (DbShowDbFileStat 註解已證實)，
+        '''   該查詢永遠拋例外走 fallback 形同死碼；各表實體佔用估算改雙擊「DB 檔案大小」(整檔淨重比例分配法)。
         ''' </summary>
 
         ' 2026/06/21 by Simon/Claude: att_filenames/mail_simhash 住 OLAcacheMail.db(_dbMail)，依表名路由連線；其餘走 _dbCache
         Dim conn As SqliteConnection = If(tableName = "att_filenames" OrElse tableName = "mail_simhash", _dbMail, _dbCache)
         If conn Is Nothing OrElse String.IsNullOrEmpty(tableName) Then Return
+        If _lv6StatBusy Then _dbg("略過", $"另一個 Lv6 統計查詢進行中，稍後再點 [{tableName}]") : Return
+        _lv6StatBusy = True
 
         _dbg("開始", $"[📊{tableName}]")
         Try
-            ' 1. 動態取得欄位 MetaData
-            Dim cols As New List(Of (Cid As Integer, Name As String, Type As String, Pk As String, Nn As String))
-            Using cmd As New SqliteCommand($"PRAGMA table_info([{tableName}])", conn)
-                Using rd = cmd.ExecuteReader()
-                    While rd.Read()
-                        cols.Add((Convert.ToInt32(rd("cid")), rd("name").ToString(), rd("type").ToString(), If(Convert.ToInt32(rd("pk")) > 0, "★", ""), If(Convert.ToInt32(rd("notnull")) > 0, "Y", "N")))
-                    End While
-                End Using
-            End Using
-            If cols.Count = 0 Then _dbg(" ├ 錯誤", $"找不到表格 [{tableName}]") : Return
-
-            ' 2. 修正版 SQL：強制 CAST AS BLOB 算真實 Bytes，破解中文字元數陷阱！
-            Dim sbSql As New System.Text.StringBuilder("SELECT COUNT(*)")
-            For Each c In cols : sbSql.Append($", SUM(length(CAST([{c.Name}] AS BLOB)))") : Next
-            sbSql.Append($" FROM [{tableName}]")
-
-            Dim rowCount As Long = 0
-            Dim totalNetMB As Single = 0
-            Dim colSizes As New Dictionary(Of String, Single)
-            Using cmd As New SqliteCommand(sbSql.ToString(), conn)
-                Using rd = cmd.ExecuteReader()
-                    If rd.Read() Then
-                        rowCount = If(rd.IsDBNull(0), 0, rd.GetInt64(0))
-                        For i As Integer = 0 To cols.Count - 1
-                            Dim mb = If(rd.IsDBNull(i + 1), 0, Convert.ToSingle(rd(i + 1))) / 1024 / 1024
-                            colSizes(cols(i).Name) = mb : totalNetMB += mb
-                        Next
-                    End If
-                End Using
-            End Using
-
-            ' 3. 嘗試讀取 dbstat 獲取真實的實體 SSD 佔用 (包含碎片、RowHeader 與 B-Tree Index 結構)
-            Dim hasDbStat As Boolean = True
-            Dim indexMB As Single = 0
-            Dim physicalMB As Single = 0
-            Try
-                Dim statSql = $"SELECT name, SUM(pgsize)/1024/1024 FROM dbstat WHERE name='{tableName}' OR name IN (SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='{tableName}') GROUP BY name;"
-                Using cmd As New SqliteCommand(statSql, conn)
-                    Using rd = cmd.ExecuteReader()
-                        While rd.Read()
-                            If rd.GetString(0) = tableName Then physicalMB = rd.GetDouble(1) Else indexMB += rd.GetDouble(1)
-                        End While
+            ' 查詢移入背景執行緒；回傳後在 UI context 輸出，_dbg 的呼叫端名稱不受 lambda 影響
+            Dim r = Await Task.Run(
+                Function()
+                    ' 1. 動態取得欄位 MetaData
+                    Dim cols As New List(Of (Cid As Integer, Name As String, Type As String, Pk As String, Nn As String))
+                    Using cmd As New SqliteCommand($"PRAGMA table_info([{tableName}])", conn)
+                        Using rd = cmd.ExecuteReader()
+                            While rd.Read()
+                                cols.Add((Convert.ToInt32(rd("cid")), rd("name").ToString(), rd("type").ToString(), If(Convert.ToInt32(rd("pk")) > 0, "★", ""), If(Convert.ToInt32(rd("notnull")) > 0, "Y", "N")))
+                            End While
+                        End Using
                     End Using
-                End Using
-            Catch ex As System.Exception : hasDbStat = False : End Try ' 若編譯不支援 dbstat 則忽略
 
-            ' 4. 輸出統計與殘酷的比對
-            _dbg(" ├", $"總資料筆數: {rowCount} 筆")
+                    ' 2. 修正版 SQL：強制 CAST AS BLOB 算真實 Bytes，破解中文字元數陷阱！
+                    Dim rowCount As Long = 0
+                    Dim totalNetMB As Single = 0
+                    Dim colSizes As New Dictionary(Of String, Single)
+                    If cols.Count > 0 Then
+                        Dim sbSql As New System.Text.StringBuilder("SELECT COUNT(*)")
+                        For Each c In cols : sbSql.Append($", SUM(length(CAST([{c.Name}] AS BLOB)))") : Next
+                        sbSql.Append($" FROM [{tableName}]")
+
+                        Using cmd As New SqliteCommand(sbSql.ToString(), conn)
+                            Using rd = cmd.ExecuteReader()
+                                If rd.Read() Then
+                                    rowCount = If(rd.IsDBNull(0), 0, rd.GetInt64(0))
+                                    For i As Integer = 0 To cols.Count - 1
+                                        Dim mb = If(rd.IsDBNull(i + 1), 0, Convert.ToSingle(rd(i + 1))) / 1024 / 1024
+                                        colSizes(cols(i).Name) = mb : totalNetMB += mb
+                                    Next
+                                End If
+                            End Using
+                        End Using
+                    End If
+                    Return (Cols:=cols, RowCount:=rowCount, TotalNetMB:=totalNetMB, ColSizes:=colSizes)
+                End Function)
+
+            If r.Cols.Count = 0 Then _dbg(" ├ 錯誤", $"找不到表格 [{tableName}]") : Return
+
+            ' 3. 輸出統計
+            _dbg(" ├", $"總資料筆數: {r.RowCount} 筆")
             _dbg(" ├", $" {"欄位名稱".PadRight(16)}{"型態".PadRight(12)}欄位資料淨重")
-            For Each c In cols : _dbg(" │", $" {$"[{c.Name}]".PadRight(17)}  {c.Type.PadRight(8)}: {colSizes(c.Name).ToString("F2")} MB") : Next
-            _dbg(" │", $" 所有欄位純資料淨重 : {totalNetMB.ToString("F2")} MB (程式寫入的真正大小)")
-
-            If hasDbStat Then
-                _dbg(" │", $" 表格主體實際佔用 : {physicalMB.ToString("F2")} MB (包含 B-Tree 碎片與 Row Header)")
-                _dbg(" │", $" 關聯索引佔用    : {indexMB.ToString("F2")} MB (Index 樹狀結構)")
-                _dbg(" │", $" 總計空間佔用    : {(physicalMB + indexMB).ToString("F2")} MB 👈 這才是真凶！")
-            Else
-                _dbg(" │ 提醒", "(目前未啟用 dbstat 模組，無法精準測量索引與碎片開銷，通常佔用為淨重的 1.5~3倍)")
-            End If
+            For Each c In r.Cols : _dbg(" │", $" {$"[{c.Name}]".PadRight(17)}  {c.Type.PadRight(8)}: {r.ColSizes(c.Name).ToString("F2")} MB") : Next
+            _dbg(" │", $" 所有欄位純資料淨重 : {r.TotalNetMB.ToString("F2")} MB (程式寫入的真正大小)")
+            _dbg(" │ 提醒", "(實體佔用另含 B-Tree/索引/Row Header 開銷，通常為淨重的 1.5~3 倍；各表估算請雙擊「DB 檔案大小」)")
             _dbg("結束", $"[{tableName}]")
 
-        Catch ex As System.Exception : _dbg(" ├ 錯誤", $"分析 {tableName} 失敗: {ex.Message}") : End Try
+        Catch ex As System.Exception : _dbg(" ├ 錯誤", $"分析 {tableName} 失敗: {ex.Message}")
+        Finally : _lv6StatBusy = False
+        End Try
     End Function
     Private Async Function DbShowBigramSetStat() As Task
         ''' <summary>
@@ -2553,30 +2566,39 @@ Partial Class Form1
         ''' 跟全表列數/大小意義不同，故獨立一支統計，不走 DbShowTableStat 的整表路徑。
         ''' </summary>
         If _dbMail Is Nothing Then Return
+        If _lv6StatBusy Then _dbg("略過", "另一個 Lv6 統計查詢進行中，稍後再點 [bigram_set]") : Return
+        _lv6StatBusy = True
 
         _dbg("開始", "[📊bigram_set]")
         Try
-            Dim total As Long = 0, filled As Long = 0, bytes As Long = 0
-            Using cmd As New SqliteCommand("SELECT COUNT(*), COUNT(bigram_set), IFNULL(SUM(LENGTH(bigram_set)),0) FROM mail_simhash", _dbMail)
-                Using rd = cmd.ExecuteReader()
-                    If rd.Read() Then
-                        total = rd.GetInt64(0)
-                        filled = rd.GetInt64(1)
-                        bytes = rd.GetInt64(2)
-                    End If
-                End Using
-            End Using
+            ' 2026/07/11 by Simon/Claude Fable 5: SUM(LENGTH(BLOB)) 掃全表，移入 Task.Run 免凍結 UI (同 DbShowTableStat)
+            Dim r = Await Task.Run(
+                Function()
+                    Dim total As Long = 0, filled As Long = 0, bytes As Long = 0
+                    Using cmd As New SqliteCommand("SELECT COUNT(*), COUNT(bigram_set), IFNULL(SUM(LENGTH(bigram_set)),0) FROM mail_simhash", _dbMail)
+                        Using rd = cmd.ExecuteReader()
+                            If rd.Read() Then
+                                total = rd.GetInt64(0)
+                                filled = rd.GetInt64(1)
+                                bytes = rd.GetInt64(2)
+                            End If
+                        End Using
+                    End Using
+                    Return (Total:=total, Filled:=filled, Bytes:=bytes)
+                End Function)
 
-            Dim netMB As Single = bytes / 1024.0F / 1024.0F
-            Dim pct As Single = If(total > 0, filled / CSng(total) * 100.0F, 0F)
-            Dim avgKB As Single = If(filled > 0, bytes / 1024.0F / filled, 0F)
+            Dim netMB As Single = r.Bytes / 1024.0F / 1024.0F
+            Dim pct As Single = If(r.Total > 0, r.Filled / CSng(r.Total) * 100.0F, 0F)
+            Dim avgKB As Single = If(r.Filled > 0, r.Bytes / 1024.0F / r.Filled, 0F)
 
-            _dbg(" ├", $"已回填(非 NULL): {filled:N0} 筆 / mail_simhash 總筆數: {total:N0} 筆 ({pct:F1}%)")
+            _dbg(" ├", $"已回填(非 NULL): {r.Filled:N0} 筆 / mail_simhash 總筆數: {r.Total:N0} 筆 ({pct:F1}%)")
             _dbg(" │", $" bigram_set 淨重 : {netMB.ToString("F2")} MB (僅計已回填的 BLOB，未含未回填的 NULL 列)")
             _dbg(" │", $" 平均每筆大小   : {avgKB.ToString("F2")} KB")
             _dbg("結束", "[bigram_set]")
 
-        Catch ex As System.Exception : _dbg(" ├ 錯誤", $"分析 bigram_set 失敗: {ex.Message}") : End Try
+        Catch ex As System.Exception : _dbg(" ├ 錯誤", $"分析 bigram_set 失敗: {ex.Message}")
+        Finally : _lv6StatBusy = False
+        End Try
     End Function
     Private Async Function DbVacuumIfNeeded() As Task
         ' 2026/06/16 by Claude Sonnet 4.6: 檢查碎片比例，超過門檻才執行 VACUUM

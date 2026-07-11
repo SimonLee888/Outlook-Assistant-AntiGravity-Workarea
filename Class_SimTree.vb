@@ -107,9 +107,8 @@ Public Class SimTree
         End Set
     End Property
 
-    ' SuppressAutoHScroll：保留水平捲軸（使用者仍可手動捲動），但抑制選取節點 / EnsureVisible
-    ' 造成的自動水平位移（原生 TreeView 遇到長文字節點會自動往右對齊，無屬性可關）
-    ' 2026/07/10 by Simon/Claude
+    ' 2026/07/10 by Simon/Claude: SuppressAutoHScroll：
+    ' 保留水平捲軸（使用者仍可手動捲動），但抑制選取節點 / EnsureVisible 造成的自動水平位移（原生 TreeView 遇到長文字節點會自動往右對齊，無屬性可關）
     <Category("Behavior"), DefaultValue(False)>
     Public Property SuppressAutoHScroll As Boolean = False
 
@@ -122,8 +121,7 @@ Public Class SimTree
 
 #Region "■ 03 核心訊息處理（捲軸控制）"
     Protected Overrides Sub WndProc(ByRef m As Message)
-        ' WndProc：SuppressAutoHScroll 啟用時，攔截所有可能引發「自動水平位移」的訊息
-        ' 2026/07/10 by Simon/Claude
+        ' 2026/07/10 by Simon/Claude: WndProc：SuppressAutoHScroll 啟用時，攔截所有可能引發「自動水平位移」的訊息
         ' 原生 TreeView 在選取/EnsureVisible 長文字節點時會自動水平捲動對齊，comctl32 寫死、無樣式可關。
         ' 對策：讓訊息正常處理（垂直捲動、選取、展開收攏都保留），事後若發現水平位置被動過，就捲回原位。
         '   TVM_ENSUREVISIBLE : node.EnsureVisible()（鍵盤導航、Form1 GotoDefaultInbox 等）
@@ -620,14 +618,6 @@ Public Class SimTree
         Return If(TryGetNode(fullPath, n, searchOnlyExpanded), n, Nothing)
         ' 2026/07/10: 曾評估加 path→node Dictionary 快取，實測後結案不做（理由見 RestoreTreeState 的效能決策紀錄）
     End Function
-    Public Function ContainsPath(fullPath As String, Optional searchOnlyExpanded As Boolean = True) As Boolean
-        ''' <summary>
-        ''' 判斷指定路徑的節點是否存在（TryGetNode 的布林薄包裝，不回傳節點物件）。
-        ''' 2026/07/10 by Simon/Claude: 依 Todo 補上；目前專案內尚無任何呼叫端，備用。
-        ''' </summary>
-        Dim n As TreeNode = Nothing
-        Return TryGetNode(fullPath, n, searchOnlyExpanded)
-    End Function
     Public Function TryGetNode(fullPath As String, ByRef returnNode As TreeNode,
                                Optional searchOnlyExpanded As Boolean = True, Optional expandAlongTheWay As Boolean = False) As Boolean
         ''' <summary>
@@ -731,6 +721,14 @@ Public Class SimTree
             Return True
         End If
         Return False
+    End Function
+    Public Function ContainsPath(fullPath As String, Optional searchOnlyExpanded As Boolean = True) As Boolean
+        ''' <summary>
+        ''' 判斷指定路徑的節點是否存在（TryGetNode 的布林薄包裝，不回傳節點物件）。
+        ''' 2026/07/10 by Simon/Claude: 依 Todo 補上；目前專案內尚無任何呼叫端，備用。
+        ''' </summary>
+        Dim n As TreeNode = Nothing
+        Return TryGetNode(fullPath, n, searchOnlyExpanded)
     End Function
 #End Region
 

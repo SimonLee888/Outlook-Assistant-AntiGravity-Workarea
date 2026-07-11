@@ -4,11 +4,11 @@ Imports System.Text
 Imports System.Text.RegularExpressions
 Imports System.Threading
 Imports Microsoft.Office.Interop.Outlook
+Imports Outlook = Microsoft.Office.Interop.Outlook
 ' 2026/3/22 正式導入Redemption, 測試logon成功, 傳回數值成功
 Imports Redemption
-Imports Outlook = Microsoft.Office.Interop.Outlook
-'Imports MailKit        ' MailKit is a cross-platform mail client library built on top of MimeKit.
 
+' ==============================================================
 ' === 從頭重新設計 Layer2.5 / Layer3 底層計數函數 ===
 ' 目的: 提供一個純粹的 COM 資料層函數，專注於讀取資料，不做任何流程控制或快取邏輯
 '       取代目前散落在各處的 GetMailCountByMAPINew、GetFolderSizeLegacy 等函數，統一為一個簡單的 GetXxxLayer3 函數
@@ -25,6 +25,7 @@ Imports Outlook = Microsoft.Office.Interop.Outlook
 '   4. 失敗統一回傳 -1 (不回 0)，讓 Layer2 能區分「真的是 0」或「讀取失敗」
 '   5. 在 Finally 中使用 TryMarshalRelease() 統一釋放所有 COM 物件，確保 RCW 不殘留
 ' ==============================================================
+
 Partial Class Form1
 
 #Region "■ 01 全域宣告"
@@ -123,6 +124,13 @@ Partial Class Form1
         Dim AttMailList As List(Of MailItemInfo)    ' 所有 hasAttachment 候選 (無大小篩選)
         Dim ItemCountSnap As Long                   ' 快取當下的 PR_CONTENT_COUNT，失效偵測用
     End Structure
+    Private Structure MailPreviewDetails
+        ' 2026/07/07 by Simon/Claude: ShowMailQuickPreview 一次性讀取的顯示資料 (不進任何快取，僅使用者主動預覽時讀)
+        Dim Html As String
+        Dim SenderEmail As String
+        Dim ToRecipients As String                                  ' mail.To 的顯示名清單 (分號分隔)
+        Dim Attachments As List(Of (Name As String, Size As Long))  ' 附件檔名+大小(bytes)，供判斷該不該刪信
+    End Structure
 
     ' 2026/06/12 by Simon/Claude Opus 4.8: Compiled Regex，程式啟動時編譯一次，後續呼叫零額外開銷
     ' Pattern 說明：^ 錨定開頭；[：:] 同吃半形/全形冒號；外層 + 一次處理所有巢狀前綴
@@ -147,8 +155,7 @@ Partial Class Form1
 
 #End Region
 
-#Region "■ 10 底層 COM 函數群 (新設計，現役主力) "
-#Region "  ├ 全域初始化 & 載入釋放函數"
+#Region "■ 02 全域初始化 & 載入釋放函數"
     Private Sub InitMapiNamespace()
         _dbg(" ├ 開始") ' by Gemini, 2026/04/10: 調整縮排層級為 Level 1
 
@@ -183,7 +190,7 @@ Partial Class Form1
         _dbg(" ├ 結束") ' by Gemini, 2026/04/10
 
 
-        End Sub
+    End Sub
     Private Sub TryMarshalRelease(ByRef obj As Object)
         Try
             If obj IsNot Nothing AndAlso Marshal.IsComObject(obj) Then Marshal.ReleaseComObject(obj)
@@ -272,6 +279,17 @@ Partial Class Form1
             _rdo2LogonHolder = bgSession
             _rdo2 = uiSession
             _dbg(" ├ _rdo2 init OK", $"Version={_rdo2.Version} (Logon 於背景執行緒完成，UI 零凍結)")
+
+            ' 2026/07/11 by Simon/Sonnet 5 [治標]: 焦點歸還 —
+            '   TEULAForm(Delphi VCL modal)被 AutoDismiss 隱藏/收尾時，ShowModal 本身的活化動作仍會發生一次，
+            '   前景視窗因此落到 DebugForm(Form1 的 owned window，Z-order 恆在其上)，焦點就跑進 txtDebug。
+            '   RDO init 現在移到 Tab1 統計完成後才觸發，EULA 彈出時 SimTree1 已經拿到焦點，故看得出這個搶焦點的副作用。
+            '   這裡只治標：確認前景真的被搶到 DebugForm 才搶回來，避免使用者本來就手動點進 DebugForm 搜尋時被誤打斷。
+            Dim dbgForm = DebugForm.ActiveInstance
+            If dbgForm IsNot Nothing AndAlso dbgForm.IsHandleCreated AndAlso GetForegroundWindow() = dbgForm.Handle Then
+                Me.Activate()
+                GetCurrentTv()?.Focus()
+            End If
 
         Catch ex As System.Exception
             _rdo2 = Nothing
@@ -436,7 +454,8 @@ Partial Class Form1
         _dbg(" ├ 結束")
     End Sub
 #End Region
-#Region "  ├ Layer2 UI 流程輔助"
+
+#Region "■ 03 Layer2 UI 流程輔助"
     Private Sub LoadStoreToTreeView(storeList As List(Of (store As Outlook.Store, name As String)), tv As SimTree)
         ' ===========================================================
         ' 將所有 Outlook.Store 的根資料夾載入指定的 TreeView 控制項
@@ -673,7 +692,8 @@ Partial Class Form1
         Return result
     End Function
 #End Region
-#Region "  ├ Layer2.5 快取代理層 (Cache Proxy Layer)"
+
+#Region "■ 04 Layer2.5 快取代理層 (Cache Proxy Layer)"
     ' 2026/03/27 by Gemini: 新增 Layer2.5 快取存取點 (Cache Proxy Layer)，保護 Layer3 不被頻繁呼叫
     ' ---------------------------------------------------------------
     '   - GetMailCount(pFolder)             ' 單一資料夾郵件數，有 DB lazy + snapshot 驗證
@@ -973,7 +993,7 @@ Partial Class Form1
         ' 2026/4/7 by Claude: ① 記憶體命中 → ② DB lazy (att_maillist) → ③ Layer3
         ' 2026/06/29 by Simon/Claude [Stage2]: 改免-folder 簽章(fPath,eid,sid)。熱路徑①②只靠 fPath，folder 延後到 ③ 才 GetFolderById 物化，消除每夾眼物化的 COM 稅。(Tab3 為唯一呼叫者、OST 不使用，故直接改簽章不留多載)
         ' 
-        ' 2026/07/02 by Simon/Claude: (原 todo「優先要新增 GetAttMailListRdo()，轉換至 _rdo2」— 實測後結案: 不做。
+        ' 2026/07/02 by Simon/Claude: (原本「優先要新增 GetAttMailListRdo()，轉換至 _rdo2」— 實測後結案: 不做。
         '   hasAttachment 的迴紋針語意(排除 Hidden/olOLE)是 Outlook 查詢引擎的加工,RDO 端 PR_HASATTACH 多算 59%、
         '   逐封精篩慢 18 倍、Restrict 下推=raw PR_HASATTACH 且本身慢 6.7 倍, 三條路全實測封死,維持純 OOM。詳見 memory_20260623_2210 更正記錄。)
         ' 2026/07/04 by Simon/Claude Fable 5: 上面 07/02 的結案被 PROBE_ATTACHBATCH 推翻 — 當時缺口是沒試過 SmartNoAttach(0x8514)
@@ -1043,6 +1063,7 @@ Partial Class Form1
         Return result
 
     End Function
+
     Private Function GetMailBody(entryID As String, Optional folderPath As String = "", Optional skipCache As Boolean = False) As String
         ' ---------------------------------------------------------------
         ' GetMailBody — Layer2.5 快取代理：Body 快取存取點
@@ -1075,68 +1096,6 @@ Partial Class Form1
         If _iLikeNoisy Then _dbg(" ├ 結束", folderPath & " | ID: " & entryID & " | 成果長度: " & If(body IsNot Nothing, body.Length.ToString(), "0")) ' by Claude Sonnet 4.6, 2026/07/01
         Return body
 
-    End Function
-    Private Structure MailPreviewDetails
-        ' 2026/07/07 by Simon/Claude: ShowMailQuickPreview 一次性讀取的顯示資料 (不進任何快取，僅使用者主動預覽時讀)
-        Dim Html As String
-        Dim SenderEmail As String
-        Dim ToRecipients As String                                  ' mail.To 的顯示名清單 (分號分隔)
-        Dim Attachments As List(Of (Name As String, Size As Long))  ' 附件檔名+大小(bytes)，供判斷該不該刪信
-    End Structure
-    Private Function GetMailPreviewDetails(entryID As String, Optional folderPath As String = "") As MailPreviewDetails
-        ' ---------------------------------------------------------------
-        ' GetMailPreviewDetails — 快速預覽用一次性讀取 .HTMLBody + 寄件者信箱 + 收件者 + 附件(檔名/大小)，
-        '   仿 GetMailBody 的 RDO/OOM 分派，但不進 _cacheMailBody(該快取存的是 NormalizeMailBody 過的純文字，格式不同不能共用)
-        '   2026/07/07 by Simon/Claude: 供 ShowMailQuickPreview(HTMLBody + WebView2) 使用，只在使用者主動點開預覽時呼叫，非批次掃描路徑，故不做快取；
-        '     所有欄位從同一個 RDO/OOM 物件一次讀完，避免分次呼叫重複建物件
-        ' ---------------------------------------------------------------
-        Dim result As New MailPreviewDetails With {.Attachments = New List(Of (Name As String, Size As Long))}
-
-        If _rdo2 IsNot Nothing AndAlso folderPath <> "" Then
-            Dim store = GetRdoStore(folderPath)
-            If store IsNot Nothing Then
-                Dim rm As Redemption.RDOMail = Nothing
-                Try
-                    rm = TryCast(store.GetMessageFromID(entryID), Redemption.RDOMail)
-                    If rm IsNot Nothing Then
-                        result.Html = rm.HTMLBody
-                        result.SenderEmail = rm.SenderEmailAddress
-                        result.ToRecipients = rm.To
-                        For Each att As Redemption.RDOAttachment In rm.Attachments
-                            result.Attachments.Add((att.FileName, CLng(att.Size)))
-                        Next
-                        Return result
-                    End If
-                Catch ex As System.Exception
-                    _dbg("錯誤", $"GetMailPreviewDetails(RDO) 失敗 (ID: {entryID}): {ex.Message}")
-                Finally
-                    Dim o As Object = rm : TryMarshalRelease(o)
-                End Try
-            End If
-        End If
-
-        ' OOM fallback
-        Dim nSpace As Outlook.NameSpace = Nothing
-        Dim olItem As Object = Nothing
-        Try
-            nSpace = _olApp.GetNamespace("MAPI")
-            olItem = nSpace.GetItemFromID(entryID)
-            Dim mail = TryCast(olItem, Outlook.MailItem)
-            If mail IsNot Nothing Then
-                result.Html = mail.HTMLBody
-                result.SenderEmail = mail.SenderEmailAddress
-                result.ToRecipients = mail.To
-                For Each att As Outlook.Attachment In mail.Attachments
-                    result.Attachments.Add((att.FileName, CLng(att.Size)))
-                Next
-            End If
-        Catch ex As System.Exception
-            _dbg("錯誤", $"GetMailPreviewDetails(OOM) 失敗 (ID: {entryID}): {ex.Message}")
-        Finally
-            TryMarshalRelease(olItem)
-            TryMarshalRelease(nSpace)
-        End Try
-        Return result
     End Function
     Private Async Function GetMailInfo(folder As Folder, needTopic As Boolean, Optional fPath As String = "",
                                        Optional cToken As CancellationToken = Nothing) As Task(Of List(Of (Mail As MailItemInfo, Topic As String)))
@@ -1218,28 +1177,6 @@ Partial Class Form1
         If resultList IsNot Nothing Then _cacheMailInfo(fPath) = (resultList, currentSnap) : MarkMailFolderDirty(fPath)   ' 2026/07/03 by Simon/Claude: dirty 追蹤
         Return resultList
     End Function
-    Private Function RefreshMailInfo(ByRef info As MailItemInfo) As RefreshResult
-        ' ---------------------------------------------------------------
-        ' RefreshMailInfo — Layer2.5 快取代理層: 依 EntryID 從 COM 重讀單封郵件實體資訊，寫回 info (ByRef，MailItemInfo 為 Structure)
-        '   跳過所有 cache (_cacheXXX / SSD)，直接打 COM。RDO→OOM fallback。只讀 Subject/Size/RcvTime/SenderName。
-        '   回傳 Updated/NotFound/TransientError；失效郵件的移除政策由呼叫端決定 (目前一律保留+記錄)
-        ' 2026/06/14 by Simon/Claude Opus 4.8
-        ' 2026/07/02 by Simon/Claude: 原名 RefreshMailInfoL3，拆成 RefreshMailInfoRdo(Layer3 RDO)/RefreshMailInfoOOM(Layer3 OOM)
-        '   兩段純資料層後，此函式只剩分派，改名去掉 L3 尾綴、移至 Layer2.5 區塊，比照 GetMailInfo(免-folder版)
-        '   ③ RDO優先/OOM兜底 的切分方式(此函式沒有 memory/DB 快取層，只有 RDO/OOM 分派這一層)。
-        ' 2026/07/04 by Simon/Claude: 移除 readAttachCount 參數 — 附件個數探針證實 MAPI 無訊息層級批次欄位可讀、
-        '   逐封枚舉又是 Tab3 篩選路徑用不到的死碼(Tab3 實際讀 GetAttFilename().Count)，全體F5/右鍵刷新統一不再讀附件數。
-        ' ---------------------------------------------------------------
-        If String.IsNullOrEmpty(info.EntryID) Then Return RefreshResult.NotFound
-
-        ' ⓪ RDO 優先: store-scoped on _rdo2,繞過 OOM 開信的記憶體開銷;RefreshMailInfoRdo 回 False 才落 ① OOM fallback。
-        If _rdo2 IsNot Nothing AndAlso info.FolderPath <> "" Then
-            If RefreshMailInfoRdo(info) Then Return RefreshResult.Updated
-        End If
-
-        ' ① Fallback: RDO 讀不到才走 OOM
-        Return RefreshMailInfoOOM(info)
-    End Function
     Private Async Function PreLoadMailCacheAsync(folderList As List(Of (eid As String, sid As String, fPath As String)), cToken As CancellationToken) As Task
         ' ---------------------------------------------------------------
         ' PreLoadMailCacheAsync — SSD 批次預熱（優化B）
@@ -1263,95 +1200,29 @@ Partial Class Form1
         _dbg(" ├ 結束", $"預熱完成，填入 {dbBatch.Count} 個資料夾")
         Await Task.Yield()
     End Function
-    Private Async Function PreLoadMailCacheRdoAsync(folderList As List(Of (eid As String, sid As String, fPath As String)),
-                                                    progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+    Private Function RefreshMailInfo(ByRef info As MailItemInfo) As RefreshResult
         ' ---------------------------------------------------------------
-        ' PreLoadMailCacheRdoAsync — RDO 平行預熱層(優化B PreLoadMailCacheAsync 的 COM 版,排在它之後呼叫)
-        ' DB 預熱後仍不在 _cacheMailInfo 的夾 = DB 也沒有的「冷夾」,原本會在主迴圈 GetMailInfo ③ 逐夾循序 RDO 掃描;
-        '   本函式先用 by-store 平行(每 store 一條 worker,各自自建獨立 RDOSession — 鐵律)把冷夾一次掃完、
-        '   回 UI 緒統一寫快取,主迴圈隨即全部 ① 記憶體命中。GetMailInfo 本體與 OOM fallback 一概不動。
-        ' 實測依據 (2026/07/10 PROBE_PARSCAN, 803夾/308,652列/26 stores,A/B/A 消暖化偏差):
-        '   循序暖掃 4.0s / 冷掃 12.0s;by-store 平行純掃 0.77s(5.2×),含 session 建置 wall 1.2s(net 3.3×);
-        '   round-robin 切法較差(P8 僅 3.2×),故採 by-store。六 pass parity 全 0 差異。
-        ' 設計:
-        '   - worker 只讀不寫(結果純資料帶回);快取寫入(_cacheMailInfo/_cacheAttMailList/MarkMailFolderDirty)
-        '     全部回 UI 緒做,維持快取變異單執行緒紀律;ESC guard 相關 UI(Cursor/PgrsBar)worker 一概不碰。
-        '   - RDO 讀不到的夾直接跳過(不進快取),主迴圈 GetMailInfo ③ 對它們照走既有 RDO 重試/OOM fallback,語意保底不破。
-        '   - 冷夾 < PARALLEL_MIN_FOLDERS 時不啟動:平行 Logon 建置成本 ~0.5s,夾太少划不來,循序路徑照舊。
-        '   - snap 用 core 掃到的 RowTotal(= MAPITable.RowCount,與 Tab3 piggyback ItemCountSnap 同一口徑)。
-        ' 2026/07/10 by Simon/Claude Fable 5
+        ' RefreshMailInfo — Layer2.5 快取代理層: 依 EntryID 從 COM 重讀單封郵件實體資訊，寫回 info (ByRef，MailItemInfo 為 Structure)
+        '   跳過所有 cache (_cacheXXX / SSD)，直接打 COM。RDO→OOM fallback。只讀 Subject/Size/RcvTime/SenderName。
+        '   回傳 Updated/NotFound/TransientError；失效郵件的移除政策由呼叫端決定 (目前一律保留+記錄)
+        ' 2026/06/14 by Simon/Claude Opus 4.8
+        ' 2026/07/02 by Simon/Claude: 原名 RefreshMailInfoL3，拆成 RefreshMailInfoRdo(Layer3 RDO)/RefreshMailInfoOOM(Layer3 OOM)
+        '   兩段純資料層後，此函式只剩分派，改名去掉 L3 尾綴、移至 Layer2.5 區塊，比照 GetMailInfo(免-folder版)
+        '   ③ RDO優先/OOM兜底 的切分方式(此函式沒有 memory/DB 快取層，只有 RDO/OOM 分派這一層)。
+        ' 2026/07/04 by Simon/Claude: 移除 readAttachCount 參數 — 附件個數探針證實 MAPI 無訊息層級批次欄位可讀、
+        '   逐封枚舉又是 Tab3 篩選路徑用不到的死碼(Tab3 實際讀 GetAttFilename().Count)，全體F5/右鍵刷新統一不再讀附件數。
         ' ---------------------------------------------------------------
-        Const PARALLEL_MIN_FOLDERS As Integer = 4
-        If _rdo2 Is Nothing OrElse _olNS Is Nothing Then Return   ' RDO 未就緒 → 全交給循序路徑
+        If String.IsNullOrEmpty(info.EntryID) Then Return RefreshResult.NotFound
 
-        Dim coldList = folderList.Where(Function(f) f.eid <> "" AndAlso Not _cacheMailInfo.ContainsKey(f.fPath)).ToList()
-        If coldList.Count < PARALLEL_MIN_FOLDERS Then Return
+        ' ⓪ RDO 優先: store-scoped on _rdo2,繞過 OOM 開信的記憶體開銷;RefreshMailInfoRdo 回 False 才落 ① OOM fallback。
+        If _rdo2 IsNot Nothing AndAlso info.FolderPath <> "" Then
+            If RefreshMailInfoRdo(info) Then Return RefreshResult.Updated
+        End If
 
-        Dim profileName As String = _olNS.CurrentProfileName
-        Dim groups = coldList.GroupBy(Function(f) GetStoreNameFromPath(f.fPath)).Select(Function(g) g.ToList()).ToList()
-        _dbg(" ├ RDO平行預熱", $"冷夾 {coldList.Count} 個 / {groups.Count} 個 store(每 store 一條 worker)")
-
-        Dim doneCounter(0) As Integer      ' 單元素陣列: worker 們用 Interlocked 共用累加(比照 SimHashParallelWorker)
-        Dim swEta As Stopwatch = Stopwatch.StartNew()
-        Dim tasks = groups.Select(Function(g) Task.Run(Function() PreLoadMailCacheRdoWorker(profileName, g, doneCounter, coldList.Count, progress, cToken:=cToken))).ToList()
-        Dim results = Await Task.WhenAll(tasks)
-
-        ' 收攏: 回 UI 緒統一寫快取
-        Dim okFolders As Integer = 0
-        For Each workerResult In results
-            For Each r In workerResult
-                _cacheMailInfo(r.fPath) = (r.Mails, CLng(r.RowTotal))
-                If r.RowTotal > 0 Then _cacheAttMailList(r.fPath) = New FolderCacheTab3 With {.AttMailList = r.AttList, .ItemCountSnap = CLng(r.RowTotal)}   ' 比照 GetMailInfoRdo 薄殼: 空夾不寫 Tab3 piggyback
-                MarkMailFolderDirty(r.fPath)
-                okFolders += 1
-            Next
-        Next
-        _dbg(" ├ RDO平行預熱 完成", $"{okFolders}/{coldList.Count} 夾入快取,耗時 {swEta.Elapsed.TotalSeconds:0.00}s(未命中者由主迴圈循序補)")
+        ' ① Fallback: RDO 讀不到才走 OOM
+        Return RefreshMailInfoOOM(info)
     End Function
-    Private Function PreLoadMailCacheRdoWorker(profileName As String, subset As List(Of (eid As String, sid As String, fPath As String)), doneCounter As Integer(), totalCount As Integer,
-                                               progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
-                                               As List(Of (fPath As String, Mails As List(Of (Mail As MailItemInfo, Topic As String)), AttList As List(Of MailItemInfo), RowTotal As Integer))
-        ' PreLoadMailCacheRdoAsync 的平行 worker: 自建/自 Logoff 獨立 RDOSession(鐵律),只讀不寫任何快取。
-        '   subset 保證同一 store(呼叫端 by-store 分組),故 store 只解一次。掃描核心 = GetMailInfoRdoCore(與 UI 緒薄殼同一份)。
-        '   Topic 轉換(GetCleanSubject)在 worker 內做 — memoization 為 ConcurrentDictionary、Regex 為 Shared Compiled,跨緒安全,平行免費。
-        '   讀不到的夾不進回傳清單(呼叫端不寫快取 → 主迴圈照走既有 fallback);Logon 失敗 → 整組空手而回,同理。
-        '   progress 為 Progress(Of T)(UI 緒建立),Report 內部自行 Post 回 UI SynchronizationContext,worker 直呼安全。
-        ' 2026/07/10 by Simon/Claude Fable 5
-        Dim result As New List(Of (fPath As String, Mails As List(Of (Mail As MailItemInfo, Topic As String)), AttList As List(Of MailItemInfo), RowTotal As Integer))(subset.Count)
-        Dim session As Redemption.RDOSession = Nothing
-        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
-        Try
-            Try
-                session = New Redemption.RDOSession()
-                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
-                storeByName = BuildRdoStoreByNameDict(session)
-            Catch ex As System.Exception
-                _dbg("RDO平行預熱 worker", "Logon失敗,整組交回循序路徑: " & ex.Message)
-                Return result
-            End Try
 
-            Dim store As Redemption.RDOStore = Nothing
-            If Not storeByName.TryGetValue(GetStoreNameFromPath(subset(0).fPath), store) Then Return result
-
-            For Each f In subset
-                cToken.ThrowIfCancellationRequested()
-                Dim core = GetMailInfoRdoCore(store, f.eid, f.fPath)
-                If core.Rows IsNot Nothing Then
-                    Dim converted = core.Rows.Select(Function(m) (m, GetCleanSubject(m.Subject))).ToList()
-                    result.Add((f.fPath, converted, core.AttList, core.RowTotal))
-                End If
-                Dim done As Integer = Interlocked.Increment(doneCounter(0))
-                If (done And 15) = 0 Then progress?.Report(New ProgressReport With {.Message = $"RDO 平行預熱: {done}/{totalCount} 夾..."})
-            Next
-            Return result
-        Finally
-            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
-            If session IsNot Nothing Then
-                Try : session.Logoff() : Catch : End Try
-                Dim so As Object = session : TryMarshalRelease(so)
-            End If
-        End Try
-    End Function
     Private Async Function GetSubtree(rootFolder As Folder, includeSubF As Boolean, Optional skipCache As Boolean = False,
                                       Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) _
                                       As Task(Of List(Of (eid As String, sid As String, fPath As String)))
@@ -1413,6 +1284,16 @@ Partial Class Form1
             End If
         End If
 
+        ' 2026/07/11 by Simon/Claude Opus 4.8 [F5-ESC 修復b 最小侵入]: 重掃前先真讓出一次。
+        '   走到這裡 = 快取未命中或 skipCache，接下來的 GetSubtreeRdo 是同步長區塊(整棵子樹 RDO BFS，全程不看 cToken)；
+        '   F5 skipCache 路徑對 root + 每個直屬子夾各重掃 ×2 (GetMailCountAllOOM/GetFolderCountAllOOM 各一趟)，
+        '   之間若無真讓出，訊息泵只剩 out-of-proc COM 呼叫的 OLE modal loop 代打 — 它會代繪 WM_PAINT (進度列看似在動)
+        '   但扣住鍵盤輸入 → ESC 的 WM_KEYDOWN 派發不進 Form1_KeyDown，排隊排到 F5 結束 _cts 已歸還，閘門失效。
+        '   Task.Delay(1) 是本 codebase 實證唯一有效的讓出法 (Task.Yield 的 continuation 排在輸入訊息之前，無效，
+        '   見 OkayNowYouHaveToken 註解)；ESC → _cts.Cancel() 後，下一次進到這裡的 Delay 立即拋 OCE，呼叫端既有 Catch OCE 收掉。
+        '   _probeF5EscBaselineMode 僅供 PROBE_F5ESC A/B 對照 (True=重現修復前行為)，production 恆 False。
+        If Not _probeF5EscBaselineMode Then _throttleColdCount += 1 : Await Task.Delay(1, cancellationToken:=cToken)
+
         ' 🆕 2026/06/25 by Simon/Claude: RDO 快速探索派工(上移自 L3)。閘 = _rdo2 在(= CheckRDO 勾)。
         '   skipCache=True 時仍走此處重算並覆寫快取;GetSubtreeRdo 回 Nothing(RDO 不可用/失敗)才掉回 ③ 純 OOM L3。
         If _rdo2 IsNot Nothing Then
@@ -1427,7 +1308,6 @@ Partial Class Form1
         Return Await GetSubtreeOOM(rootFolder, True, progress, cToken:=cToken)
 
     End Function
-
     Private Function GetSortedSubFolders(pFolder As Folder, Optional fPath As String = "", Optional skipCache As Boolean = False) As List(Of (f As Folder, name As String, fPath As String))
         ' ==========================================
         ' 取得引數pFolder下的所有subFolders並排序後傳回
@@ -1590,9 +1470,9 @@ Partial Class Form1
             Return False
         End Try
     End Function
-
 #End Region
-#Region "  ├ Layer3 RDO 直接存取底層"
+
+#Region "■ 05 Layer3 RDO 直接存取底層"
     Private Function GetMailCountRdo(folderPath As String, eid As String, sid As String) As Long
         ' ---------------------------------------------------------------
         ' 本層郵件數 RDO 讀取層。store-scoped on _rdo2,與 GetMailCountOOM 原 ⓪ tier 同邏輯(rdoFolder.Items.Count)。
@@ -1684,222 +1564,6 @@ Partial Class Form1
             Dim o As Object = rdoFolder : TryMarshalRelease(o)
         End Try
     End Function
-    Private Function GetAttFilenameRdo(ByRef mail As MailItemInfo) As List(Of String)
-        ' ---------------------------------------------------------------
-        ' 附件檔名 RDO 讀取層。store-scoped on _rdo2,與 GetAttFilenameOOM 原 ⓪ tier 同邏輯(att.Type=1)。
-        '   解析失敗(store 找不到/例外)回 Nothing,由 L2.5 fallback 到 GetAttFilenameOOM。
-        ' 2026/06/23: L3 原用 New List(4096) 預配置(每封配 ~32KB,熱路徑浪費)此處改以 mail.AttCount 精準預配置(上界,絕不 realloc,亦不浪費)。
-        ' ---------------------------------------------------------------
-        Dim store As Redemption.RDOStore = GetRdoStore(mail.FolderPath)
-        If store Is Nothing Then Return Nothing
-
-        Dim result As New List(Of String)(mail.AttCount)
-        Dim rdoMsg As Redemption.RDOMail = Nothing
-        Try
-            rdoMsg = TryCast(store.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
-            If rdoMsg Is Nothing Then Return Nothing
-
-            For i As Integer = 1 To rdoMsg.Attachments.Count
-                Dim att As Redemption.RDOAttachment = rdoMsg.Attachments.Item(i)
-                Try : If att.Type = 1 Then result.Add(att.FileName)   ' 僅 olByValue(1),與 GetAttFilenameOOM 一致
-                Finally : Dim o As Object = att : TryMarshalRelease(o)
-                End Try
-            Next
-            Return result
-        Catch ex As System.Exception
-            If _iLikeNoisy Then _dbg("失敗", ex.Message)
-            Return Nothing
-        Finally
-            Dim o As Object = rdoMsg : TryMarshalRelease(o)
-        End Try
-    End Function
-    Private Function GetMailBodyRdo(entryID As String, folderPath As String) As String
-        ' ---------------------------------------------------------------
-        ' mailbody RDO 讀取層。store-scoped on _rdo2,讀 .Body 後套同一支 NormalizeMailBody(與 GetMailBodyOOM 一致)。
-        '   RDOMail.Body 不分 Mail/Post 型別;解析失敗回 Nothing,由 L2.5 fallback 到 GetMailBodyOOM。
-        ' ---------------------------------------------------------------
-        Dim store As Redemption.RDOStore = GetRdoStore(folderPath)
-        If store Is Nothing Then Return Nothing
-        Dim rm As Redemption.RDOMail = Nothing
-        Try
-            rm = TryCast(store.GetMessageFromID(entryID), Redemption.RDOMail)
-            If rm Is Nothing Then Return Nothing
-            Return NormalizeMailBody(rm.Body)
-        Catch ex As System.Exception
-            _dbg("GetMailBodyRdo 失敗", $"{entryID}: {ex.Message}")
-            Return Nothing
-        Finally
-            Dim o As Object = rm : TryMarshalRelease(o)
-        End Try
-    End Function
-    Private Function GetMailInfoRdo(fPath As String, eid As String, sid As String) As List(Of MailItemInfo)
-        ' ---------------------------------------------------------------
-        ' 整夾基本郵件資訊 RDO 讀取層(薄殼)。store-scoped on _rdo2。
-        '   2026/07/02 by Simon/Claude [Task 2b]: 已接上 GetMailInfo(免-folder版) 與 GetMailInfoAsDict 的③RDO優先路徑。
-        ' 2026/07/10 by Simon/Claude Fable 5 [PROBE_PARSCAN 驗證後]: 讀取+解析核心抽出 GetMailInfoRdoCore(store 改參數注入),
-        '   供 PreLoadMailCacheRdoAsync 平行 worker 以自建 session 的 store 重用同一份 parity 已驗證的解析邏輯。
-        '   本函式退為薄殼: UI 緒經 GetRdoStore 解 store → 呼叫 core → 寫 Tab3 piggyback 快取(維持原行為: 空夾/失敗不寫)。
-        ' ---------------------------------------------------------------
-        Dim store As Redemption.RDOStore = GetRdoStore(fPath)
-        If store Is Nothing Then Return Nothing
-
-        Dim core = GetMailInfoRdoCore(store, eid, fPath)
-        If core.Rows Is Nothing Then Return Nothing
-        If core.RowTotal > 0 Then
-            ' 2026/07/04 piggyback: 全列讀取成功才順手回填 Tab3 快取(Tab4/5/7 掃過的夾,Tab3 直接 ① 記憶體命中)
-            _cacheAttMailList(fPath) = New FolderCacheTab3 With {.AttMailList = core.AttList, .ItemCountSnap = CLng(core.RowTotal)}
-            MarkMailFolderDirty(fPath)
-        End If
-        Return core.Rows
-    End Function
-    Private Function GetMailInfoRdoCore(store As Redemption.RDOStore, eid As String, fPath As String) As (Rows As List(Of MailItemInfo), AttList As List(Of MailItemInfo), RowTotal As Integer)
-        ' ---------------------------------------------------------------
-        ' 整夾基本郵件資訊 RDO 讀取核心。MAPITable 9 欄批次 GetRows(5000) chunk。store 由呼叫端注入:
-        '   UI 緒殼(GetMailInfoRdo)給 _rdo2 的 store;平行 worker(PreLoadMailCacheRdoWorker)給自建 session 的 store(RDO 物件不跨緒共用 — 鐵律)。
-        '   純資料掃描:不算 Topic、不轉容器、不寫任何快取(快取寫入責任在呼叫端,平行時統一回 UI 緒做)。
-        '   ⚠ EntryID 為 Byte(),須經 RdoTableEidToHex 轉字串(比照 GetSubtreeRdoBatch)。
-        '   ⚠ Subject/ReceivedTime/SenderName 改用明確 proptag(非具名屬性,與 OOM 版讀法不同)。
-        '   2026/07/02 by Claude [PROBE_BASICINFO_RDO 驗證後修正]: 字串 proptag 字尾原本誤用 001E(PT_STRING8,ANSI codepage),
-        '     CJK 字元會變 "?" 或被最佳近似置換成形似字(如全形［］被換成〔〕),改成 001F(PT_UNICODE)才對。
-        '   解析失敗或中途例外 → Rows=Nothing,丟棄已累積結果(不可回傳掃一半);空夾 → Rows=空 List, RowTotal=0。
-        ' 2026/07/02 by Simon/Claude
-        ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_ATTACHBATCH 驗證後上線]: COLS 多掛 PR_HASATTACH + SmartNoAttach 兩旗標欄,
-        '   同一次 GetRows 順手收集 Tab3 迴紋針候選(AttList),由呼叫端回填 _cacheAttMailList。
-        '   迴紋針語意 = PR_HASATTACH=True 且 SmartNoAttach≠True(探針 5 store/270夾/178,000列 parity 100%,兩欄邊際成本實測≈0ms)。
-        ' 2026/07/10 by Simon/Claude Fable 5: 從 GetMailInfoRdo 抽出,掃描邏輯原封不動,僅 store 改參數注入、快取寫入移還呼叫端。
-        ' ---------------------------------------------------------------
-        Const COLS As String = "EntryID, " & PR_SUBJECT & ", " & PR_MESSAGE_SIZE & ", " & PR_MESSAGE_DELIVERY_TIME & ", " & PR_SENDER_NAME & ", " & PR_INTERNET_MESSAGE_ID_W & ", " & PR_SENDER_EMAIL_ADDRESS_W & ", " & PR_HASATTACH & ", " & DASL_SMARTNOATTACH
-
-        Dim rdoFolder As Redemption.RDOFolder = Nothing
-        Dim items As Object = Nothing, tbl As Object = Nothing
-        Try
-            rdoFolder = TryCast(store.GetFolderFromID(eid), Redemption.RDOFolder)
-            If rdoFolder Is Nothing Then Return (Nothing, Nothing, 0)
-            items = rdoFolder.Items
-            tbl = items.MAPITable
-            Dim rowTotal As Integer = CInt(tbl.RowCount)
-            If rowTotal = 0 Then Return (New List(Of MailItemInfo), New List(Of MailItemInfo), 0)   ' 空夾: 合法空結果,非失敗
-
-            tbl.Columns = COLS : tbl.GoToFirst()
-            Dim result As New List(Of MailItemInfo)(rowTotal)
-            Dim attList As New List(Of MailItemInfo)(256)        ' 2026/07/04 piggyback: 迴紋針候選,掃完由呼叫端餵 _cacheAttMailList
-            Do
-                Dim chunk As Array = TryCast(tbl.GetRows(5000), Array)
-                If chunk Is Nothing Then Exit Do
-                Dim got As Integer = 0
-                For i As Integer = chunk.GetLowerBound(0) To chunk.GetUpperBound(0)
-                    got += 1
-                    Dim row As Array = TryCast(chunk.GetValue(i), Array)
-                    If row Is Nothing Then Continue For
-                    Dim lb As Integer = row.GetLowerBound(0)
-                    Dim entryID As String = RdoTableEidToHex(row.GetValue(lb))
-                    If entryID = "" Then Continue For
-                    Dim msgIdRaw As String = TryCast(row.GetValue(lb + 5), String)
-                    ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO 驗證後修正]: MAPITable 的 PT_SYSTIME 回傳 UTC,
-                    '   OOM .ReceivedTime 回傳系統本地時區,parity 驗出固定 -8 小時差(台灣 UTC+8),須轉回本地時間才對齊。
-                    Dim rcvTime As DateTime = DateTime.MinValue
-                    If TypeOf row.GetValue(lb + 3) Is DateTime Then
-                        rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
-                    End If
-                    Dim info As New MailItemInfo With {.EntryID = entryID,
-                                                       .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
-                                                       .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
-                                                       .RcvTime = rcvTime,
-                                                       .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
-                                                       .FolderPath = fPath,
-                                                       .MsgIDhash = StringToXxHash64Hex(If(msgIdRaw, "")),
-                                                       .SenderEmail = If(TryCast(row.GetValue(lb + 6), String), "")}
-                    result.Add(info)
-                    ' 2026/07/04 piggyback: 迴紋針判定(SmartNoAttach 未設定時回 Int32 錯誤碼,只認 Boolean=True 為剔除)
-                    Dim vHas As Object = row.GetValue(lb + 7)
-                    Dim vSmart As Object = row.GetValue(lb + 8)
-                    If (TypeOf vHas Is Boolean AndAlso CBool(vHas)) AndAlso Not (TypeOf vSmart Is Boolean AndAlso CBool(vSmart)) Then attList.Add(info)
-                Next
-                If got < 5000 Then Exit Do
-            Loop
-            Return (result, attList, rowTotal)
-        Catch ex As System.Exception
-            If _iLikeNoisy Then _dbg("GetMailInfoRdoCore 失敗", $"{ExtractFolderName(fPath)} | {ex.Message}")
-            Return (Nothing, Nothing, 0)
-        Finally
-            TryMarshalRelease(tbl) : TryMarshalRelease(items)
-            Dim o As Object = rdoFolder : TryMarshalRelease(o)
-        End Try
-    End Function
-    Private Function GetAttMailListRdo(fPath As String, eid As String, sid As String) As List(Of MailItemInfo)
-        ' ---------------------------------------------------------------
-        ' GetAttMailListRdo — Tab3 Phase1 附件候選清單 RDO 讀取層。store-scoped on _rdo2,MAPITable 7 欄批次 GetRows(5000) chunk。
-        '   迴紋針語意批次判定: PR_HASATTACH(0x0E1B000B)=True 且 PidLidSmartNoAttach≠True。
-        '   SmartNoAttach = PSETID_Common {00062008-0000-0000-C000-000000000046}/dispid 0x8514/PT_BOOLEAN named prop,
-        '   MS 官方語意「訊息沒有使用者可見附件」;未設定時 GetRows 回 Int32 錯誤碼、有設定時回 Boolean →
-        '   只認 Boolean=True 為剔除,對齊文件「may be unset; default FALSE」。
-        ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_ATTACHBATCH 驗證後上線]:
-        '   個人 profile 5 store/270夾/178,000列/25,829封,與 OOM @SQL hasattachment 對拍 parity 100%(多0漏0),
-        '   暖頁面快 1.8x~13.2x(RDO 每列 ~7µs 恆定;OOM 每夾 ~15ms GetTable 固定成本,夾多且小時差距放大)。
-        '   此結果推翻 memory_20260623_2210「Tab3 不做 RDO 版本」結論 — 該輪缺口是沒試過 SmartNoAttach 當第二欄。
-        '   ⚠ 工作 profile 問題 store(寄件備份2013~2018,olOLE 樣本)尚未補測;本函式回 Nothing 即 fallback OOM,語意保底不破。
-        '   解析失敗/例外 → 回 Nothing(呼叫端 fallback OOM);空夾 → 回空 List。
-        ' ---------------------------------------------------------------
-        Const COLS As String = "EntryID, " & PR_SUBJECT & ", " & PR_MESSAGE_SIZE & ", " & PR_MESSAGE_DELIVERY_TIME & ", " & PR_SENDER_NAME & ", " & PR_HASATTACH & ", " & DASL_SMARTNOATTACH
-
-        Dim store As Redemption.RDOStore = GetRdoStore(fPath)
-        If store Is Nothing Then Return Nothing
-
-        Dim rdoFolder As Redemption.RDOFolder = Nothing
-        Dim items As Object = Nothing, tbl As Object = Nothing
-        Try
-            rdoFolder = TryCast(store.GetFolderFromID(eid), Redemption.RDOFolder)
-            If rdoFolder Is Nothing Then Return Nothing
-            items = rdoFolder.Items
-            tbl = items.MAPITable
-            If CInt(tbl.RowCount) = 0 Then Return New List(Of MailItemInfo)   ' 空夾: 合法空結果,非失敗
-
-            tbl.Columns = COLS : tbl.GoToFirst()
-            Dim result As New List(Of MailItemInfo)(256)
-            Do
-                Dim chunk As Array = TryCast(tbl.GetRows(5000), Array)
-                If chunk Is Nothing Then Exit Do
-                Dim got As Integer = 0
-                For i As Integer = chunk.GetLowerBound(0) To chunk.GetUpperBound(0)
-                    got += 1
-                    Dim row As Array = TryCast(chunk.GetValue(i), Array)
-                    If row Is Nothing Then Continue For
-                    Dim lb As Integer = row.GetLowerBound(0)
-                    Dim entryID As String = RdoTableEidToHex(row.GetValue(lb))
-                    If entryID = "" Then Continue For
-                    ' 迴紋針判定: HasAtt=True 且 SmartNoAttach≠Boolean True,非候選連 MailItemInfo 都不建
-                    Dim vHas As Object = row.GetValue(lb + 5)
-                    Dim vSmart As Object = row.GetValue(lb + 6)
-                    If Not (TypeOf vHas Is Boolean AndAlso CBool(vHas)) Then Continue For
-                    If TypeOf vSmart Is Boolean AndAlso CBool(vSmart) Then Continue For
-                    Dim rcvTime As DateTime = DateTime.MinValue                    ' PT_SYSTIME 為 UTC → 轉本地(比照 GetMailInfoRdo)
-                    If TypeOf row.GetValue(lb + 3) Is DateTime Then
-                        rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
-                    End If
-                    result.Add(New MailItemInfo With {
-                        .EntryID = entryID,
-                        .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
-                        .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
-                        .RcvTime = rcvTime,
-                        .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
-                        .FolderPath = fPath})
-                Next
-                If got < 5000 Then Exit Do
-            Loop
-            Return result
-        Catch ex As System.Exception
-            If _iLikeNoisy Then _dbg("失敗", $"{ExtractFolderName(fPath)} | {ex.Message}")
-            Return Nothing
-        Finally
-            TryMarshalRelease(tbl) : TryMarshalRelease(items)
-            Dim o As Object = rdoFolder : TryMarshalRelease(o)
-        End Try
-    End Function
-    Private Function RdoDateLiteral(d As Date) As String
-        ' ExecSQL 只吃 ISO 'yyyy-MM-dd HH:mm:ss' 字面值(InvariantCulture,避開 zh-TW 上午/下午問題);
-        '   8 種候選格式已在 PROBE_YEARSQL 探針全部實測過(見 memory_20260702_1409),只有帶時間的 ISO 格式可解析且不會把 23:59:59 邊界截斷成 00:00:00。
-        Return "'" & d.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) & "'"
-    End Function
     Private Function GetYearCountRdo(fPath As String, eid As String, sid As String) As ConcurrentDictionary(Of Integer, Integer)
         ' ---------------------------------------------------------------
         ' 單一資料夾年份郵件分佈 RDO 讀取層。store-scoped on _rdo2,ExecSQL COUNT(*) 逐年查詢。
@@ -1986,6 +1650,211 @@ Partial Class Form1
             Dim o As Object = rdoFolder : TryMarshalRelease(o)
         End Try
     End Function
+    Private Function GetAttMailListRdo(fPath As String, eid As String, sid As String) As List(Of MailItemInfo)
+        ' ---------------------------------------------------------------
+        ' GetAttMailListRdo — Tab3 Phase1 附件候選清單 RDO 讀取層。store-scoped on _rdo2,MAPITable 7 欄批次 GetRows(5000) chunk。
+        '   迴紋針語意批次判定: PR_HASATTACH(0x0E1B000B)=True 且 PidLidSmartNoAttach≠True。
+        '   SmartNoAttach = PSETID_Common {00062008-0000-0000-C000-000000000046}/dispid 0x8514/PT_BOOLEAN named prop,
+        '   MS 官方語意「訊息沒有使用者可見附件」;未設定時 GetRows 回 Int32 錯誤碼、有設定時回 Boolean →
+        '   只認 Boolean=True 為剔除,對齊文件「may be unset; default FALSE」。
+        ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_ATTACHBATCH 驗證後上線]:
+        '   個人 profile 5 store/270夾/178,000列/25,829封,與 OOM @SQL hasattachment 對拍 parity 100%(多0漏0),
+        '   暖頁面快 1.8x~13.2x(RDO 每列 ~7µs 恆定;OOM 每夾 ~15ms GetTable 固定成本,夾多且小時差距放大)。
+        '   此結果推翻 memory_20260623_2210「Tab3 不做 RDO 版本」結論 — 該輪缺口是沒試過 SmartNoAttach 當第二欄。
+        '   ⚠ 工作 profile 問題 store(寄件備份2013~2018,olOLE 樣本)尚未補測;本函式回 Nothing 即 fallback OOM,語意保底不破。
+        '   解析失敗/例外 → 回 Nothing(呼叫端 fallback OOM);空夾 → 回空 List。
+        ' ---------------------------------------------------------------
+        ' 2026/7/11: GetMailInfoRdoCore 和 GetAttMailListRdo 該整合嗎?? -->
+        '   兩支函式(GetMailInfoRdo、GetAttMailListRdo)共用整套骨架，大約佔各自篇幅八成。
+        '   但這套骨架不是這兩支獨有， GetYearCountRdo、GetMonthCountRdo、GetMailBodyRdo 也是同一款式。
+        '   所以「合併這兩支」其實解決不了骨架重複的根源——那是整個 RDO 讀取層的共同慣用句。
+        '   骨架重複如果哪天真想處理， 正確的刀口是整個 RDO 層的共用 scaffold(五支函式一起)，而不是單獨縫這兩支
+        ' ---------------------------------------------------------------
+
+        Const COLS As String = "EntryID, " & PR_SUBJECT & ", " & PR_MESSAGE_SIZE & ", " & PR_MESSAGE_DELIVERY_TIME & ", " & PR_SENDER_NAME & ", " & PR_HASATTACH & ", " & DASL_SMARTNOATTACH
+
+        Dim store As Redemption.RDOStore = GetRdoStore(fPath)
+        If store Is Nothing Then Return Nothing
+
+        Dim rdoFolder As Redemption.RDOFolder = Nothing
+        Dim items As Object = Nothing, tbl As Object = Nothing
+        Try
+            rdoFolder = TryCast(store.GetFolderFromID(eid), Redemption.RDOFolder)
+            If rdoFolder Is Nothing Then Return Nothing
+            items = rdoFolder.Items
+            tbl = items.MAPITable
+            If CInt(tbl.RowCount) = 0 Then Return New List(Of MailItemInfo)   ' 空夾: 合法空結果,非失敗
+
+            tbl.Columns = COLS : tbl.GoToFirst()
+            Dim result As New List(Of MailItemInfo)(256)
+            Do
+                Dim chunk As Array = TryCast(tbl.GetRows(5000), Array)
+                If chunk Is Nothing Then Exit Do
+                Dim got As Integer = 0
+                For i As Integer = chunk.GetLowerBound(0) To chunk.GetUpperBound(0)
+                    got += 1
+                    Dim row As Array = TryCast(chunk.GetValue(i), Array)
+                    If row Is Nothing Then Continue For
+                    Dim lb As Integer = row.GetLowerBound(0)
+                    Dim entryID As String = RdoTableEidToHex(row.GetValue(lb))
+                    If entryID = "" Then Continue For
+                    ' 迴紋針判定: HasAtt=True 且 SmartNoAttach≠Boolean True,非候選連 MailItemInfo 都不建
+                    Dim vHas As Object = row.GetValue(lb + 5)
+                    Dim vSmart As Object = row.GetValue(lb + 6)
+                    If Not (TypeOf vHas Is Boolean AndAlso CBool(vHas)) Then Continue For
+                    If TypeOf vSmart Is Boolean AndAlso CBool(vSmart) Then Continue For
+                    Dim rcvTime As DateTime = DateTime.MinValue                    ' PT_SYSTIME 為 UTC → 轉本地(比照 GetMailInfoRdo)
+                    If TypeOf row.GetValue(lb + 3) Is DateTime Then
+                        rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
+                    End If
+                    result.Add(New MailItemInfo With {.EntryID = entryID,
+                                                      .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
+                                                      .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
+                                                      .RcvTime = rcvTime,
+                                                      .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
+                                                      .FolderPath = fPath})
+                Next
+                If got < 5000 Then Exit Do
+            Loop
+            Return result
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("失敗", $"{ExtractFolderName(fPath)} | {ex.Message}")
+            Return Nothing
+        Finally
+            TryMarshalRelease(tbl) : TryMarshalRelease(items)
+            Dim o As Object = rdoFolder : TryMarshalRelease(o)
+        End Try
+    End Function
+    Private Function GetAttFilenameRdo(ByRef mail As MailItemInfo) As List(Of String)
+        ' ---------------------------------------------------------------
+        ' 附件檔名 RDO 讀取層。store-scoped on _rdo2,與 GetAttFilenameOOM 原 ⓪ tier 同邏輯(att.Type=1)。
+        '   解析失敗(store 找不到/例外)回 Nothing,由 L2.5 fallback 到 GetAttFilenameOOM。
+        ' 2026/06/23: L3 原用 New List(4096) 預配置(每封配 ~32KB,熱路徑浪費)此處改以 mail.AttCount 精準預配置(上界,絕不 realloc,亦不浪費)。
+        ' ---------------------------------------------------------------
+        Dim store As Redemption.RDOStore = GetRdoStore(mail.FolderPath)
+        If store Is Nothing Then Return Nothing
+
+        Dim result As New List(Of String)(mail.AttCount)
+        Dim rdoMsg As Redemption.RDOMail = Nothing
+        Try
+            rdoMsg = TryCast(store.GetMessageFromID(mail.EntryID), Redemption.RDOMail)
+            If rdoMsg Is Nothing Then Return Nothing
+
+            For i As Integer = 1 To rdoMsg.Attachments.Count
+                Dim att As Redemption.RDOAttachment = rdoMsg.Attachments.Item(i)
+                Try : If att.Type = 1 Then result.Add(att.FileName)   ' 僅 olByValue(1),與 GetAttFilenameOOM 一致
+                Finally : Dim o As Object = att : TryMarshalRelease(o)
+                End Try
+            Next
+            Return result
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("失敗", ex.Message)
+            Return Nothing
+        Finally
+            Dim o As Object = rdoMsg : TryMarshalRelease(o)
+        End Try
+    End Function
+
+    Private Function GetMailInfoRdo(fPath As String, eid As String, sid As String) As List(Of MailItemInfo)
+        ' ---------------------------------------------------------------
+        ' 整夾基本郵件資訊 RDO 讀取層(薄殼)。store-scoped on _rdo2。
+        '   2026/07/02 by Simon/Claude [Task 2b]: 已接上 GetMailInfo(免-folder版) 與 GetMailInfoAsDict 的③RDO優先路徑。
+        ' 2026/07/10 by Simon/Claude Fable 5 [PROBE_PARSCAN 驗證後]: 讀取+解析核心抽出 GetMailInfoRdoCore(store 改參數注入),
+        '   供 PreLoadMailCacheRdoAsync 平行 worker 以自建 session 的 store 重用同一份 parity 已驗證的解析邏輯。
+        '   本函式退為薄殼: UI 緒經 GetRdoStore 解 store → 呼叫 core → 寫 Tab3 piggyback 快取(維持原行為: 空夾/失敗不寫)。
+        ' ---------------------------------------------------------------
+        Dim store As Redemption.RDOStore = GetRdoStore(fPath)
+        If store Is Nothing Then Return Nothing
+
+        Dim core = GetMailInfoRdoCore(store, eid, fPath)
+        If core.Rows Is Nothing Then Return Nothing
+        If core.RowTotal > 0 Then
+            ' 2026/07/04 piggyback: 全列讀取成功才順手回填 Tab3 快取(Tab4/5/7 掃過的夾,Tab3 直接 ① 記憶體命中)
+            _cacheAttMailList(fPath) = New FolderCacheTab3 With {.AttMailList = core.AttList, .ItemCountSnap = CLng(core.RowTotal)}
+            MarkMailFolderDirty(fPath)
+        End If
+        Return core.Rows
+    End Function
+    Private Function GetMailInfoRdoCore(store As Redemption.RDOStore, eid As String, fPath As String) As (Rows As List(Of MailItemInfo), AttList As List(Of MailItemInfo), RowTotal As Integer)
+        ' ---------------------------------------------------------------
+        ' 整夾基本郵件資訊 RDO 讀取核心。MAPITable 9 欄批次 GetRows(5000) chunk。store 由呼叫端注入:
+        '   UI 緒殼(GetMailInfoRdo)給 _rdo2 的 store;平行 worker(PreLoadMailCacheRdoWorker)給自建 session 的 store(RDO 物件不跨緒共用 — 鐵律)。
+        '   純資料掃描:不算 Topic、不轉容器、不寫任何快取(快取寫入責任在呼叫端,平行時統一回 UI 緒做)。
+        '   ⚠ EntryID 為 Byte(),須經 RdoTableEidToHex 轉字串(比照 GetSubtreeRdoBatch)。
+        '   ⚠ Subject/ReceivedTime/SenderName 改用明確 proptag(非具名屬性,與 OOM 版讀法不同)。
+        '   2026/07/02 by Claude [PROBE_BASICINFO_RDO 驗證後修正]: 字串 proptag 字尾原本誤用 001E(PT_STRING8,ANSI codepage),
+        '     CJK 字元會變 "?" 或被最佳近似置換成形似字(如全形［］被換成〔〕),改成 001F(PT_UNICODE)才對。
+        '   解析失敗或中途例外 → Rows=Nothing,丟棄已累積結果(不可回傳掃一半);空夾 → Rows=空 List, RowTotal=0。
+        ' 2026/07/02 by Simon/Claude
+        ' 2026/07/04 by Simon/Claude Fable 5 [PROBE_ATTACHBATCH 驗證後上線]: COLS 多掛 PR_HASATTACH + SmartNoAttach 兩旗標欄,
+        '   同一次 GetRows 順手收集 Tab3 迴紋針候選(AttList),由呼叫端回填 _cacheAttMailList。
+        '   迴紋針語意 = PR_HASATTACH=True 且 SmartNoAttach≠True(探針 5 store/270夾/178,000列 parity 100%,兩欄邊際成本實測≈0ms)。
+        ' 2026/07/10 by Simon/Claude Fable 5: 從 GetMailInfoRdo 抽出,掃描邏輯原封不動,僅 store 改參數注入、快取寫入移還呼叫端。
+        ' ---------------------------------------------------------------
+        ' 2026/7/11: GetMailInfoRdoCore 和 GetAttMailListRdo 該整合嗎?? -->
+        '   兩支函式(GetMailInfoRdo、GetAttMailListRdo)共用整套骨架，大約佔各自篇幅八成。
+        '   但這套骨架不是這兩支獨有， GetYearCountRdo、GetMonthCountRdo、GetMailBodyRdo 也是同一款式。
+        '   所以「合併這兩支」其實解決不了骨架重複的根源——那是整個 RDO 讀取層的共同慣用句。
+        '   骨架重複如果哪天真想處理， 正確的刀口是整個 RDO 層的共用 scaffold(五支函式一起)，而不是單獨縫這兩支
+        ' ---------------------------------------------------------------
+        Const COLS As String = "EntryID, " & PR_SUBJECT & ", " & PR_MESSAGE_SIZE & ", " & PR_MESSAGE_DELIVERY_TIME & ", " & PR_SENDER_NAME & ", " & PR_INTERNET_MESSAGE_ID_W & ", " & PR_SENDER_EMAIL_ADDRESS_W & ", " & PR_HASATTACH & ", " & DASL_SMARTNOATTACH
+
+        Dim rdoFolder As Redemption.RDOFolder = Nothing
+        Dim items As Object = Nothing, tbl As Object = Nothing
+        Try
+            rdoFolder = TryCast(store.GetFolderFromID(eid), Redemption.RDOFolder)
+            If rdoFolder Is Nothing Then Return (Nothing, Nothing, 0)
+            items = rdoFolder.Items
+            tbl = items.MAPITable
+            Dim rowTotal As Integer = CInt(tbl.RowCount)
+            If rowTotal = 0 Then Return (New List(Of MailItemInfo), New List(Of MailItemInfo), 0)   ' 空夾: 合法空結果,非失敗
+
+            tbl.Columns = COLS : tbl.GoToFirst()
+            Dim result As New List(Of MailItemInfo)(rowTotal)
+            Dim attList As New List(Of MailItemInfo)(256)        ' 2026/07/04 piggyback: 迴紋針候選,掃完由呼叫端餵 _cacheAttMailList
+            Do
+                Dim chunk As Array = TryCast(tbl.GetRows(5000), Array)
+                If chunk Is Nothing Then Exit Do
+                Dim got As Integer = 0
+                For i As Integer = chunk.GetLowerBound(0) To chunk.GetUpperBound(0)
+                    got += 1
+                    Dim row As Array = TryCast(chunk.GetValue(i), Array)
+                    If row Is Nothing Then Continue For
+                    Dim lb As Integer = row.GetLowerBound(0)
+                    Dim entryID As String = RdoTableEidToHex(row.GetValue(lb))
+                    If entryID = "" Then Continue For
+                    Dim msgIdRaw As String = TryCast(row.GetValue(lb + 5), String)
+                    ' 2026/07/02 by Claude [PROBE_BASICINFO_RDO 驗證後修正]: MAPITable 的 PT_SYSTIME 回傳 UTC,
+                    '   OOM .ReceivedTime 回傳系統本地時區,parity 驗出固定 -8 小時差(台灣 UTC+8),須轉回本地時間才對齊。
+                    Dim rcvTime As DateTime = DateTime.MinValue
+                    If TypeOf row.GetValue(lb + 3) Is DateTime Then
+                        rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
+                    End If
+                    Dim info As New MailItemInfo With {.EntryID = entryID,
+                                                       .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
+                                                       .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
+                                                       .RcvTime = rcvTime,
+                                                       .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
+                                                       .FolderPath = fPath,
+                                                       .MsgIDhash = StringToXxHash64Hex(If(msgIdRaw, "")),
+                                                       .SenderEmail = If(TryCast(row.GetValue(lb + 6), String), "")}
+                    result.Add(info)
+                    ' 2026/07/04 piggyback: 迴紋針判定(SmartNoAttach 未設定時回 Int32 錯誤碼,只認 Boolean=True 為剔除)
+                    Dim vHas As Object = row.GetValue(lb + 7)
+                    Dim vSmart As Object = row.GetValue(lb + 8)
+                    If (TypeOf vHas Is Boolean AndAlso CBool(vHas)) AndAlso Not (TypeOf vSmart Is Boolean AndAlso CBool(vSmart)) Then attList.Add(info)
+                Next
+                If got < 5000 Then Exit Do
+            Loop
+            Return (result, attList, rowTotal)
+        Catch ex As System.Exception
+            If _iLikeNoisy Then _dbg("GetMailInfoRdoCore 失敗", $"{ExtractFolderName(fPath)} | {ex.Message}")
+            Return (Nothing, Nothing, 0)
+        Finally
+            TryMarshalRelease(tbl) : TryMarshalRelease(items)
+            Dim o As Object = rdoFolder : TryMarshalRelease(o)
+        End Try
+    End Function
     Private Function RefreshMailInfoRdo(ByRef info As MailItemInfo) As Boolean
         ' ---------------------------------------------------------------
         ' RefreshMailInfoRdo — Layer3 RDO 讀取層: store-scoped on _rdo2,依 EntryID 重讀單封郵件實體資訊寫回 info。
@@ -2016,6 +1885,114 @@ Partial Class Form1
         Finally
             Dim o As Object = rdoMsg : TryMarshalRelease(o)
         End Try
+    End Function
+    Private Function GetMailBodyRdo(entryID As String, folderPath As String) As String
+        ' ---------------------------------------------------------------
+        ' mailbody RDO 讀取層。store-scoped on _rdo2,讀 .Body 後套同一支 NormalizeMailBody(與 GetMailBodyOOM 一致)。
+        '   RDOMail.Body 不分 Mail/Post 型別;解析失敗回 Nothing,由 L2.5 fallback 到 GetMailBodyOOM。
+        ' ---------------------------------------------------------------
+        Dim store As Redemption.RDOStore = GetRdoStore(folderPath)
+        If store Is Nothing Then Return Nothing
+        Dim rm As Redemption.RDOMail = Nothing
+        Try
+            rm = TryCast(store.GetMessageFromID(entryID), Redemption.RDOMail)
+            If rm Is Nothing Then Return Nothing
+            Return NormalizeMailBody(rm.Body)
+        Catch ex As System.Exception
+            _dbg("GetMailBodyRdo 失敗", $"{entryID}: {ex.Message}")
+            Return Nothing
+        Finally
+            Dim o As Object = rm : TryMarshalRelease(o)
+        End Try
+    End Function
+    Private Function PreLoadMailCacheRdoWorker(profileName As String, subset As List(Of (eid As String, sid As String, fPath As String)), doneCounter As Integer(), totalCount As Integer,
+                                               progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
+                                               As List(Of (fPath As String, Mails As List(Of (Mail As MailItemInfo, Topic As String)), AttList As List(Of MailItemInfo), RowTotal As Integer))
+        ' PreLoadMailCacheRdoAsync 的平行 worker: 自建/自 Logoff 獨立 RDOSession(鐵律),只讀不寫任何快取。
+        '   subset 保證同一 store(呼叫端 by-store 分組),故 store 只解一次。掃描核心 = GetMailInfoRdoCore(與 UI 緒薄殼同一份)。
+        '   Topic 轉換(GetCleanSubject)在 worker 內做 — memoization 為 ConcurrentDictionary、Regex 為 Shared Compiled,跨緒安全,平行免費。
+        '   讀不到的夾不進回傳清單(呼叫端不寫快取 → 主迴圈照走既有 fallback);Logon 失敗 → 整組空手而回,同理。
+        '   progress 為 Progress(Of T)(UI 緒建立),Report 內部自行 Post 回 UI SynchronizationContext,worker 直呼安全。
+        ' 2026/07/10 by Simon/Claude Fable 5
+        Dim result As New List(Of (fPath As String, Mails As List(Of (Mail As MailItemInfo, Topic As String)), AttList As List(Of MailItemInfo), RowTotal As Integer))(subset.Count)
+        Dim session As Redemption.RDOSession = Nothing
+        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
+        Try
+            Try
+                session = New Redemption.RDOSession()
+                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
+                storeByName = BuildRdoStoreByNameDict(session)
+            Catch ex As System.Exception
+                _dbg("RDO平行預熱 worker", "Logon失敗,整組交回循序路徑: " & ex.Message)
+                Return result
+            End Try
+
+            Dim store As Redemption.RDOStore = Nothing
+            If Not storeByName.TryGetValue(GetStoreNameFromPath(subset(0).fPath), store) Then Return result
+
+            For Each f In subset
+                cToken.ThrowIfCancellationRequested()
+                Dim core = GetMailInfoRdoCore(store, f.eid, f.fPath)
+                If core.Rows IsNot Nothing Then
+                    Dim converted = core.Rows.Select(Function(m) (m, GetCleanSubject(m.Subject))).ToList()
+                    result.Add((f.fPath, converted, core.AttList, core.RowTotal))
+                End If
+                Dim done As Integer = Interlocked.Increment(doneCounter(0))
+                If (done And 15) = 0 Then progress?.Report(New ProgressReport With {.Message = $"RDO 平行預熱: {done}/{totalCount} 夾..."})
+            Next
+            Return result
+        Finally
+            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
+            If session IsNot Nothing Then
+                Try : session.Logoff() : Catch : End Try
+                Dim so As Object = session : TryMarshalRelease(so)
+            End If
+        End Try
+    End Function
+    Private Async Function PreLoadMailCacheRdoAsync(folderList As List(Of (eid As String, sid As String, fPath As String)),
+                                                    progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
+        ' ---------------------------------------------------------------
+        ' PreLoadMailCacheRdoAsync — RDO 平行預熱層(優化B PreLoadMailCacheAsync 的 COM 版,排在它之後呼叫)
+        ' DB 預熱後仍不在 _cacheMailInfo 的夾 = DB 也沒有的「冷夾」,原本會在主迴圈 GetMailInfo ③ 逐夾循序 RDO 掃描;
+        '   本函式先用 by-store 平行(每 store 一條 worker,各自自建獨立 RDOSession — 鐵律)把冷夾一次掃完、
+        '   回 UI 緒統一寫快取,主迴圈隨即全部 ① 記憶體命中。GetMailInfo 本體與 OOM fallback 一概不動。
+        ' 實測依據 (2026/07/10 PROBE_PARSCAN, 803夾/308,652列/26 stores,A/B/A 消暖化偏差):
+        '   循序暖掃 4.0s / 冷掃 12.0s;by-store 平行純掃 0.77s(5.2×),含 session 建置 wall 1.2s(net 3.3×);
+        '   round-robin 切法較差(P8 僅 3.2×),故採 by-store。六 pass parity 全 0 差異。
+        ' 設計:
+        '   - worker 只讀不寫(結果純資料帶回);快取寫入(_cacheMailInfo/_cacheAttMailList/MarkMailFolderDirty)
+        '     全部回 UI 緒做,維持快取變異單執行緒紀律;ESC guard 相關 UI(Cursor/PgrsBar)worker 一概不碰。
+        '   - RDO 讀不到的夾直接跳過(不進快取),主迴圈 GetMailInfo ③ 對它們照走既有 RDO 重試/OOM fallback,語意保底不破。
+        '   - 冷夾 < PARALLEL_MIN_FOLDERS 時不啟動:平行 Logon 建置成本 ~0.5s,夾太少划不來,循序路徑照舊。
+        '   - snap 用 core 掃到的 RowTotal(= MAPITable.RowCount,與 Tab3 piggyback ItemCountSnap 同一口徑)。
+        ' 2026/07/10 by Simon/Claude Fable 5
+        ' ---------------------------------------------------------------
+        Const PARALLEL_MIN_FOLDERS As Integer = 4
+        If _rdo2 Is Nothing OrElse _olNS Is Nothing Then Return   ' RDO 未就緒 → 全交給循序路徑
+
+        Dim coldList = folderList.Where(Function(f) f.eid <> "" AndAlso Not _cacheMailInfo.ContainsKey(f.fPath)).ToList()
+        If coldList.Count < PARALLEL_MIN_FOLDERS Then Return
+
+        Dim profileName As String = _olNS.CurrentProfileName
+        Dim groups = coldList.GroupBy(Function(f) GetStoreNameFromPath(f.fPath)).Select(Function(g) g.ToList()).ToList()
+        _dbg(" ├ RDO平行預熱", $"冷夾 {coldList.Count} 個 / {groups.Count} 個 store(每 store 一條 worker)")
+
+        Dim doneCounter(0) As Integer      ' 單元素陣列: worker 們用 Interlocked 共用累加(比照 SimHashParallelWorker)
+        Dim swEta As Stopwatch = Stopwatch.StartNew()
+        Dim tasks = groups.Select(Function(g) Task.Run(Function() PreLoadMailCacheRdoWorker(profileName, g, doneCounter, coldList.Count, progress, cToken:=cToken))).ToList()
+        Dim results = Await Task.WhenAll(tasks)
+
+        ' 收攏: 回 UI 緒統一寫快取
+        Dim okFolders As Integer = 0
+        For Each workerResult In results
+            For Each r In workerResult
+                _cacheMailInfo(r.fPath) = (r.Mails, CLng(r.RowTotal))
+                If r.RowTotal > 0 Then _cacheAttMailList(r.fPath) = New FolderCacheTab3 With {.AttMailList = r.AttList, .ItemCountSnap = CLng(r.RowTotal)}   ' 比照 GetMailInfoRdo 薄殼: 空夾不寫 Tab3 piggyback
+                MarkMailFolderDirty(r.fPath)
+                okFolders += 1
+            Next
+        Next
+        _dbg(" ├ RDO平行預熱 完成", $"{okFolders}/{coldList.Count} 夾入快取,耗時 {swEta.Elapsed.TotalSeconds:0.00}s(未命中者由主迴圈循序補)")
     End Function
 
     ' 🆕 2026/06/24 by Simon/Claude Opus 4.8: GetSubtreeRdo — RDO 批次階層走訪(探針 C 實證版)
@@ -2223,7 +2200,8 @@ Partial Class Form1
         Return ""
     End Function
 #End Region
-#Region "  ├ Layer3 OOM 直接存取底層"
+
+#Region "■ 06 Layer3 OOM 直接存取底層"
     Private Function GetMailCountOOM(folder As Folder, Optional fPath As String = "") As Long
         ' --------------------------------------------------------------
         ' GetMailCountOOM: 只讀單一資料夾的本層郵件數 (不含子孫)
@@ -2888,43 +2866,7 @@ Partial Class Form1
 
         Return result
     End Function
-    Private Function GetMailBodyOOM(entryID As String) As String
-        ' ---------------------------------------------------------------
-        ' GetMailBodyOOM — Layer3 COM 資料層：讀取郵件 Body 並正規化
-        ' 2026/04/28 by Simon/Claude: 以 Simon 的 GetMailBodyByEntryID 為基礎
-        '   + 加入 NormalizeMailBody 正規化（去除 HTML 標籤、空白換行）
-        '   + Await Task.Yield() 確保每封讀完後讓 UI 執行緒喘氣
-        '   支援 MailItem 與 PostItem 兩種型別
-        '   使用獨立的 ns（Simon 的設計），確保 COM namespace 不跨執行緒共用
-        ' ---------------------------------------------------------------
-        If String.IsNullOrEmpty(entryID) Then Return ""
 
-        ' Dim ns As Outlook.NameSpace = Nothing
-        Dim item As Object = Nothing
-        Dim mailBody As String = Nothing   ' 2026/07/06 by Simon/Claude: 初始值改 Nothing(原 "")，失敗與「真的空內文」才分得開——
-        '   成功路徑一定會走到下面的 NormalizeMailBody 賦值，真空信會拿到 ""，失敗維持 Nothing
-        Try
-            item = _olNS.GetItemFromID(entryID) ' 2026/04/28 by simon, 使用共用的 NameSpace 以減少多建一次namespace的 COM 開銷
-            ' ns = _olApp.GetNamespace("MAPI")  ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
-            ' item = ns.GetItemFromID(entryID)
-
-            If item IsNot Nothing Then
-                If TypeOf item Is Outlook.MailItem Then
-                    mailBody = NormalizeMailBody(DirectCast(item, Outlook.MailItem).Body)
-                ElseIf TypeOf item Is Outlook.PostItem Then
-                    mailBody = NormalizeMailBody(DirectCast(item, Outlook.PostItem).Body)
-                End If
-            End If
-        Catch ex As System.Exception
-            _dbg("GetMailBodyL3 失敗", $"{entryID}: {ex.Message}")
-        Finally
-            TryMarshalRelease(item)
-            ' TryMarshalRelease(ns)   ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
-            ' 2026/05/09 by Gemini 3.0 flash: 移除內部的 Yield。改由調用端依批次執行呼吸，減少微切換開銷提升讀取性能
-        End Try
-        Return mailBody
-
-    End Function
     Private Async Function GetMailInfoOOM(folder As Folder, needTopic As Boolean, Optional fPath As String = "",
                                           Optional cToken As CancellationToken = Nothing) As Task(Of List(Of (Mail As MailItemInfo, Topic As String)))
         ' ---------------------------------------------------------------
@@ -2944,8 +2886,8 @@ Partial Class Form1
 
         Dim resultList As New List(Of (MailItemInfo, String))(4096) ' 預分配容量為 4096，優化批次讀取郵件基本資訊時的清單填充 (by Gemini 3 Flash, 2026/05/04)
         If Not IsMailFolder(folder, fPath) Then Return resultList   ' 2026/07/11 by Simon/Claude Fable 5 [RenewCache 例外歸零]: 非郵件夾(行事曆/連絡人/記事/工作/提醒)的 Table 沒有 ReceivedTime 欄，
-                                                                    '   Columns.Add 必拋 ArgumentException 且 async 跨層重拋會再噴一顆(PROBE_RENEWEX 實測 26 個非郵件夾 dirty 時共 52 顆)，
-                                                                    '   最後照樣被下方 Catch 吞掉回空清單。改成先查 IsMailFolder(快取命中 0 COM)直接回空清單 — 結果語意不變、零例外、還省整趟白工。
+        '   Columns.Add 必拋 ArgumentException 且 async 跨層重拋會再噴一顆(PROBE_RENEWEX 實測 26 個非郵件夾 dirty 時共 52 顆)，
+        '   最後照樣被下方 Catch 吞掉回空清單。改成先查 IsMailFolder(快取命中 0 COM)直接回空清單 — 結果語意不變、零例外、還省整趟白工。
         Try
             Await ScanFolderTable(folder, ThrottleFreq.Mid, Nothing,
                 Sub(data, r)
@@ -2993,8 +2935,6 @@ Partial Class Form1
             info.RcvTime = mail.ReceivedTime
             info.SenderName = mail.SenderName
             info.FolderPath = SafeGetPath(TryCast(mail.Parent, Folder)) ' 2026/6/15 by simon: 新增直接從 mail.Parent 更新路徑，確保即使資料夾被移動後仍能正確更新
-            ' todo: mail.Parent 會建立一個 COM object，傳入函數後沒有變數持有，TryMarshalRelease 就無從釋放 → COM memory leak
-
             Return RefreshResult.Updated
 
         Catch ex As System.Runtime.InteropServices.COMException
@@ -3059,6 +2999,44 @@ Partial Class Form1
         End Try
         Return result
     End Function
+    Private Function GetMailBodyOOM(entryID As String) As String
+        ' ---------------------------------------------------------------
+        ' GetMailBodyOOM — Layer3 COM 資料層：讀取郵件 Body 並正規化
+        ' 2026/04/28 by Simon/Claude: 以 Simon 的 GetMailBodyByEntryID 為基礎
+        '   + 加入 NormalizeMailBody 正規化（去除 HTML 標籤、空白換行）
+        '   + Await Task.Yield() 確保每封讀完後讓 UI 執行緒喘氣
+        '   支援 MailItem 與 PostItem 兩種型別
+        '   使用獨立的 ns（Simon 的設計），確保 COM namespace 不跨執行緒共用
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(entryID) Then Return ""
+
+        ' Dim ns As Outlook.NameSpace = Nothing
+        Dim item As Object = Nothing
+        Dim mailBody As String = Nothing   ' 2026/07/06 by Simon/Claude: 初始值改 Nothing(原 "")，失敗與「真的空內文」才分得開——
+        '   成功路徑一定會走到下面的 NormalizeMailBody 賦值，真空信會拿到 ""，失敗維持 Nothing
+        Try
+            item = _olNS.GetItemFromID(entryID) ' 2026/04/28 by simon, 使用共用的 NameSpace 以減少多建一次namespace的 COM 開銷
+            ' ns = _olApp.GetNamespace("MAPI")  ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
+            ' item = ns.GetItemFromID(entryID)
+
+            If item IsNot Nothing Then
+                If TypeOf item Is Outlook.MailItem Then
+                    mailBody = NormalizeMailBody(DirectCast(item, Outlook.MailItem).Body)
+                ElseIf TypeOf item Is Outlook.PostItem Then
+                    mailBody = NormalizeMailBody(DirectCast(item, Outlook.PostItem).Body)
+                End If
+            End If
+        Catch ex As System.Exception
+            _dbg("GetMailBodyL3 失敗", $"{entryID}: {ex.Message}")
+        Finally
+            TryMarshalRelease(item)
+            ' TryMarshalRelease(ns)   ' 2026/04/26 by Gemini, 使用自己內部的 NameSpace 以更好封裝, 並自行TryMarshalRelease以減少GCW洩漏
+            ' 2026/05/09 by Gemini 3.0 flash: 移除內部的 Yield。改由調用端依批次執行呼吸，減少微切換開銷提升讀取性能
+        End Try
+        Return mailBody
+
+    End Function
+
     Private Async Function GetSubtreeOOM(rootFolder As Folder, includeSubF As Boolean,
                                          Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) _
                                          As Task(Of List(Of (eid As String, sid As String, fPath As String)))
@@ -3220,7 +3198,8 @@ Partial Class Form1
         Return (snap, cmx)
     End Function
 #End Region
-#Region "  ├ Legacy 保留（暫無呼叫端）"
+
+#Region "■ 07 Legacy 保留（暫無呼叫端）"
     Private Async Function GetMailCountAllAsync(folder As Folder, Optional fPath As String = "",
                                                 Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) As Task(Of Long)
         ' ---------------------------------------------------------------
@@ -3289,7 +3268,8 @@ Partial Class Form1
         Return count
     End Function
 #End Region
-#Region "  └ 其他輔助函數"
+
+#Region "■ 08 其他輔助函數"
     Private Function GetStoreNameFromPath(folderPath As String) As String
         ' 2026/06/19 by Simon/Claude: 從 \\StoreName\sub\... 取出最前面的 store 顯示名 (店名含逗號/空格/&/~/@ 皆安全, 因唯一分隔符是反斜線)
         Dim p = folderPath.TrimStart("\"c)
@@ -3518,6 +3498,66 @@ Partial Class Form1
         result = _reWhitespace.Replace(result, "")  ' 去除所有空白字元(含 "\u3000"=全形空白、Tab、換行)
         Return result.ToLowerInvariant()
     End Function
+    Private Function GetMailPreviewDetails(entryID As String, Optional folderPath As String = "") As MailPreviewDetails
+        ' ---------------------------------------------------------------
+        ' GetMailPreviewDetails — 快速預覽用一次性讀取 .HTMLBody + 寄件者信箱 + 收件者 + 附件(檔名/大小)，
+        '   仿 GetMailBody 的 RDO/OOM 分派，但不進 _cacheMailBody(該快取存的是 NormalizeMailBody 過的純文字，格式不同不能共用)
+        '   2026/07/07 by Simon/Claude: 供 ShowMailQuickPreview(HTMLBody + WebView2) 使用，只在使用者主動點開預覽時呼叫，非批次掃描路徑，故不做快取；
+        '     所有欄位從同一個 RDO/OOM 物件一次讀完，避免分次呼叫重複建物件
+        ' ---------------------------------------------------------------
+        Dim result As New MailPreviewDetails With {.Attachments = New List(Of (Name As String, Size As Long))}
+
+        If _rdo2 IsNot Nothing AndAlso folderPath <> "" Then
+            Dim store = GetRdoStore(folderPath)
+            If store IsNot Nothing Then
+                Dim rm As Redemption.RDOMail = Nothing
+                Try
+                    rm = TryCast(store.GetMessageFromID(entryID), Redemption.RDOMail)
+                    If rm IsNot Nothing Then
+                        result.Html = rm.HTMLBody
+                        result.SenderEmail = rm.SenderEmailAddress
+                        result.ToRecipients = rm.To
+                        For Each att As Redemption.RDOAttachment In rm.Attachments
+                            result.Attachments.Add((att.FileName, CLng(att.Size)))
+                        Next
+                        Return result
+                    End If
+                Catch ex As System.Exception
+                    _dbg("錯誤", $"GetMailPreviewDetails(RDO) 失敗 (ID: {entryID}): {ex.Message}")
+                Finally
+                    Dim o As Object = rm : TryMarshalRelease(o)
+                End Try
+            End If
+        End If
+
+        ' OOM fallback
+        Dim nSpace As Outlook.NameSpace = Nothing
+        Dim olItem As Object = Nothing
+        Try
+            nSpace = _olApp.GetNamespace("MAPI")
+            olItem = nSpace.GetItemFromID(entryID)
+            Dim mail = TryCast(olItem, Outlook.MailItem)
+            If mail IsNot Nothing Then
+                result.Html = mail.HTMLBody
+                result.SenderEmail = mail.SenderEmailAddress
+                result.ToRecipients = mail.To
+                For Each att As Outlook.Attachment In mail.Attachments
+                    result.Attachments.Add((att.FileName, CLng(att.Size)))
+                Next
+            End If
+        Catch ex As System.Exception
+            _dbg("錯誤", $"GetMailPreviewDetails(OOM) 失敗 (ID: {entryID}): {ex.Message}")
+        Finally
+            TryMarshalRelease(olItem)
+            TryMarshalRelease(nSpace)
+        End Try
+        Return result
+    End Function
+    Private Function RdoDateLiteral(d As Date) As String
+        ' ExecSQL 只吃 ISO 'yyyy-MM-dd HH:mm:ss' 字面值(InvariantCulture,避開 zh-TW 上午/下午問題);
+        '   8 種候選格式已在 PROBE_YEARSQL 探針全部實測過(見 memory_20260702_1409),只有帶時間的 ISO 格式可解析且不會把 23:59:59 邊界截斷成 00:00:00。
+        Return "'" & d.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) & "'"
+    End Function
     Private Sub FillCacheFromDbRow(fPath As String, row As FolderInfoDbRow, Optional skipAggregates As Boolean = False)
         ' DB 命中且 snapshot 驗證通過時，一次填滿所有欄位
         ' 使用 TryAdd：記憶體已有值 (例如另一個 Layer2.5 函數剛填入) 時不覆蓋
@@ -3555,7 +3595,6 @@ Partial Class Form1
             _cacheMonthCount.TryRemove(mk, Nothing)
         Next
     End Sub
-#End Region
 #End Region
 
     ''' GetFolderCount 兩支同型,只把插槽換成 _cacheFolderCount / Function(r) r.fc / AddressOf GetFolderCountRdo / AddressOf GetFolderCountOOM

@@ -97,9 +97,10 @@ Partial Class Form1
         ColumnHeader2 = New ColumnHeader()
         TabPage6 = New TabPage()
         ListView6 = New ListView()
+        ColumnHeader3 = New ColumnHeader()
+        ColumnHeader4 = New ColumnHeader()
         SettingGroup = New GroupBox()
         RenewCache = New Button()
-        chkClearDbMail = New CheckBox()
         SaveCache = New Button()
         RenewAttachFilename = New CheckBox()
         ClearCache = New Button()
@@ -179,11 +180,11 @@ Partial Class Form1
         TabControl1.Controls.Add(TabPage6)
         TabControl1.Controls.Add(TabPage7)
         TabControl1.Dock = DockStyle.Fill
-        TabControl1.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        TabControl1.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
         TabControl1.Location = New Point(0, 0)
         TabControl1.Margin = New Padding(4)
         TabControl1.Name = "TabControl1"
-        TabControl1.Padding = New Point(6, 6)
+        TabControl1.Padding = New Point(12, 8)
         TabControl1.SelectedIndex = 0
         TabControl1.Size = New Size(1062, 1319)
         TabControl1.TabIndex = 2
@@ -191,11 +192,11 @@ Partial Class Form1
         ' TabPage1
         ' 
         TabPage1.Controls.Add(SplitContainer1)
-        TabPage1.Location = New Point(4, 37)
+        TabPage1.Location = New Point(4, 41)
         TabPage1.Margin = New Padding(4)
         TabPage1.Name = "TabPage1"
         TabPage1.Padding = New Padding(4)
-        TabPage1.Size = New Size(1054, 1278)
+        TabPage1.Size = New Size(1054, 1274)
         TabPage1.TabIndex = 0
         TabPage1.Text = "1. 資料夾統計"
         TabPage1.UseVisualStyleBackColor = True
@@ -214,7 +215,7 @@ Partial Class Form1
         ' SplitContainer1.Panel2
         ' 
         SplitContainer1.Panel2.Controls.Add(ListView1)
-        SplitContainer1.Size = New Size(1046, 1270)
+        SplitContainer1.Size = New Size(1046, 1266)
         SplitContainer1.SplitterDistance = 317
         SplitContainer1.SplitterWidth = 5
         SplitContainer1.TabIndex = 4
@@ -227,7 +228,7 @@ Partial Class Form1
         SimTree1.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree1.Location = New Point(0, 0)
         SimTree1.Name = "SimTree1"
-        SimTree1.Size = New Size(317, 1270)
+        SimTree1.Size = New Size(317, 1266)
         SimTree1.TabIndex = 3
         ' 
         ' ListView1
@@ -239,7 +240,7 @@ Partial Class Form1
         ListView1.Location = New Point(0, 0)
         ListView1.Margin = New Padding(4)
         ListView1.Name = "ListView1"
-        ListView1.Size = New Size(724, 1270)
+        ListView1.Size = New Size(724, 1266)
         ListView1.TabIndex = 4
         ListView1.UseCompatibleStateImageBehavior = False
         ListView1.View = View.Details
@@ -276,11 +277,11 @@ Partial Class Form1
         ' TabPage2
         ' 
         TabPage2.Controls.Add(SplitContainer2)
-        TabPage2.Location = New Point(4, 37)
+        TabPage2.Location = New Point(4, 41)
         TabPage2.Margin = New Padding(4)
         TabPage2.Name = "TabPage2"
         TabPage2.Padding = New Padding(4)
-        TabPage2.Size = New Size(1054, 1278)
+        TabPage2.Size = New Size(1054, 1274)
         TabPage2.TabIndex = 1
         TabPage2.Text = "2. 統計圖表"
         TabPage2.UseVisualStyleBackColor = True
@@ -301,7 +302,7 @@ Partial Class Form1
         SplitContainer2.Panel2.Controls.Add(CheckSubFolder2)
         SplitContainer2.Panel2.Controls.Add(ListView2)
         SplitContainer2.Panel2.Controls.Add(Chart2)
-        SplitContainer2.Size = New Size(1046, 1270)
+        SplitContainer2.Size = New Size(1046, 1266)
         SplitContainer2.SplitterDistance = 317
         SplitContainer2.SplitterWidth = 5
         SplitContainer2.TabIndex = 6
@@ -314,7 +315,7 @@ Partial Class Form1
         SimTree2.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree2.Location = New Point(0, 0)
         SimTree2.Name = "SimTree2"
-        SimTree2.Size = New Size(317, 1270)
+        SimTree2.Size = New Size(317, 1266)
         SimTree2.TabIndex = 1
         ' 
         ' CheckSubFolder2
@@ -339,7 +340,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(720, 395)
+        ListView2.Size = New Size(714, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -374,18 +375,18 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(720, 857)
+        Chart2.Size = New Size(714, 853)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
         ' TabPage3
         ' 
         TabPage3.Controls.Add(SplitContainer3)
-        TabPage3.Location = New Point(4, 37)
+        TabPage3.Location = New Point(4, 41)
         TabPage3.Margin = New Padding(4)
         TabPage3.Name = "TabPage3"
         TabPage3.Padding = New Padding(4)
-        TabPage3.Size = New Size(1054, 1278)
+        TabPage3.Size = New Size(1054, 1274)
         TabPage3.TabIndex = 2
         TabPage3.Text = "3. 尋找附件檔案"
         TabPage3.UseVisualStyleBackColor = True
@@ -409,7 +410,7 @@ Partial Class Form1
         SplitContainer3.Panel2.Controls.Add(ListView3)
         SplitContainer3.Panel2.Controls.Add(GroupBox1)
         SplitContainer3.Panel2.Controls.Add(GroupBox2)
-        SplitContainer3.Size = New Size(1046, 1270)
+        SplitContainer3.Size = New Size(1046, 1266)
         SplitContainer3.SplitterDistance = 317
         SplitContainer3.SplitterWidth = 5
         SplitContainer3.TabIndex = 31
@@ -422,7 +423,7 @@ Partial Class Form1
         SimTree3.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree3.Location = New Point(0, 0)
         SimTree3.Name = "SimTree3"
-        SimTree3.Size = New Size(317, 1270)
+        SimTree3.Size = New Size(317, 1266)
         SimTree3.TabIndex = 32
         ' 
         ' CheckSubFolder3
@@ -430,7 +431,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(583, 77)
+        CheckSubFolder3.Location = New Point(577, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -444,7 +445,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(590, 10)
+        Button3.Location = New Point(584, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -527,7 +528,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(720, 1133)
+        ListView3.Size = New Size(714, 1129)
         ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -697,11 +698,11 @@ Partial Class Form1
         ' TabPage4
         ' 
         TabPage4.Controls.Add(SplitContainer4)
-        TabPage4.Location = New Point(4, 37)
+        TabPage4.Location = New Point(4, 41)
         TabPage4.Margin = New Padding(4)
         TabPage4.Name = "TabPage4"
         TabPage4.Padding = New Padding(4)
-        TabPage4.Size = New Size(1054, 1278)
+        TabPage4.Size = New Size(1054, 1274)
         TabPage4.TabIndex = 3
         TabPage4.Text = "4. 尋找系列郵件"
         TabPage4.UseVisualStyleBackColor = True
@@ -723,7 +724,7 @@ Partial Class Form1
         SplitContainer4.Panel2.Controls.Add(Listview4)
         SplitContainer4.Panel2.Controls.Add(ButtonDeleteMail)
         SplitContainer4.Panel2.Controls.Add(Button4)
-        SplitContainer4.Size = New Size(1046, 1270)
+        SplitContainer4.Size = New Size(1046, 1266)
         SplitContainer4.SplitterDistance = 317
         SplitContainer4.SplitterWidth = 5
         SplitContainer4.TabIndex = 11
@@ -738,7 +739,7 @@ Partial Class Form1
         Lv4Topic.Margin = New Padding(4)
         Lv4Topic.MultiSelect = False
         Lv4Topic.Name = "Lv4Topic"
-        Lv4Topic.Size = New Size(317, 1000)
+        Lv4Topic.Size = New Size(317, 996)
         Lv4Topic.TabIndex = 14
         Lv4Topic.UseCompatibleStateImageBehavior = False
         Lv4Topic.View = View.Details
@@ -761,7 +762,7 @@ Partial Class Form1
         SimTree4.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree4.Location = New Point(0, 0)
         SimTree4.Name = "SimTree4"
-        SimTree4.Size = New Size(317, 1270)
+        SimTree4.Size = New Size(317, 1266)
         SimTree4.TabIndex = 12
         ' 
         ' Listview4
@@ -773,7 +774,7 @@ Partial Class Form1
         Listview4.Location = New Point(0, 111)
         Listview4.Margin = New Padding(4)
         Listview4.Name = "Listview4"
-        Listview4.Size = New Size(720, 1133)
+        Listview4.Size = New Size(714, 1129)
         Listview4.TabIndex = 13
         Listview4.UseCompatibleStateImageBehavior = False
         Listview4.View = View.Details
@@ -794,7 +795,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(606, 15)
+        ButtonDeleteMail.Location = New Point(600, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -806,7 +807,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(502, 15)
+        Button4.Location = New Point(496, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -817,11 +818,11 @@ Partial Class Form1
         ' TabPage5
         ' 
         TabPage5.Controls.Add(SplitContainer5)
-        TabPage5.Location = New Point(4, 37)
+        TabPage5.Location = New Point(4, 41)
         TabPage5.Margin = New Padding(4)
         TabPage5.Name = "TabPage5"
         TabPage5.Padding = New Padding(4)
-        TabPage5.Size = New Size(1054, 1278)
+        TabPage5.Size = New Size(1054, 1274)
         TabPage5.TabIndex = 4
         TabPage5.Text = "5. 尋找重複郵件"
         TabPage5.UseVisualStyleBackColor = True
@@ -843,7 +844,7 @@ Partial Class Form1
         SplitContainer5.Panel2.Controls.Add(numThreads)
         SplitContainer5.Panel2.Controls.Add(TrackBar1)
         SplitContainer5.Panel2.Controls.Add(ListView5)
-        SplitContainer5.Size = New Size(1046, 1270)
+        SplitContainer5.Size = New Size(1046, 1266)
         SplitContainer5.SplitterDistance = 317
         SplitContainer5.SplitterWidth = 5
         SplitContainer5.TabIndex = 4
@@ -855,7 +856,7 @@ Partial Class Form1
         SimTree5.HoverColor = Color.FromArgb(CByte(229), CByte(229), CByte(229))
         SimTree5.Location = New Point(0, 0)
         SimTree5.Name = "SimTree5"
-        SimTree5.Size = New Size(317, 1270)
+        SimTree5.Size = New Size(317, 1266)
         SimTree5.TabIndex = 8
         ' 
         ' lblThreads
@@ -863,7 +864,7 @@ Partial Class Form1
         lblThreads.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         lblThreads.AutoSize = True
         lblThreads.Enabled = False
-        lblThreads.Location = New Point(584, 76)
+        lblThreads.Location = New Point(578, 76)
         lblThreads.Name = "lblThreads"
         lblThreads.Size = New Size(61, 22)
         lblThreads.TabIndex = 20
@@ -874,7 +875,7 @@ Partial Class Form1
         numThreads.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         numThreads.Enabled = False
         numThreads.Increment = New Decimal(New Integer() {2, 0, 0, 0})
-        numThreads.Location = New Point(652, 73)
+        numThreads.Location = New Point(646, 73)
         numThreads.Margin = New Padding(4)
         numThreads.Maximum = New Decimal(New Integer() {12, 0, 0, 0})
         numThreads.Name = "numThreads"
@@ -926,11 +927,11 @@ Partial Class Form1
         TabPage6.Controls.Add(ListView6)
         TabPage6.Controls.Add(SettingGroup)
         TabPage6.Controls.Add(DebugGroup)
-        TabPage6.Location = New Point(4, 37)
+        TabPage6.Location = New Point(4, 41)
         TabPage6.Margin = New Padding(4)
         TabPage6.Name = "TabPage6"
         TabPage6.Padding = New Padding(4)
-        TabPage6.Size = New Size(1054, 1278)
+        TabPage6.Size = New Size(1054, 1274)
         TabPage6.TabIndex = 5
         TabPage6.Text = "6. Setting"
         TabPage6.UseVisualStyleBackColor = True
@@ -938,7 +939,9 @@ Partial Class Form1
         ' ListView6
         ' 
         ListView6.Activation = ItemActivation.OneClick
+        ListView6.BackColor = Color.WhiteSmoke
         ListView6.BorderStyle = BorderStyle.None
+        ListView6.Columns.AddRange(New ColumnHeader() {ColumnHeader3, ColumnHeader4})
         ListView6.Font = New Font("Microsoft JhengHei UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
         ListView6.ForeColor = Color.DimGray
         ListView6.FullRowSelect = True
@@ -947,16 +950,26 @@ Partial Class Form1
         ListView6.Name = "ListView6"
         ListView6.Scrollable = False
         ListView6.ShowGroups = False
-        ListView6.Size = New Size(360, 860)
+        ListView6.Size = New Size(360, 1003)
         ListView6.TabIndex = 17
         ListView6.TabStop = False
         ListView6.UseCompatibleStateImageBehavior = False
         ListView6.View = View.Details
         ' 
+        ' ColumnHeader3
+        ' 
+        ColumnHeader3.Text = "Item"
+        ColumnHeader3.Width = 200
+        ' 
+        ' ColumnHeader4
+        ' 
+        ColumnHeader4.Text = "Value"
+        ColumnHeader4.TextAlign = HorizontalAlignment.Right
+        ColumnHeader4.Width = 120
+        ' 
         ' SettingGroup
         ' 
         SettingGroup.Controls.Add(RenewCache)
-        SettingGroup.Controls.Add(chkClearDbMail)
         SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(RenewAttachFilename)
         SettingGroup.Controls.Add(ClearCache)
@@ -985,19 +998,6 @@ Partial Class Form1
         RenewCache.TabIndex = 13
         RenewCache.Text = "更新快取"
         RenewCache.UseVisualStyleBackColor = False
-        ' 
-        ' chkClearDbMail
-        ' 
-        chkClearDbMail.AutoSize = True
-        chkClearDbMail.FlatStyle = FlatStyle.System
-        chkClearDbMail.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        chkClearDbMail.Location = New Point(307, 122)
-        chkClearDbMail.Name = "chkClearDbMail"
-        chkClearDbMail.Size = New Size(149, 24)
-        chkClearDbMail.TabIndex = 14
-        chkClearDbMail.TabStop = False
-        chkClearDbMail.Text = "同時清除dbMail"
-        chkClearDbMail.UseVisualStyleBackColor = True
         ' 
         ' SaveCache
         ' 
@@ -1151,10 +1151,10 @@ Partial Class Form1
         TabPage7.Controls.Add(LvOST)
         TabPage7.Controls.Add(SimTreePST)
         TabPage7.Controls.Add(SimTreeOST)
-        TabPage7.Location = New Point(4, 37)
+        TabPage7.Location = New Point(4, 41)
         TabPage7.Name = "TabPage7"
         TabPage7.Padding = New Padding(3)
-        TabPage7.Size = New Size(1054, 1278)
+        TabPage7.Size = New Size(1054, 1274)
         TabPage7.TabIndex = 6
         TabPage7.Text = "7. OST 解析"
         TabPage7.UseVisualStyleBackColor = True
@@ -1461,9 +1461,10 @@ Partial Class Form1
     Friend WithEvents Lv4Topic As ListView
     Friend WithEvents ColumnHeader41 As ColumnHeader
     Friend WithEvents ColumnHeader42 As ColumnHeader
-    Friend WithEvents chkClearDbMail As CheckBox
     Friend WithEvents TrackBar1 As StepTrackBar ' 改為 StepTrackBar，點擊滑軌只移一格。by Claude Sonnet 4.6, 2026/06/18
     Friend WithEvents numThreads As NumericUpDown
     Friend WithEvents lblThreads As Label
+    Friend WithEvents ColumnHeader3 As ColumnHeader
+    Friend WithEvents ColumnHeader4 As ColumnHeader
 
 End Class

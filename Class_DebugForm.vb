@@ -16,10 +16,28 @@ Imports System.Text.RegularExpressions
 '   ListView 啟用 MultiSelect=True (於 Load 覆寫 Designer 設定) ，支援 Ctrl+C 多選複製
 '
 ' 改動記錄:
-'   2026/3/6  - AddMessage2: 合併寫入與更新邏輯，BeginUpdate 批次重繪 (by Claude.ai)
-'   2026/3/22 - AddMessage3: 支援 forcedCaller 參數；WhoCallsMe 支援 skipLevels (by Grok.ai)
-'   2026/3/23 - 結構整理: 加入 Region、改名 DebugForm_Load、移除無用 Imports
-'  (by Claude)  補實作 Ctrl+C 多選複製；移除空白 SelectedIndexChanged；統一 WhoCallsMe 風格
+'   2026/03/06  - AddMessage2: 合併寫入與更新邏輯，BeginUpdate 批次重繪 (by Claude.ai)
+'   2026/03/22  - AddMessage3: 支援 forcedCaller 參數；WhoCallsMe 支援 skipLevels (by Grok.ai)
+'   2026/03/23  - 結構整理: 加入 Region、改名 DebugForm_Load、移除無用 Imports
+'                 補實作 Ctrl+C 多選複製；移除空白 SelectedIndexChanged；統一 WhoCallsMe 風格
+'   2026/04     - 全面改用 OwnerDraw 自訂繪製 (搜尋高亮、選取配對)；
+'                 Win32 樣式修復整合進 ApplyListViewFixes (移除 LabelTip 殘影、原生雙緩衝)；
+'                 WM_SIZE 攔截修最大化/還原時項目消失；搜尋歷史回溯 (Enter/↑↓)；
+'                 FindSimilarPair 支援跨批次配對；選取高亮改 O(1) 還原防 Shift 多選雪崩
+'   2026/05/09  - Resize 期間暫停 DrawSubItem 繪製，避免拖曳視窗時畫面撕裂
+'   2026/06     - Tier 3 效能優化 (預編譯 Regex、brush 重用、Brushes.Yellow 零配置)；
+'                 ActiveInstance 解決 VB 預設實例的跨執行緒 Thread-Local 陷阱；
+'                 終於修好困擾兩個月的「捲軸顯隱瞬間 ListView 項目全部消失」bug (根因是轉場週期內同步設欄寬，改用 BeginInvoke 延後設定)
+'   2026/07/11  - 效能優化大掃除 (by Simon/Sonnet 5):
+'                 Timer_Tick 選取加旗標防護，消除每 100ms 一次的隱形 O(N) 配對掃描；
+'                 FindSimilarPair 的 coreKey/isBeginRow/isEndRow 快取進 Tag (建立時算一次)，並把兩段重複的向回掃描迴圈抽成共用函式；
+'                 搜尋關鍵字/AND-OR 快取欄位化，修 AddMessage3 潛在的跨執行緒讀 UI 控制項問題；
+'                 AddMessage3 改成只組字串丟輕量 DTO，ListViewItem/Tag 建構延後到 Timer_Tick 批次處理 (呼叫端減少物件配置)；
+'                 textFullRow 改成惰性建構 (沒開搜尋就不組)；_previousTimestamp 改用 Interlocked.Exchange 修多執行緒資料競爭；
+'                 GetCallerName/ParseSearchKeywords 的 Regex 改 Shared ReadOnly + Compiled；
+'                 順手清掉 DrawSubItem 死配置、RefreshSearchCache 多餘 BeginUpdate、DeleteSelectedItems 大量刪除崩潰
+'   2026/07/11  - 修正上述效能優化的副作用: Timer_Tick 自動選取新結束行時 _suppressPairing 把配對高亮整段吃掉 (原意只想省掉 Clear+Select 各觸發一次的重複掃描)，
+'                 導致新行不會自動配對藍底，要使用者手動再點一次才出現。抽出 ApplyPairHighlight 共用函式，自動選取後手動呼叫一次 (只算一次，維持原效能目標)
 '
 ' ==============================================================
 
@@ -29,13 +47,13 @@ Public Class DebugForm
     '' 2026/04/18 by Claude: 與 Form1 相同的雙緩衝設定
     '' DebugForm 開啟時主要卡頓來源是 Timer_Tick 高頻觸發 BeginUpdate/EndUpdate + EnsureVisible，
     '' 這兩項設定可改善切換焦點與 Resize 時的撕裂感，但無法根治高頻更新本身的開銷。
-    'Protected Overrides ReadOnly Property CreateParams As CreateParams
-    '    Get
-    '        Dim cp As CreateParams = MyBase.CreateParams
-    '        cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED：子控制項合成層雙緩衝
-    '        Return cp
-    '    End Get
-    'End Property
+    Protected Overrides ReadOnly Property CreateParams As CreateParams
+        Get
+            Dim cp As CreateParams = MyBase.CreateParams
+            cp.ExStyle = cp.ExStyle Or &H2000000    ' WS_EX_COMPOSITED：子控制項合成層雙緩衝
+            Return cp
+        End Get
+    End Property
     Protected Overrides Sub OnLoad(e As EventArgs)
         Me.DoubleBuffered = True    ' Form 自身 WM_PAINT 雙緩衝，與 WS_EX_COMPOSITED 互補無衝突
         MyBase.OnLoad(e)
@@ -168,7 +186,7 @@ Public Class DebugForm
 
         '' 2026/04/01 by Gemini: 恢復 ListView 內建雙緩衝設置
         ''   此設定可避免 AddMessage3 (Timer 批次新增) 時產生的背景擦除閃爍。
-        '' 2026/6/19 關閉此設定，因為已經在 ApplyListViewFixes() 中啟用 LVS_EX_DOUBLEBUFFER, 二者重疊是多餘的。
+        '' 2026/06/19 關閉此設定，因為已經在 ApplyListViewFixes() 中啟用 LVS_EX_DOUBLEBUFFER, 二者重疊是多餘的。
         'Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
         'If pi IsNot Nothing Then pi.SetValue(lvwDebug, True, Nothing)
 
@@ -240,11 +258,11 @@ Public Class DebugForm
         ' 2026/3/28 by Gemini: 監聽 lvwDebug 本身的 ClientSizeChanged 事件，
         ' 無論何時 ListView 可用空間改變 (Dock 佈局結算、表單 Resize、SyncDebugFormResize)，都自動重算欄寬, 不再需要猜延遲值或一次性 Timer
         ' by Gemini, 2026/03/29: 右鍵管理選單 (只建立一次，不重複 AddHandler)
-        Dim ctx As New ContextMenuStrip()
-        ctx.Items.Add("計算選取耗時", Nothing, AddressOf CalculateSelectedTimeSpan)
-        ctx.Items.Add("刪除選取項目", Nothing, AddressOf DeleteSelectedItems)
-        ctx.Items.Add("清除所有項目", Nothing, Sub(s, ev) lvwDebug.Items.Clear())
-        lvwDebug.ContextMenuStrip = ctx
+        Dim ctxDebug As New ContextMenuStrip()
+        ctxDebug.Items.Add("計算選取耗時(&T)", Nothing, AddressOf CalculateSelectedTimeSpan)
+        ctxDebug.Items.Add("刪除選取項目(&D)", Nothing, AddressOf DeleteSelectedItems)
+        ctxDebug.Items.Add("清除所有項目(&C)", Nothing, Sub(s, ev) lvwDebug.Items.Clear())
+        lvwDebug.ContextMenuStrip = ctxDebug
 
         ' 💡 2026/04/11 by Gemini: 原生 Header 粗體化優化 (不破壞 MouseOver 顏色變化)
         ' 直接透過 Win32 套用字型，比 OwnerDraw 更穩定且保留原生互動。
@@ -261,7 +279,7 @@ Public Class DebugForm
         ' 💡 2026/04/13 by Gemini 3 Flash: 執行 ListView 樣式修復 (原放在 Shown 的邏輯現已整合進 ApplyListViewFixes)
         ApplyListViewFixes()
 
-        QueueTimer.Interval = 100   ' 2026/6/19 by simon: 啟動完成後把更新間隔減慢為每 100ms 清空一次message queue
+        QueueTimer.Interval = 50   ' 2026/06/19 by simon: 啟動完成後把更新間隔減慢為每 100ms 清空一次message queue
 
     End Sub
     Private Sub DebugForm_FormClosed(sender As Object, e As FormClosedEventArgs) Handles Me.FormClosed
@@ -487,12 +505,17 @@ Public Class DebugForm
 
                     ' 2026/04/09 by Gemini: 修正游標前進但舊選取殘留的問題：
                     '   由於已開啟 MultiSelect=True，直接設 Selected=True 會變成加選，因此需先手動清除前次的選取，再設定最後一項，並賦予 Focused 確保游標真正前進
-                    ' 2026/07/11 by Simon/Sonnet 5: 用 _suppressPairing 包住這段自動捲動選取，避免每次 Timer_Tick 都觸發 ItemSelectionChanged → FindSimilarPair 的 O(N) 配對掃描 (原本每 100ms 一次)
+                    ' 2026/07/11 by Simon/Sonnet 5: 用 _suppressPairing 包住這段自動捲動選取，避免 Clear()+Selected=True 各自觸發一次 ItemSelectionChanged → FindSimilarPair 的 O(N) 配對掃描 (雙倍重複掃描)
                     _suppressPairing = True
                     .SelectedItems.Clear()
                     lastItem.Selected = True
                     lastItem.Focused = True
                     _suppressPairing = False
+
+                    ' 2026/07/11 補: 上面整段被 _suppressPairing 包住後，ItemSelectionChanged 完全不會執行配對掃描，
+                    ' 導致新增的「結束」行被自動選取時，配對的「開始」行不會自動標記藍底，要使用者手動再點一次才會出現。
+                    ' 這裡在自動選取後手動呼叫一次 (只跑一次，不是每次事件各跑一次)，恢復自動配對高亮同時維持只算一次的效能。
+                    ApplyPairHighlight(lastItem)
                 End If
             End With
         End If
@@ -552,13 +575,19 @@ Public Class DebugForm
             Return
         End If
 
+        ApplyPairHighlight(e.Item)
+
+    End Sub
+    Private Sub ApplyPairHighlight(selectedItem As ListViewItem)
+        ' 2026/07/11 by Simon/Sonnet 5: 從 lvwDebug_ItemSelectionChanged 抽出，
+        ' 讓 Timer_Tick 自動捲動選取新項目時也能手動呼叫一次，補回被 _suppressPairing 吃掉的自動配對高亮 (見上方呼叫處註解)
+
         ' O(1) 還原上次標記的顏色 (現在改為只記錄並稍後 Invalidate，不再直接塞 Color.White)
         ' 只針對「上一筆」被高亮的項目進行處理，不走全表掃描，準備稍後進行快狀局部重繪。
         Dim oldPair As ListViewItem = _lastHighlightedPair
         _lastHighlightedPair = Nothing
 
         ' 雙向配對搜尋 (支援巢狀 Stack 計數)
-        Dim selectedItem As ListViewItem = e.Item
         Dim newPair As ListViewItem = FindSimilarPair(selectedItem)
         If newPair IsNot Nothing Then _lastHighlightedPair = newPair ' 記住這次標記，下次進來時只需還原這一個
 
@@ -980,8 +1009,14 @@ Public Class DebugForm
 
         If isBegin Then
             ' 向下搜尋配對的「結束」
+            ' 2026/07/11 by Simon/Sonnet 5: 已確認這段迴圈存取模式沒有性能/GC 疑慮，下次不用再查:
+            '   - lvwDebug.Items 是快取住的物件 (WinForms 內部只 New 一次)，Items(i) 是受管理陣列的 O(1) 索引，不會呼叫進 native 控制項
+            '   - item.Tag 是欄位讀取，DirectCast 到 DebugItemTag(class) 不會 boxing
+            '   - VB 的 For i = a To b 語意是迴圈開始前只算一次 a/b，Items.Count 不會每輪重算
+            '   - IsContentSimilar 現在只剩 String.Equals/Contains，不配置記憶體
+            '   真正的舊 GC 熱點是迴圈內呼叫 RemoveBeginEnd() 現場拆字串，已在 coreKey 快取進 Tag 後解決 (見上方註解)。
+            '   剩下的是純 CPU 的 O(N) 線性掃描，只在使用者點選/雙擊/「結束」訊息進來時觸發，不是每 frame 都跑。
             For i As Integer = selectedItem.Index + 1 To lvwDebug.Items.Count - 1
-                ' todo: debug: 這裡一直存取物件不會有性能問題嗎? 改成 with lvwDebug? OR??
                 Dim item As ListViewItem = lvwDebug.Items(i)
                 Dim itemTag = DirectCast(item.Tag, DebugItemTag)
                 If IsContentSimilar(coreName, itemTag.coreKey) Then
@@ -1100,41 +1135,7 @@ Public Class DebugForm
         'lvwDebug.EndUpdate()
 
     End Sub
-    Private Sub TriggerItemAddedEvent(newItem As ListViewItem)
-        ' 觸發項目新增事件
-        Task.Run(Async Function()
-                     Await OnItemAddedAsync(newItem)
-                 End Function)
 
-    End Sub
-    Private Async Function OnItemAddedAsync(newItem As ListViewItem) As Task
-        ' todo: 處理項目新增的非同步方法
-        Await Task.Yield()
-        'Dim timeNow As Date = Now
-        'Dim timeSpan As TimeSpan = timeNow - previousTimestamp
-        'If Me.InvokeRequired Then
-        '    Me.Invoke(New Action(Sub() UpdateListViewItem(newItem, timeNow, timeSpan)))
-        'Else
-        '    UpdateListViewItem(newItem, timeNow, timeSpan)
-        'End If
-        'previousTimestamp = timeNow
-
-    End Function
-    Private Sub UpdateListViewItem(newItem As ListViewItem, currentTimestamp As Date, timeSpan As TimeSpan)
-        ' 更新 ListView 項目的方法
-        lvwDebug.BeginUpdate()
-        With newItem
-            .SubItems.Add(currentTimestamp.ToString("HH:mm:ss.ff"))
-            '.SubItems.Add(timeSpan.TotalSeconds.ToString("F6"))            ' 顯示秒, 到小數點後六位
-            .SubItems.Add(timeSpan.TotalMilliseconds.ToString("#,##0.00  ")) ' 顯示ms, 到小數點後三位
-            .EnsureVisible()
-            .Tag = currentTimestamp
-            '.SubItems(0).Tag = timeNow
-            '.SubItems(1).Tag = timeSpan
-        End With
-        lvwDebug.EndUpdate()
-
-    End Sub
 #End Region
 
 End Class

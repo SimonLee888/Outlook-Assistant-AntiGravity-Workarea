@@ -1,6 +1,5 @@
 ﻿Imports System.Collections.Concurrent
 Imports System.Threading
-Imports Microsoft.Data.Sqlite
 Imports Microsoft.Office.Interop
 Imports Microsoft.Office.Interop.Outlook
 
@@ -35,18 +34,6 @@ Partial Class Form1
         ByVal nCmdShow As Integer) As Boolean
     End Function
     <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function LockWindowUpdate(
-        ByVal hWnd As IntPtr) As Boolean
-    End Function
-    <Runtime.InteropServices.DllImport("user32.dll")>
-    Private Shared Function RedrawWindow(
-        ByVal hWnd As IntPtr,
-        ByVal lprcUpdate As IntPtr,
-        ByVal hrgnUpdate As IntPtr,
-        ByVal flags As UInteger) As Boolean
-    End Function
-
-    <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function PostMessage(
         ByVal hWnd As IntPtr,
         ByVal msg As Integer,
@@ -62,6 +49,22 @@ Partial Class Form1
         ByVal cx As Integer,
         ByVal cy As Integer,
         ByVal uFlags As Integer) As Boolean
+    End Function
+
+    ' 2026/07/11 by Simon/Sonnet 5: 供 RDO init 完成後判斷前景視窗是否被 EULA 收尾動作誤搶走焦點 (見 InitRdoSessionWithoutEULA)
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function GetForegroundWindow() As IntPtr
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function LockWindowUpdate(
+        ByVal hWnd As IntPtr) As Boolean
+    End Function
+    <Runtime.InteropServices.DllImport("user32.dll")>
+    Private Shared Function RedrawWindow(
+        ByVal hWnd As IntPtr,
+        ByVal lprcUpdate As IntPtr,
+        ByVal hrgnUpdate As IntPtr,
+        ByVal flags As UInteger) As Boolean
     End Function
 
     ' === 用來強制移除 SplitContainer 焦點框 ===
@@ -110,6 +113,7 @@ Partial Class Form1
         ByVal lpClassName As System.Text.StringBuilder,
         ByVal nMaxCount As Integer) As Integer
     End Function
+
     ' === 2026/07/03 by Simon/Claude Fable 5: 專職 hook 執行緒的 message pump 用 ===
     '   OUTOFCONTEXT 事件送到「安裝 hook 那條執行緒」的訊息佇列；UI 執行緒被 New RDOSession 卡住時
     '   無法 pump，事件永遠送不到 → 必須開專職執行緒自己跑 GetMessage 迴圈

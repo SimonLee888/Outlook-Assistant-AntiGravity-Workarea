@@ -1,5 +1,5 @@
-﻿Imports System.Collections.Concurrent
-Imports System.Threading
+﻿Imports System.Threading
+Imports System.Collections.Concurrent
 Imports System.Windows.Forms.DataVisualization.Charting
 Imports Microsoft.Office.Interop
 Imports Microsoft.Office.Interop.Outlook
@@ -147,10 +147,10 @@ Partial Class Form1
         '                           ComputeSize 從 .SubFolder 取資料夾；EnterSelectedFolder 從 .ParentNode 找節點
         ' ==============================================================
         ' 重構抽離, 2026/5/14 by simon
-        '   - SimTree.GetDedupedSelection : 父子去重，確保同時選中父資料夾與子資料夾時不重複計算, 可重複用於F5 Refresh
-        '                                   (2026/07/10 由本檔 GetDeDupedNodes 內建進 SimTree，舊函數移至 Module_Win32API.vb 備用待刪區)
-        '   - CollectTab1FolderInfo : 非同步計算統計數字，支援一般模式與 F5 強制刷新模式
-        '   - RenderLv1             : 將計算好的 ListViewItem 清單更新至 ListView1，包含雙緩衝優化與過期狀態清理
+        '   - SimTree.GetDedupedSelection   : 父子去重，確保同時選中父資料夾與子資料夾時不重複計算, 可重複用於F5 Refresh
+        '                                     (2026/07/10 由本檔 GetDeDupedNodes 內建進 SimTree，舊函數移至 Module_Win32API.vb 備用待刪區)
+        '   - CollectTab1FolderInfo         : 非同步計算統計數字，支援一般模式與 F5 強制刷新模式
+        '   - RenderLv1                     : 將計算好的 ListViewItem 清單更新至 ListView1，包含雙緩衝優化與過期狀態清理
         ' ==============================================================
         _dbg("開始") : Dim sw As Stopwatch = Stopwatch.StartNew()  ' by Claude Sonnet 4.6, 2026/06/07
 
@@ -411,10 +411,17 @@ Partial Class Form1
         Dim rootMca As Long = Await GetMailCountAllOOM(folder, skipCache:=True, cToken:=cToken)
         Dim rootFca As Long = Await GetFolderCountAllOOM(folder, skipCache:=True, cToken:=cToken)
 
-        ' 更新快取
-        _cacheMailCount(rootPath) = rootMc : _cacheMailCountAll(rootPath) = rootMca
-        _cacheFolderCount(rootPath) = rootFc : _cacheFolderCountAll(rootPath) = rootFca
-        InvalidateStaleMailInfoByFreshMc(rootPath, rootMc)   ' 2026/07/11 [F5串行化 補遺]: 以剛取得的真實 mc 手術式失效過期的 _cacheMailInfo
+        ' 2026/07/11 by Simon/Claude Opus 4.8 [F5-ESC 修復b 配套]: GetXxxCountAllOOM 把 OCE 吞掉轉 -1 (契約: 取消時呼叫端不得寫快取，
+        '   見該函數 cToken 註解)。ESC 修好後取消會真的發生 — 這裡把取消升級回 OCE 提早離場，交給 ForceLv1Refresh 的 Catch OCE；
+        '   再以 >=0 守門，取消/讀取失敗的 -1 一律不寫入快取 (原寫法無守門，-1 會毒化 _cacheMailCountAll 等字典)。
+        cToken.ThrowIfCancellationRequested()
+
+        ' 更新快取 (>=0 守門: -1 = 失敗語意，不入快取)
+        If rootMc >= 0 Then _cacheMailCount(rootPath) = rootMc
+        If rootMca >= 0 Then _cacheMailCountAll(rootPath) = rootMca
+        If rootFc >= 0 Then _cacheFolderCount(rootPath) = rootFc
+        If rootFca >= 0 Then _cacheFolderCountAll(rootPath) = rootFca
+        If rootMc >= 0 Then InvalidateStaleMailInfoByFreshMc(rootPath, rootMc)   ' 2026/07/11 [F5串行化 補遺]: 以剛取得的真實 mc 手術式失效過期的 _cacheMailInfo (-1 失敗值不可拿來比對 Snap)
 
         Dim rows As New List(Of FolderBfsEntry) From {New FolderBfsEntry With {.Folder = folder, .FolderPath = rootPath,
                                                                                .DirectMailCount = rootMc, .TotalMailCount = rootMca, .TotalSubCount = rootFca}}
@@ -432,16 +439,22 @@ Partial Class Form1
             Dim childPath As String = sf.fPath
             ' 2026/06/13 by Simon/Claude Opus 4.8: 同上，子資料夾亦以 skipCache:=True 強制重掃
             ' 2026/06/23 by Simon/Claude: 同上,F5 子夾改 proxy skipCache
-            _cacheMailCount(childPath) = GetMailCount(child, childPath, skipCache:=True)
-            _cacheFolderCount(childPath) = GetFolderCount(child, childPath, skipCache:=True)
-            _cacheMailCountAll(childPath) = Await GetMailCountAllOOM(child, skipCache:=True, cToken:=cToken)
-            _cacheFolderCountAll(childPath) = Await GetFolderCountAllOOM(child, skipCache:=True, cToken:=cToken)
-            InvalidateStaleMailInfoByFreshMc(childPath, _cacheMailCount(childPath))   ' 2026/07/11 [F5串行化 補遺]: 同 root，手術式失效
+            ' 2026/07/11 [F5-ESC 修復b 配套]: 同 root — 先收局部變數，取消升級回 OCE，>=0 守門後才寫快取，rows 直接用局部值 (原寫法回讀快取字典，守門後缺鍵會 KeyNotFound)
+            Dim cMc As Long = GetMailCount(child, childPath, skipCache:=True)
+            Dim cFc As Long = GetFolderCount(child, childPath, skipCache:=True)
+            Dim cMca As Long = Await GetMailCountAllOOM(child, skipCache:=True, cToken:=cToken)
+            Dim cFca As Long = Await GetFolderCountAllOOM(child, skipCache:=True, cToken:=cToken)
+            cToken.ThrowIfCancellationRequested()
+            If cMc >= 0 Then _cacheMailCount(childPath) = cMc
+            If cFc >= 0 Then _cacheFolderCount(childPath) = cFc
+            If cMca >= 0 Then _cacheMailCountAll(childPath) = cMca
+            If cFca >= 0 Then _cacheFolderCountAll(childPath) = cFca
+            If cMc >= 0 Then InvalidateStaleMailInfoByFreshMc(childPath, cMc)   ' 2026/07/11 [F5串行化 補遺]: 同 root，手術式失效
 
             rows.Add(New FolderBfsEntry With {.Folder = child, .FolderPath = childPath,
-                                              .DirectMailCount = _cacheMailCount(childPath),
-                                              .TotalMailCount = _cacheMailCountAll(childPath),
-                                              .TotalSubCount = _cacheFolderCountAll(childPath)})
+                                              .DirectMailCount = cMc,
+                                              .TotalMailCount = cMca,
+                                              .TotalSubCount = cFca})
         Next
         Return rows
     End Function
@@ -974,7 +987,6 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  └ 輔助函數"
-
     Private Sub SelectFolderInListView(lv As ListView, targetFolder As Folder)
         ''' <summary>
         ''' 在指定的 ListView 中尋找並選取對應的 Folder 項目

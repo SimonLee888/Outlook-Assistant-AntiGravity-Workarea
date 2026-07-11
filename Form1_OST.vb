@@ -306,14 +306,14 @@ Partial Class Form1
             Dim lvItems As New List(Of ListViewItem)
             For Each item In items
                 ' 欄位順序: 主旨, 郵件大小(Bytes), 收到日期(yyyy/MM/dd), 寄件者, EntryID(NID)
-                Dim lvi As New ListViewItem(item.Subject)
-                lvi.SubItems.Add(item.SizeBytes.ToString("N0"))
-                lvi.SubItems.Add(If(item.ReceivedTime > DateTime.MinValue, item.ReceivedTime.ToString("yyyy/MM/dd"), ""))
-                lvi.SubItems.Add(item.SenderName)
-                lvi.SubItems.Add(item.Nid.ToString())
+                Dim lvi As New ListViewItem(Item.Subject)
+                lvi.SubItems.Add(Item.SizeBytes.ToString("N0"))
+                lvi.SubItems.Add(If(Item.ReceivedTime > DateTime.MinValue, Item.ReceivedTime.ToString("yyyy/MM/dd"), ""))
+                lvi.SubItems.Add(Item.SenderName)
+                lvi.SubItems.Add(Item.Nid.ToString())
 
-                If Not item.IsRead Then lvi.Font = New Font(LvOST.Font, FontStyle.Bold)
-                lvi.Tag = item ' 存入 Tag 以便開啟
+                If Not Item.IsRead Then lvi.Font = New Font(LvOST.Font, FontStyle.Bold)
+                lvi.Tag = Item ' 存入 Tag 以便開啟
                 lvItems.Add(lvi)
             Next
             LvOST.Items.AddRange(lvItems.ToArray())

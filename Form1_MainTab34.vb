@@ -358,7 +358,7 @@ Partial Class Form1
                                "大量開啟確認", MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.No Then Return
         End If
 
-        ' 2026/07/07 by Simon/Claude: 原 todo「用 RDO 自己的 inspector 預覽避開 WordMail」已實測證偽 ——
+        ' 2026/07/07 by Simon/Claude: 原本要用 RDO 自己的 inspector 預覽避開 WordMail」已實測確認不行
         '   RDOMail.Display() 官方文件證實一律呼叫真正的 MAPI form(WordMail Inspector)，20封37.9s 跟這裡的 OOM Display() 同一量級，無捷徑。
         '   真正的快速預覽路徑是 ShowMailQuickPreview(HTMLBody+WebView2，完全繞開 Display())，詳見 project_rdo_display_no_lightweight_alt 備忘。
         _dbg("開始", $"準備批次開啟 {entryIDs.Count} 封郵件")
@@ -766,9 +766,9 @@ Partial Class Form1
                 ' by Gemini 3.0 Flash, 2026/04/19: 替換為統一的底層讀取方法 (升級 L2.5)
                 Dim infoList = Await GetMailInfo(t.fPath, t.eid, t.sid, needTopic:=True, cToken:=cToken)
                 For Each item In infoList
-                    If item.Topic = "" Then Continue For ' 沒有 Conversation Topic 的信件略過
-                    If Not topicDict.ContainsKey(item.Topic) Then topicDict(item.Topic) = New List(Of MailItemInfo)()
-                    topicDict(item.Topic).Add(item.Mail)
+                    If Item.Topic = "" Then Continue For ' 沒有 Conversation Topic 的信件略過
+                    If Not topicDict.ContainsKey(Item.Topic) Then topicDict(Item.Topic) = New List(Of MailItemInfo)()
+                    topicDict(Item.Topic).Add(Item.Mail)
                 Next
                 processed += 1
 
@@ -1034,10 +1034,10 @@ Partial Class Form1
         ' 💡 關鍵修正 2：先同步標記全列表初始狀態（UI 執行緒批次寫入，不閃爍）
         lv.BeginUpdate()
         Dim lviCompareList = lv.Items.Cast(Of ListViewItem)().ToList()
-        For Each item In lviCompareList
-            If item.SubItems.Count <= 4 Then Continue For
-            Dim thisID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
-            item.SubItems(4).Text = If(thisID = baseEntryID, "Base", "計算中")
+        For Each Item In lviCompareList
+            If Item.SubItems.Count <= 4 Then Continue For
+            Dim thisID As String = If(Item.SubItems.Count > 5, Item.SubItems(5).Text, "")
+            Item.SubItems(4).Text = If(thisID = baseEntryID, "Base", "計算中")
         Next
         lv.EndUpdate()
 
@@ -1250,21 +1250,21 @@ Partial Class Form1
         ' 💡 2026/05/09 by Gemini 3.0 flash: 優化非同步頻率。每處理一批(例如 10 封)才 Yield 一次讓 UI 喘氣，減少頻繁切換的負擔
         Dim mBodyList As New List(Of (Item As ListViewItem, TargetBody As String))(chunk.Length)
         Dim processedCount As Integer = 0
-        For Each item In chunk
+        For Each Item In chunk
             If token.IsCancellationRequested Then Return
-            If item.SubItems.Count <= 4 Then Continue For
+            If Item.SubItems.Count <= 4 Then Continue For
 
-            Dim targetID As String = If(item.SubItems.Count > 5, item.SubItems(5).Text, "")
+            Dim targetID As String = If(Item.SubItems.Count > 5, Item.SubItems(5).Text, "")
             If targetID = baseEntryID OrElse String.IsNullOrEmpty(targetID) Then Continue For
 
             Dim targetPath As String = Nothing   ' 2026/07/03 by Simon/Claude: 帶 folderPath 分派 RDO(查找表建於 Lv4_SelectedIndexChanged)
             If Not pathById.TryGetValue(targetID, targetPath) Then targetPath = ""
             Dim targetBody As String = GetMailBody(targetID, targetPath)
             If String.IsNullOrEmpty(targetBody) Then
-                item.SubItems(4).Text = "失敗" : Continue For
+                Item.SubItems(4).Text = "失敗" : Continue For
             End If
 
-            mBodyList.Add((item, targetBody))
+            mBodyList.Add((Item, targetBody))
             processedCount += 1
             If processedCount Mod 10 = 0 Then Await PreciseDelay(1) ' 每 10 封釋放一次 UI 執行緒，兼顧流暢度與效率 (by Gemini 3.0 flash, 2026/05/09)
         Next

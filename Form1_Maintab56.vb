@@ -2274,6 +2274,301 @@ Partial Class Form1
     End Sub
     ' ═════════════════ PROBE_S3CANCEL ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
 
+    ' ═════════════════ PROBE_RENEWEX ↓↓↓ 整塊可刪(連同 Form1_Shown 尾端觸發行 + RenewCacheToDB 迴圈內 2 行 breadcrumb) ↓↓↓ ═════════════════
+    ' 2026/07/11 by Simon/Claude Fable 5: RenewCache 例外普查 — 找出「按一次更新快取 10 秒噴 600+ 顆 first-chance 例外」的每一個拋出點。
+    '   量法: 掛 AppDomain.FirstChanceException(看得見被 Try/Catch 吞掉的每一顆),抓拋出當下執行緒堆疊,
+    '         以「例外型別 + HRESULT + 最上兩層 App 框架」聚合成簽章;配合 RenewCacheToDB 逐夾迴圈 breadcrumb 歸因到資料夾。
+    '   流程: 等啟動就緒 → ①背景噪音基準(6s 待機) → ②Pass1 直呼 RenewCacheToDB(含隔夜 dirty)
+    '         → ③Pass2 再呼一次(穩態) → ④Pass3 完整 RenewCache_Click(含 Vacuum+RefreshAllTreeViews,重現使用者實際操作)
+    '         → ⑤微探針(不列入統計): 對 Peek 失敗夾驗證 GetProperties 批次/RDO Fields 兩條「無例外替代路徑」+ 失敗夾特徵(Store/ItemType/ContainerClass)
+    '   結果: %TEMP%\OutlookAssistant_ProbeResult_RenewEx.txt。觸發: /autoproberenewex (+ /autoclose)。
+    Private _probeRenewLines As New List(Of String)
+    Private _probeRenewArmed As Boolean
+    Private _probeRenewCurrentPath As String = ""          ' breadcrumb: RenewCacheToDB 逐夾迴圈頂端寫入,迴圈結束清空
+    Private _probeRenewTotal As Integer
+    Private _probeRenewSig As New System.Collections.Concurrent.ConcurrentDictionary(Of String, ProbeRenewSigInfo)
+    <ThreadStatic> Private Shared _probeRenewInHook As Boolean   ' first-chance 鉤子重入保護(鉤子內部自己拋例外會無限遞迴)
+
+    Private Class ProbeRenewSigInfo
+        Public Count As Integer
+        Public ReadOnly Folders As New System.Collections.Concurrent.ConcurrentDictionary(Of String, Integer)
+        Public FirstMsg As String
+        Public FirstStack As String
+    End Class
+
+    Private Sub ProbeRenewLog(s As String)
+        _probeRenewLines.Add($"{Now:HH:mm:ss.fff} {s}")
+        Try
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_RenewEx.txt"), _probeRenewLines)
+        Catch : End Try
+    End Sub
+
+    Private Shared Function ProbeRenewFrame(line As String) As String
+        ' 「   於 Outlook_Assistant.Form1.PeekFolderLastUpdateTime(Folder folder, …)」→「Form1.PeekFolderLastUpdateTime」
+        Dim i As Integer = line.IndexOf("Outlook_Assistant.", StringComparison.Ordinal)
+        If i < 0 Then Return ""
+        Dim s As String = line.Substring(i + 18)
+        Dim p As Integer = s.IndexOf("("c)
+        Return If(p > 0, s.Substring(0, p), s).Trim()
+    End Function
+
+    Private Sub ProbeRenewOnFirstChance(sender As Object, e As System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs)
+        If Not _probeRenewArmed OrElse _probeRenewInHook Then Return
+        _probeRenewInHook = True
+        Try
+            Interlocked.Increment(_probeRenewTotal)
+            Dim ex As System.Exception = e.Exception
+            ' first-chance 時 ex.StackTrace 尚未填入(例外還沒開始傳播),用 Environment.StackTrace 抓「拋出當下」堆疊 (同 PROBE_S3CANCEL)
+            Dim rawLines = Environment.StackTrace.Split(CChar(vbLf)).Select(Function(l) l.TrimEnd()).
+                           Where(Function(l) Not (l.Contains("ProbeRenewOnFirstChance") OrElse l.Contains("System.Environment") OrElse
+                                                  l.Contains("AppDomain.OnFirstChanceException") OrElse l.Contains("ExceptionDispatchInfo"))).ToList()
+            Dim appFrames = rawLines.Select(AddressOf ProbeRenewFrame).Where(Function(f) f <> "" AndAlso Not f.Contains("ProbeRenew")).Take(2).ToList()
+            Dim sig As String = $"{ex.GetType().Name} hr=0x{ex.HResult:X8} @ {If(appFrames.Count > 0, String.Join(" ← ", appFrames), "(無App框架/系統內部)")}"
+            Dim info = _probeRenewSig.GetOrAdd(sig, Function(k) New ProbeRenewSigInfo())
+            Interlocked.Increment(info.Count)
+            Dim fp As String = _probeRenewCurrentPath
+            If fp <> "" Then info.Folders.AddOrUpdate(fp, 1, Function(k, v) v + 1)
+            If info.FirstMsg Is Nothing Then
+                Dim m As String = If(ex.Message, "").Replace(vbCr, " ").Replace(vbLf, " ")
+                info.FirstMsg = If(m.Length > 220, m.Substring(0, 220), m)
+                info.FirstStack = String.Join(vbLf, rawLines.Take(12).Select(Function(l) "            " & l.Trim()))
+            End If
+        Catch
+        Finally
+            _probeRenewInHook = False
+        End Try
+    End Sub
+
+    Private Sub ProbeRenewDump(label As String)
+        Dim rank = _probeRenewSig.ToArray().OrderByDescending(Function(kv) kv.Value.Count).ToList()
+        ProbeRenewLog($"   ▼ {label}: 總例外 {_probeRenewTotal} 顆 / 簽章 {rank.Count} 種")
+        Dim shown As Integer = 0
+        For Each kv In rank
+            shown += 1
+            If shown > 25 Then ProbeRenewLog($"      …(其餘 {rank.Count - 25} 種略)") : Exit For
+            Dim fList = kv.Value.Folders.ToArray()
+            ProbeRenewLog($"      #{shown} ×{kv.Value.Count}  {kv.Key}")
+            If fList.Length > 0 Then ProbeRenewLog($"          涉及 {fList.Length} 夾: {String.Join(" , ", fList.Take(5).Select(Function(f) $"{f.Key}×{f.Value}"))}{If(fList.Length > 5, " …", "")}")
+            ProbeRenewLog($"          首例訊息: {kv.Value.FirstMsg}")
+            If Not String.IsNullOrEmpty(kv.Value.FirstStack) Then ProbeRenewLog($"          首例堆疊:{vbLf}{kv.Value.FirstStack}")
+        Next
+    End Sub
+
+    Private Sub ProbeRenewHarvest(peekFail As HashSet(Of String), resolveFail As HashSet(Of String))
+        ' 從本 pass 簽章蒐集失敗夾,供 ⑤ 微探針取樣 (Peek* = 屬性讀取失敗;RenewCacheToDB 框架直呼 = GetFolderFromID 孤兒/GetItemFromID 探活失敗)
+        For Each kv In _probeRenewSig
+            Dim isPeek As Boolean = kv.Key.Contains("PeekFolderLastUpdateTime") OrElse kv.Key.Contains("PeekLiveFolderSnapOOM") OrElse kv.Key.Contains("PeekFolderSnapCommitOOM")
+            For Each f In kv.Value.Folders.Keys
+                If isPeek Then
+                    peekFail.Add(f)
+                ElseIf kv.Key.Contains("RenewCacheToDB") Then
+                    resolveFail.Add(f)
+                End If
+            Next
+        Next
+    End Sub
+
+    Private Sub ProbeRenewReset()
+        _probeRenewSig.Clear()
+        _probeRenewTotal = 0
+    End Sub
+
+    Private Function ProbeRenewTryGetProp(f As Folder, tag As String) As String
+        Try
+            Dim v = f.PropertyAccessor.GetProperty(tag)
+            Return $"OK({If(v Is Nothing, "Nothing", v.ToString())})"
+        Catch ex As System.Exception
+            Return $"拋{ex.GetType().Name}(hr=0x{ex.HResult:X8})"
+        End Try
+    End Function
+
+    Private Sub ProbeRenewMicroProbes(peekFail As HashSet(Of String), resolveFail As HashSet(Of String))
+        ProbeRenewLog($"── ⑤ 微探針(不列入統計): Peek失敗 {peekFail.Count} 夾 / RenewCacheToDB內直呼失敗 {resolveFail.Count} 夾 (各取樣 12/8)")
+        For Each fp In peekFail.Take(12)
+            Dim ids As (eid As String, sid As String, isMail As Boolean, hasCh As Boolean) = Nothing
+            If Not _cacheFolderIDs.TryGetValue(fp, ids) Then ProbeRenewLog($"   ◇ {fp}: _cacheFolderIDs 無此夾,略過") : Continue For
+            Dim f As Folder = Nothing
+            Try : f = TryCast(_olNS.GetFolderFromID(ids.eid, ids.sid), Folder) : Catch : End Try
+            If f Is Nothing Then ProbeRenewLog($"   ◇ {fp}: OOM 解析失敗,略過") : Continue For
+
+            ' C. 失敗夾特徵 — 缺屬性是否集中於特定 Store / 資料夾類型
+            Dim itemType As String = "?" : Try : itemType = f.DefaultItemType.ToString() : Catch : End Try
+            Dim cclass As String = "(無)" : Try : cclass = CStr(f.PropertyAccessor.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x3613001F")) : Catch : End Try
+            Dim itemCnt As String = "?" : Try : itemCnt = f.Items.Count.ToString() : Catch : End Try
+            ProbeRenewLog($"   ◇ {fp}")
+            ProbeRenewLog($"      特徵: Store={GetStoreNameFromPath(fp)} | DefaultItemType={itemType} | ContainerClass={cclass} | Items={itemCnt}")
+
+            ' A. GetProperty 單發(現行寫法,重現) vs GetProperties 批次(假設: 缺屬性回錯誤元素而非拋例外)
+            ProbeRenewLog($"      GetProperty單發: CONTENT_COUNT={ProbeRenewTryGetProp(f, PR_CONTENT_COUNT)} | COMMIT_MAX={ProbeRenewTryGetProp(f, PR_LOCAL_COMMIT_TIME_MAX)}")
+            Try
+                Dim arr = DirectCast(f.PropertyAccessor.GetProperties(New Object() {PR_CONTENT_COUNT, PR_LOCAL_COMMIT_TIME_MAX}), Object())
+                Dim parts As New List(Of String)
+                For i As Integer = 0 To arr.Length - 1
+                    parts.Add($"[{i}] {If(arr(i) Is Nothing, "Nothing", arr(i).GetType().Name & "=" & arr(i).ToString())}")
+                Next
+                ProbeRenewLog($"      GetProperties批次: 未拋例外 ✅ → {String.Join(" ; ", parts)}")
+            Catch ex As System.Exception
+                ProbeRenewLog($"      GetProperties批次: 拋 {ex.GetType().Name} ❌ ({ex.Message})")
+            End Try
+
+            ' B. RDO Fields 對照 (Redemption 缺屬性慣例回 Empty/Nothing 不拋) + 解析/讀取成本
+            Try
+                Dim store As Redemption.RDOStore = GetRdoStore(fp)
+                If store Is Nothing Then
+                    ProbeRenewLog("      RDO: GetRdoStore=Nothing,略過")
+                Else
+                    Dim swR As Stopwatch = Stopwatch.StartNew()
+                    Dim rf As Redemption.RDOFolder = TryCast(store.GetFolderFromID(ids.eid), Redemption.RDOFolder)
+                    Dim tResolve As Double = swR.Elapsed.TotalMilliseconds
+                    If rf Is Nothing Then
+                        ProbeRenewLog($"      RDO: GetFolderFromID=Nothing ({tResolve:0.00}ms)")
+                    Else
+                        swR.Restart()
+                        Dim v As Object = rf.Fields(&H670A0040)
+                        Dim tField As Double = swR.Elapsed.TotalMilliseconds
+                        ProbeRenewLog($"      RDO Fields(COMMIT_MAX): {If(v Is Nothing, "Nothing", v.GetType().Name & "=" & v.ToString())} | 解析 {tResolve:0.00}ms + 讀取 {tField:0.00}ms (無例外✅)")
+                    End If
+                End If
+            Catch ex As System.Exception
+                ProbeRenewLog($"      RDO: 拋 {ex.GetType().Name} ({ex.Message})")
+            End Try
+        Next
+        For Each fp In resolveFail.Take(8)
+            ProbeRenewLog($"   ◆ RenewCacheToDB 直呼失敗夾: {fp} (孤兒 GetFolderFromID 或 GetItemFromID 探活失敗 — 對照該 pass 簽章的 hr/訊息)")
+        Next
+    End Sub
+
+    Private Async Function ProbeRenewWaitIdle(tag As String) As Task
+        Dim sw As Stopwatch = Stopwatch.StartNew()
+        Do While _isUserBusy AndAlso sw.Elapsed.TotalSeconds < 60 : Await Task.Delay(250) : Loop
+        If _isUserBusy Then ProbeRenewLog($"⚠ {tag}: 等待 idle 60s 仍 busy,continue anyway")
+    End Function
+
+    Private Async Sub ProbeRenewExAsync()
+        Dim autoClose As Boolean = Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase))
+        Dim swAll As Stopwatch = Stopwatch.StartNew()
+        ProbeRenewLog($"=== PROBE_RENEWEX 啟動 (autoClose={autoClose}) ===")
+        AddHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf ProbeRenewOnFirstChance
+        Try
+            ' ① 等啟動就緒(同 PROBE_F5TIMING 條件),上限 3 分鐘
+            Do
+                If _startupStopwatch IsNot Nothing AndAlso Not _startupStopwatch.IsRunning AndAlso
+                   _rdo2 IsNot Nothing AndAlso _olNS IsNot Nothing AndAlso ListView1.Items.Count > 0 AndAlso Not _isUserBusy Then Exit Do
+                If swAll.Elapsed.TotalMinutes > 3 Then ProbeRenewLog("⚠ 等待啟動就緒逾時 3 分鐘,中止") : Return
+                Await Task.Delay(500)
+            Loop
+            ProbeRenewLog($"啟動就緒 @ +{swAll.Elapsed.TotalSeconds:0.0}s (_cacheFolderIDs {_cacheFolderIDs.Count} 夾)")
+            Await Task.Delay(2000)
+
+            ' ② 背景噪音基準: 什麼都不做,armed 6 秒 — 區分「renew 造成」vs「本來就在噴」
+            _probeRenewArmed = True
+            Await Task.Delay(6000)
+            _probeRenewArmed = False
+            ProbeRenewLog($"── 基準(6s 待機): 例外 {_probeRenewTotal} 顆")
+            If _probeRenewTotal > 0 Then ProbeRenewDump("基準 census")
+            ProbeRenewReset()
+
+            Dim peekFail As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            Dim resolveFail As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+
+            ' ③ Pass1: 直呼 RenewCacheToDB (含隔夜累積 dirty)
+            Await ProbeRenewWaitIdle("Pass1")
+            Dim sum1 As String = "" : Dim sw1 As Stopwatch = Stopwatch.StartNew()
+            _probeRenewArmed = True
+            Try : sum1 = Await RenewCacheToDB() : Finally : _probeRenewArmed = False : End Try
+            sw1.Stop()
+            ProbeRenewLog($"── Pass1 RenewCacheToDB(隔夜dirty): {sw1.Elapsed.TotalSeconds:0.00}s | {sum1}")
+            ProbeRenewDump("Pass1 census")
+            ProbeRenewHarvest(peekFail, resolveFail)
+            ProbeRenewReset()
+            Await Task.Delay(1500)
+
+            ' ④ Pass2: 再呼一次 (穩態,理論上零 dirty — 此處殘餘例外 = 每夾每次必噴的系統性來源)
+            Await ProbeRenewWaitIdle("Pass2")
+            Dim sum2 As String = "" : Dim sw2 As Stopwatch = Stopwatch.StartNew()
+            _probeRenewArmed = True
+            Try : sum2 = Await RenewCacheToDB() : Finally : _probeRenewArmed = False : End Try
+            sw2.Stop()
+            Dim pass2Total As Integer = _probeRenewTotal
+            ProbeRenewLog($"── Pass2 RenewCacheToDB(穩態): {sw2.Elapsed.TotalSeconds:0.00}s | {sum2}")
+            ProbeRenewDump("Pass2 census")
+            ProbeRenewHarvest(peekFail, resolveFail)
+            ProbeRenewReset()
+            Await Task.Delay(1500)
+
+            ' ⑤ Pass3: 完整按鈕路徑 (重現使用者實際操作: RenewCacheToDB + Vacuum + RefreshLv6DbStats + RefreshAllTreeViews)
+            Await ProbeRenewWaitIdle("Pass3")
+            PgrsBar1.Text = ""
+            Dim sw3 As Stopwatch = Stopwatch.StartNew()
+            _probeRenewArmed = True
+            RenewCache_Click(RenewCache, EventArgs.Empty)
+            Do
+                Await Task.Delay(250)
+                Dim t As String = PgrsBar1.Text
+                If t.StartsWith("RenewCache 完成") OrElse t.StartsWith("RenewCache 已由使用者中斷") OrElse t.StartsWith("RenewCache 失敗") Then Exit Do
+                If sw3.Elapsed.TotalMinutes > 8 Then ProbeRenewLog("⚠ Pass3 看門狗 8 分鐘,強制往下") : Exit Do
+            Loop
+            Await Task.Delay(1500)   ' 讓 RefreshAllTreeViews 尾端的殘餘例外也入列
+            _probeRenewArmed = False
+            sw3.Stop()
+            ProbeRenewLog($"── Pass3 RenewCache_Click(完整按鈕): {sw3.Elapsed.TotalSeconds:0.00}s | Bar1={PgrsBar1.Text}")
+            ProbeRenewDump("Pass3 census")
+            ProbeRenewHarvest(peekFail, resolveFail)
+
+            ' ⑥ 微探針: 驗證無例外替代路徑 + 失敗夾特徵
+            ProbeRenewMicroProbes(peekFail, resolveFail)
+
+            ' ⑦ Test D: 毒化重掃迴歸驗證 — dirty 偵測/狀況A修復在 GetProperties 批次讀重構後仍正常。
+            '   用現成 PoisonFolderSnapDb(自癒機制)只毒 DB snapshot,不碰任何郵件資料;renew 應恰好判定這 2 夾 dirty
+            '   走狀況A全量重讀,重讀後統計必須與毒化前一致(內容沒變)、全程 0 例外、再 renew 一次應回 0 異動(收斂)。
+            Dim mailPick As String = "" : Dim nonMailPick As String = ""
+            For Each kv In _cacheFolderIDs.ToArray()
+                Dim mcTmp As Long = -1
+                If kv.Value.isMail AndAlso mailPick = "" AndAlso _cacheMailCount.TryGetValue(kv.Key, mcTmp) AndAlso mcTmp >= 10 AndAlso mcTmp <= 500 Then mailPick = kv.Key
+                If Not kv.Value.isMail AndAlso nonMailPick = "" AndAlso _cacheMailCount.TryGetValue(kv.Key, mcTmp) AndAlso mcTmp > 0 Then nonMailPick = kv.Key
+                If mailPick <> "" AndAlso nonMailPick <> "" Then Exit For
+            Next
+            If mailPick = "" OrElse nonMailPick = "" Then
+                ProbeRenewLog($"── ⑦ Test D: 取樣失敗(mail=[{mailPick}] nonMail=[{nonMailPick}]),略過")
+            Else
+                Dim mcBefore As Long = -1 : _cacheMailCount.TryGetValue(mailPick, mcBefore)
+                Dim nmBefore As Long = -1 : _cacheMailCount.TryGetValue(nonMailPick, nmBefore)
+                ProbeRenewLog($"── ⑦ Test D: 毒化 {mailPick}(mc={mcBefore}) + {nonMailPick}(mc={nmBefore})")
+                PoisonFolderSnapDb(mailPick)
+                PoisonFolderSnapDb(nonMailPick)
+                Await ProbeRenewWaitIdle("TestD")
+                Dim sumD As String = "" : Dim swD As Stopwatch = Stopwatch.StartNew()
+                _probeRenewArmed = True
+                Try : sumD = Await RenewCacheToDB() : Finally : _probeRenewArmed = False : End Try
+                swD.Stop()
+                Dim mcAfter As Long = -1 : _cacheMailCount.TryGetValue(mailPick, mcAfter)
+                Dim nmAfter As Long = -1 : _cacheMailCount.TryGetValue(nonMailPick, nmAfter)
+                ProbeRenewLog($"   Test D renew: {swD.Elapsed.TotalSeconds:0.00}s | {sumD}")
+                ProbeRenewLog($"   Test D 判定: 應 2 夾異動 → {If(sumD.Contains("2 夾異動"), "✅", "❌ 沒抓到毒化夾,dirty 偵測疑似壞掉!")}")
+                ProbeRenewLog($"   Test D 統計對帳: mail {mcBefore}→{mcAfter} {If(mcBefore = mcAfter, "✅一致", "❌不一致")} | nonMail {nmBefore}→{nmAfter} {If(nmBefore = nmAfter, "✅一致", "❌不一致")}")
+                ProbeRenewLog($"   Test D 例外: {_probeRenewTotal} 顆 {If(_probeRenewTotal = 0, "✅", "(見 census)")}")
+                If _probeRenewTotal > 0 Then ProbeRenewDump("TestD census")
+                ProbeRenewReset()
+                Dim sumD2 As String = ""
+                _probeRenewArmed = True
+                Try : sumD2 = Await RenewCacheToDB() : Finally : _probeRenewArmed = False : End Try
+                ProbeRenewLog($"   Test D 收斂驗證(再renew): {sumD2}")
+                ProbeRenewLog($"   Test D 收斂判定: 應 0 夾異動 → {If(sumD2.Contains("0 夾異動"), "✅", "❌ 未收斂")} | 例外 {_probeRenewTotal} 顆 {If(_probeRenewTotal = 0, "✅", "")}")
+                If _probeRenewTotal > 0 Then ProbeRenewDump("TestD2 census")
+                ProbeRenewReset()
+            End If
+
+            ProbeRenewLog($"=== 判定提示: Pass2(穩態) 例外 {pass2Total} 顆 — 若 >>0 且集中於 Peek*/RenewCacheToDB 框架,即為「每夾每次必噴」的系統性來源 ===")
+        Catch ex As System.Exception
+            ProbeRenewLog("探針例外: " & ex.ToString())
+        Finally
+            RemoveHandler AppDomain.CurrentDomain.FirstChanceException, AddressOf ProbeRenewOnFirstChance
+            ProbeRenewLog($"=== PROBE_RENEWEX 結束,全程 {swAll.Elapsed.TotalSeconds:0.0}s ===")
+            If autoClose Then Me.BeginInvoke(Sub() Me.Close())
+        End Try
+    End Sub
+    ' ═════════════════ PROBE_RENEWEX ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
+
 #End Region
 #End Region
 

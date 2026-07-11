@@ -1561,10 +1561,17 @@ Partial Class Form1
         Static allowedTypes As Outlook.OlItemType() = {Outlook.OlItemType.olMailItem,
                                                        Outlook.OlItemType.olPostItem}
         Try
+            ' 2026/07/11 by Simon/Claude Fable 5 [RenewCache 例外歸零]: 兩個 GetProperty 改單次 GetProperties 批次 —
+            '   GetProperty 遇缺屬性每夾拋 COMException 0x8004010F(PROBE_RENEWEX 實測冷快取首次 Renew 在此連噴 323 顆:
+            '   ~310 夾缺 PR_ATTR_HIDDEN + 少數缺 PR_CONTAINER_CLASS)；批次版缺屬性回 Int32 錯誤碼不拋例外。
+            '   判讀失敗維持原保守預設(hidden=False/cc="")，語意與原兩個吞例外 Try/Catch 完全等價，並少一次 COM 往返。
             Dim isHidden As Boolean = False
-            Try : isHidden = CBool(folder.PropertyAccessor.GetProperty(PR_ATTR_HIDDEN)) : Catch : End Try  ' 讀不到視為未隱藏，維持原保守預設
             Dim cc As String = ""
-            Try : cc = CStr(folder.PropertyAccessor.GetProperty(PR_CONTAINER_CLASS)) : Catch : End Try     ' 讀不到視為空字串，CcIsMail 空→mail 保守預設
+            Try
+                Dim arr = DirectCast(folder.PropertyAccessor.GetProperties(New Object() {PR_ATTR_HIDDEN, PR_CONTAINER_CLASS}), Object())
+                If TypeOf arr(0) Is Boolean Then isHidden = CBool(arr(0))   ' 讀不到(Int32錯誤碼)視為未隱藏，維持原保守預設
+                If TypeOf arr(1) Is String Then cc = CStr(arr(1))           ' 讀不到視為空字串，CcIsMail 空→mail 保守預設
+            Catch : End Try
             Dim itemType As Outlook.OlItemType = folder.DefaultItemType
             Dim isMail As Boolean = Not isHidden AndAlso CcIsMail(cc) AndAlso allowedTypes.Contains(itemType)
             Try : _cacheFolderIDs.TryAdd(fPath, (folder.EntryID, folder.StoreID, isMail, TextHasChineseChar(fName))) : Catch : End Try
@@ -2918,6 +2925,15 @@ Partial Class Form1
         If _iLikeNoisy Then _dbg("    ├ 開始 (掃描)", fName)
 
         Dim resultList As New List(Of (MailItemInfo, String))(4096) ' 預分配容量為 4096，優化批次讀取郵件基本資訊時的清單填充 (by Gemini 3 Flash, 2026/05/04)
+
+        ' 2026/07/11 by Simon/Claude Fable 5 [RenewCache 例外歸零]: 非郵件夾(行事曆/連絡人/記事/工作/提醒)的 Table 沒有 ReceivedTime 欄，
+        '   Columns.Add 必拋 ArgumentException 且 async 跨層重拋會再噴一顆(PROBE_RENEWEX 實測 26 個非郵件夾 dirty 時共 52 顆)，
+        '   最後照樣被下方 Catch 吞掉回空清單。改成先查 IsMailFolder(快取命中 0 COM)直接回空清單 — 結果語意不變、零例外、還省整趟白工。
+        If Not IsMailFolder(folder, fPath) Then
+            If _iLikeNoisy Then _dbg("    ├ 略過", $"{fName} 非郵件資料夾，回空清單")
+            Return resultList
+        End If
+
         Try
             Await ScanFolderTable(folder, cToken, ThrottleFreq.Mid, Nothing,
                 Sub(data, r)
@@ -3160,20 +3176,34 @@ Partial Class Form1
             Try : Return folder.Items.Count : Catch : Return -999 : End Try
         End Try
     End Function
-    Private Function PeekFolderLastUpdateTime(folder As Folder, Optional fPath As String = "") As Long
+    Private Function PeekFolderSnapCommitOOM(folder As Folder, Optional fPath As String = "") As (snap As Integer, cmx As Long)
         ' ---------------------------------------------------------------
-        ' 快速讀取 PR_LOCAL_COMMIT_TIME_MAX (0x670A0040, PT_SYSTIME)，回傳 Ticks
-        ' RenewCacheToDB 的第二 dirty 訊號：資料夾內任何增/刪/改 (含標旗、已讀狀態) 都會推高此值，
-        ' 專抓「郵件數不變但內容已置換」的淨零變動 (copy→修改→放回→刪原始)，純 count 快照對此全盲。
-        ' 失敗回 -1 (=未知)：呼叫端遇 -1 一律退回純 count 比對，不誤判 dirty (與 PeekLiveFolderSnapOOM 的 -999 策略同思路)
-        ' 注意：純 PST 壓縮不會推高此值，該情境需靠 GetItemFromID 解析失敗時的自癒機制，另案處理
-        ' 2026/07/04 by Simon/Claude Fable 5
+        ' PeekFolderSnapCommitOOM — 單次 GetProperties 批次讀 PR_CONTENT_COUNT + PR_LOCAL_COMMIT_TIME_MAX
+        ' 取代 RenewCacheToDB 原本的 PeekLiveFolderSnapOOM + PeekFolderLastUpdateTime 兩次 GetProperty:
+        '   GetProperty 遇缺屬性「每夾每次」拋 COMException 0x8004010F — PROBE_RENEWEX 實測本站 6 個 PST store
+        '   340 夾全數缺 PR_LOCAL_COMMIT_TIME_MAX(OOM/RDO 皆讀無)，單按一次 RenewCache 就噴 340 顆 first-chance 例外。
+        '   GetProperties 批次遇缺屬性不拋例外，改在對應元素回傳 Int32 錯誤碼(實測 -2147221233 = 0x8004010F)，
+        '   且兩屬性合併為單一 COM 往返，比原本兩次 GetProperty 更快。
+        ' 元素判讀:
+        '   [0] PT_LONG    成功=非負 Int32;錯誤=負 Int32 錯誤碼 → 視同失敗，退 Items.Count 保底(同舊 PeekLiveFolderSnapOOM)，再失敗 -999
+        '   [1] PT_SYSTIME 成功=Date → 取 Ticks;錯誤碼/整批失敗 → -1 (=未知)，呼叫端退回純 count 比對，不誤判 dirty
+        ' 語意與被取代的兩函式完全對齊: snap 失敗 -999(不可能值，快取必失效)/cmx 失敗 -1(未知)。
+        ' 注意：純 PST 壓縮不會推高 commit_max，該情境靠 GetItemFromID 探活自癒機制(RenewCacheToDB 第三訊號)。
+        ' 2026/07/11 by Simon/Claude Fable 5 [RenewCache 例外歸零]，取代 2026/07/04 版 PeekFolderLastUpdateTime
         ' ---------------------------------------------------------------
+        Dim fName As String = ExtractFolderName(fPath)
+        If _iLikeNoisy Then _dbg(" ├ 開始", fName)
+        Dim snap As Integer = Integer.MinValue   ' 哨兵: 尚未取得
+        Dim cmx As Long = -1L
         Try
-            Return CDate(folder.PropertyAccessor.GetProperty(PR_LOCAL_COMMIT_TIME_MAX)).Ticks
-        Catch
-            Return -1L
-        End Try
+            Dim arr = DirectCast(folder.PropertyAccessor.GetProperties(New Object() {PR_CONTENT_COUNT, PR_LOCAL_COMMIT_TIME_MAX}), Object())
+            If TypeOf arr(0) Is Integer AndAlso CInt(arr(0)) >= 0 Then snap = CInt(arr(0))
+            If TypeOf arr(1) Is Date Then cmx = CDate(arr(1)).Ticks
+        Catch : End Try   ' 整批失敗(罕見) → snap 走下方 Items.Count 保底、cmx 維持 -1
+        If snap = Integer.MinValue Then
+            Try : snap = folder.Items.Count : Catch : snap = -999 : End Try
+        End If
+        Return (snap, cmx)
     End Function
 #End Region
 #Region "  ├ Legacy 保留（暫無呼叫端）"

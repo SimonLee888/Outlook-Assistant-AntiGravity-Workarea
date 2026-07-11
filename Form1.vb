@@ -395,6 +395,9 @@ Partial Class Form1
         ' PROBE_S3CANCEL ↓↓↓ 整塊可刪 (本體在 Form1_Maintab56.vb 探針區) ↓↓↓
         If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoprobes3cancel", StringComparison.OrdinalIgnoreCase)) Then ProbeS3CancelAsync()
         ' PROBE_S3CANCEL ↑↑↑ 整塊可刪 ↑↑↑
+        ' PROBE_RENEWEX ↓↓↓ 整塊可刪 (本體在 Form1_Maintab56.vb 探針區) ↓↓↓
+        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoproberenewex", StringComparison.OrdinalIgnoreCase)) Then ProbeRenewExAsync()
+        ' PROBE_RENEWEX ↑↑↑ 整塊可刪 ↑↑↑
 
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing

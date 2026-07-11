@@ -711,7 +711,7 @@ Partial Class Form1
         '
         ' 流程：
         '   Phase 1. BFS 掃出所有 live folders (COM，~1ms/資料夾) 
-        '   Phase 2. 每個 folder 讀 PeekLiveFolderSnapOOM + PeekFolderLastUpdateTime vs DB snapshot → 找 dirty folders
+        '   Phase 2. 每個 folder 讀 PeekFolderSnapCommitOOM (單次 GetProperties 批次讀 count+commit_max) vs DB snapshot → 找 dirty folders
         '            (2026/07/04 三訊號: count 抓增刪、commit_max 抓淨零置換/內容修改、兩者皆淨時再抽樣 GetItemFromID 探活抓純壓縮換ID)
         '   Phase 3. 對每個 dirty folder 重新計算：
         '              mc/fc (快，~1ms) 
@@ -764,6 +764,7 @@ Partial Class Form1
             For Each row In dbList
                 cToken.ThrowIfCancellationRequested()
                 Dim fPath = row.path
+                If _probeRenewArmed Then _probeRenewCurrentPath = fPath   ' PROBE_RENEWEX breadcrumb(整塊可刪,本體在 Form1_Maintab56.vb 探針區)
 
                 ' 2. 【Rule 7】精確打擊，用 ID 抓取物件，不使用 BFS 展開
                 Dim folder As Outlook.Folder = Nothing
@@ -797,8 +798,11 @@ Partial Class Form1
                 '   (copy→修改→放回→刪原始 = 淨零變動)，加入 PR_LOCAL_COMMIT_TIME_MAX 比對。
                 '   lastUpdated 刻意在重掃「之前」讀取：重掃期間若又有變動，commit 會高於本次存值 → 下次 Renew 再補抓，方向保守安全。
                 '   任一端未知 (-1 / DB NULL) 時退回純 count 比對，不誤判 dirty；首次升級後 DB 全為 NULL → 狀況 B 採認現值當基準，防護自下次生效。
-                Dim liveSnap = PeekLiveFolderSnapOOM(folder, fPath)
-                Dim lastUpdated As Long = PeekFolderLastUpdateTime(folder, fPath)
+                ' 2026/07/11 by Simon/Claude Fable 5 [RenewCache 例外歸零]: 原兩次 GetProperty(PeekLiveFolderSnapOOM+PeekFolderLastUpdateTime)
+                '   併為單次 GetProperties 批次 — 缺屬性不再拋例外(舊寫法每夾每次噴一顆 COMException)，並少一次 COM 往返。
+                Dim peeked = PeekFolderSnapCommitOOM(folder, fPath)
+                Dim liveSnap As Integer = peeked.snap
+                Dim lastUpdated As Long = peeked.cmx
                 Dim commitDirty As Boolean = lastUpdated >= 0 AndAlso row.cmx >= 0 AndAlso lastUpdated <> row.cmx
                 Dim isDirty As Boolean = (liveSnap <> row.snap) OrElse commitDirty
 
@@ -871,6 +875,7 @@ Partial Class Form1
                 processed += 1
                 Await SmartThrottle(swThrottle, cToken, ThrottleFreq.Low, Sub() PgrsBar2.Text = $"對帳中 {processed}/{dbList.Count}...")
             Next
+            If _probeRenewArmed Then _probeRenewCurrentPath = ""   ' PROBE_RENEWEX breadcrumb 清空(整塊可刪) — 迴圈後的例外不再歸因到最後一夾
 
             ' 6. 【Rule 3】安全無縫套用：直接呼叫您原本寫好的 CleanupOrphanPath 清理 5 個資料表
             _dbg("清理孤兒資料夾路徑...")

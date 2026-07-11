@@ -174,7 +174,7 @@ Partial Class Form1
         Try
             ' ── 執行運算 (Layer 1.5) ──
             ' 傳入去重後的節點，取得組裝好的 ListViewItem 清單
-            Dim allItems As List(Of ListViewItem) = Await CollectTab1FolderInfo(deDupedNodes, cToken)
+            Dim allItems As List(Of ListViewItem) = Await CollectTab1FolderInfo(deDupedNodes, cToken:=cToken)
 
             If _tab1SelectSeq <> mySeq Then Return  ' 序號機制配對：在 Await 回來後，若使用者已點擊其他節點，則放棄渲染
             RenderLv1(allItems)                     ' ── 執行渲染 (UI 呈現) ──
@@ -259,7 +259,7 @@ Partial Class Form1
 
                     ' 手動計算統計並渲染 (等同 SimTree1_AfterSelect 的流程)
                     Dim dedupedNodes As List(Of TreeNode) = SimTree1.GetDedupedSelection()   ' 2026/07/10 by Simon/Claude: 改用 SimTree 內建版
-                    Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken)
+                    Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken:=cToken)
                     RenderLv1(items)
 
                     ' 在 ListView1 中找到代表「剛才那個資料夾」的列並移去高亮
@@ -306,7 +306,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function CollectTab1FolderInfo(dedupedNodes As List(Of TreeNode), cToken As CancellationToken, Optional skipCache As Boolean = False) As Task(Of List(Of ListViewItem))
+    Private Async Function CollectTab1FolderInfo(dedupedNodes As List(Of TreeNode), Optional skipCache As Boolean = False, Optional cToken As CancellationToken = Nothing) As Task(Of List(Of ListViewItem))
         ''' <summary>
         ''' [Layer 1.5 業務邏輯層] 針對去重後的節點進行非同步統計運算。
         ''' 支援一般 BFS 運算與 F5 強制刷新模式。
@@ -314,8 +314,8 @@ Partial Class Form1
         ''' skipCache=False  走 CollectFolderInfoByBFS (BFS + 快取剪枝)。
         ''' </summary>
         ''' <param name="dedupedNodes">已去重過的選中節點清單</param>
-        ''' <param name="cToken">取消標記</param>
         ''' <param name="skipCache">是否繞過快取強制重新讀取 L3 資料</param>
+        ''' <param name="cToken">取消標記</param>
         ''' <returns>組裝完畢的 ListViewItem 清單</returns>
 
         ' 預分配容量為 128，優化 UI 項目渲染效能 (by Gemini 3 Flash, 2026/05/04)
@@ -334,7 +334,7 @@ Partial Class Form1
                 rows = Await CollectFolderInfoByBFS(folder, New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message), cToken:=cToken)
             Else
                 ' === F5 強制刷新策略：直接呼叫 L3 接口，不走 BFS 隊列 ===
-                rows = Await CollectFolderInfoForceL3(folder, cToken)
+                rows = Await CollectFolderInfoForceL3(folder, cToken:=cToken)
             End If
 
             ' 序列安全性檢查：若在 Await 期間使用者切換了選擇，立即終止運算
@@ -445,7 +445,8 @@ Partial Class Form1
     End Function
 
     ' 以下為 CollectFolderInfoByBFS 專用的拆分子函數 (Steps 1~5)
-    Private Async Function BuildBfsFolderTree(rootFolder As Folder, cToken As CancellationToken, Optional progress As IProgress(Of ProgressReport) = Nothing) As Task(Of List(Of FolderBfsEntry))
+    Private Async Function BuildBfsFolderTree(rootFolder As Folder, Optional progress As IProgress(Of ProgressReport) = Nothing,
+                                              Optional cToken As CancellationToken = Nothing) As Task(Of List(Of FolderBfsEntry))
         ' 負責: 展開整棵子樹 + 依 Layer2.5 快取字典剪枝，產出「父索引 < 子索引」的 FolderBfsEntry 陣列。
         ' 2026/07/02 by Simon/Claude [骨架整合]: 不再自己逐節點走樹(原: 每節點 LazyGetOrderedSubFolderIDs 查一次 DB + 未知節點退 COM 物化)。
         '   改為一次呼叫 GetSubtree(L2.5) 取完整骨架: ①記憶體 _cacheSubTreeList → ②DB 一條 LIKE → ③RDO 批次(GetSubtreeRdo) → ④OOM BFS。
@@ -548,7 +549,7 @@ Partial Class Form1
                 If childrenOf.TryGetValue(fPath, kids) Then
                     For Each k In kids : queue.Enqueue((k.eid, k.sid, k.fPath, myIdx)) : Next
                 End If
-                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii)  ' 2026/04/16 by Simon/Claude: 改用 SmartThrottle，省去 If/Restart/Task.Delay 三行套路
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii, cToken:=cToken)  ' 2026/04/16 by Simon/Claude: 改用 SmartThrottle，省去 If/Restart/Task.Delay 三行套路
             Loop
         Catch ex As OperationCanceledException
             ' 2026/04/11 by Claude: 改為 re-throw，確保不完整的 BFS 樹不會繼續傳入
@@ -586,9 +587,9 @@ Partial Class Form1
                 processed += 1
 
                 ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
-                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
                                           Sub() progress?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
-                                                                                          .Message = $"正在統計郵件數: {processed:N0} / {total:N0} 個資料夾..."}))
+                                                                                          .Message = $"正在統計郵件數: {processed:N0} / {total:N0} 個資料夾..."}), cToken:=cToken)
             Next
         Catch ex As OperationCanceledException
             ' 2026/04/11 by Claude: 改為 re-throw，不再 Return True (上層丟棄了回傳值，Return True 等於無效) 
@@ -838,7 +839,7 @@ Partial Class Form1
             Next
 
             ' ③ 核心統計 (skipCache:=True)
-            Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, cToken, skipCache:=True)
+            Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(dedupedNodes, skipCache:=True, cToken:=cToken)
             RenderLv1(items)
 
             ' ④ Size 重算
@@ -1040,8 +1041,8 @@ Partial Class Form1
                     If s.SubItems.Count > 4 Then s.SubItems(4).Text = strFolderSize Else s.SubItems.Add(strFolderSize)
 
                     processedCount += 1
-                    Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
-                                              Sub() PgrsBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({ExtractFolderName(fp)})")
+                    Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
+                                              Sub() PgrsBar2.Text = $"正在計算資料夾大小: {processedCount:N0} / {totalCount:N0} ({ExtractFolderName(fp)})", cToken:=cToken)
                 Next
             End If
 
@@ -1139,7 +1140,7 @@ Partial Class Form1
         Dim deduped As List(Of TreeNode) = SimTree1.GetDedupedSelection()   ' 2026/07/10 by Simon/Claude: 改用 SimTree 內建版
         Dim cToken As CancellationToken = OkayNowYouHaveToken()             ' 2026/07/07 by Simon/Claude: 行內取用改具名，才能在 Finally 歸還(運算中判定 token 化)
         Try
-            Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(deduped, cToken)
+            Dim items As List(Of ListViewItem) = Await CollectTab1FolderInfo(deduped, cToken:=cToken)
             RenderLv1(items)
         Finally
             OkeyNowByeByeToken(cToken)
@@ -1270,14 +1271,14 @@ Partial Class Form1
                 If c > 0 Then totalMailCount += c
                 processedCountLocal += 1
                 ' 2026/04/16 by Gemini: 每 100 毫秒更新一次預計計數進度
-                Await SmartThrottle(swThrottleCount, cToken:=cToken, ThrottleFreq.Hii,
-                                          Sub() PgrsBar2.Text = $"正在計算郵件分母: {processedCountLocal:N0}/{totalFoldersLocal:N0} 個資料夾 (累計 {totalMailCount:N0} 封)...")
+                Await SmartThrottle(swThrottleCount, ThrottleFreq.Hii,
+                                          Sub() PgrsBar2.Text = $"正在計算郵件分母: {processedCountLocal:N0}/{totalFoldersLocal:N0} 個資料夾 (累計 {totalMailCount:N0} 封)...", cToken:=cToken)
             Next
 
             ' 呼叫 Layer2 流程協調層執行統計；結果存入 _lv2DataYear session 快取，GoToLv2MonthView/GoToLv2YearView 直接 render 不重算
             ListView2.Tag = totalMailCount    ' ★ 把總計數量快取起來，供 CollectMonthCount 回報進度分母使用 (by Gemini 3.1 Pro, 2026/04/15)
             Dim progressYear = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
-            _lv2DataYear = Await CollectYearCount(folderList, totalMailCount, progressYear, cToken:=cToken, _tv2FolderPaths)
+            _lv2DataYear = Await CollectYearCount(folderList, totalMailCount, fPaths:=_tv2FolderPaths, progress:=progressYear, cToken:=cToken)
 
             ' --- 序號校驗點 2 (核心運算完成後) ---
             If _tab2SelectSeq <> mySeq Then Return  ' _dbg("結束", "序號已不匹配，丟棄本次結果 (運算完畢中斷) ")
@@ -1522,7 +1523,9 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function CollectYearCount(fList As List(Of (eid As String, sid As String, fPath As String)), totalMailCount As Long, progress As IProgress(Of ProgressReport), cToken As CancellationToken, Optional fPaths As List(Of String) = Nothing) As Task(Of ConcurrentDictionary(Of Integer, Integer))   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
+    Private Async Function CollectYearCount(fList As List(Of (eid As String, sid As String, fPath As String)), totalMailCount As Long, Optional fPaths As List(Of String) = Nothing,
+                                            Optional progress As IProgress(Of ProgressReport) = Nothing, Optional cToken As CancellationToken = Nothing) _
+                                            As Task(Of ConcurrentDictionary(Of Integer, Integer))   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
         ' ---------------------------------------------------------------
         ' === Layer 2: 流程協調層 ===
         ' 職責: BFS 遍歷 fList，管理快取，驅動 Layer3 計算，合併結果，回報進度
@@ -1569,9 +1572,9 @@ Partial Class Form1
                 processedFolders += 1
 
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
-                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
                                           Sub() progress?.Report(New ProgressReport With {.CurrentCount = processedCount, .TotalCount = totalMailCount,
-                                                                                .Message = $"正在統計年度分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (已統計 {processedCount:N0} / {totalMailCount:N0} 封信)..."}))
+                                                                                .Message = $"正在統計年度分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (已統計 {processedCount:N0} / {totalMailCount:N0} 封信)..."}), cToken:=cToken)
             Next
         Catch ex As OperationCanceledException
             ' by Gemini, 2026/04/11: 捕捉 ESC 中斷，回傳已計算的部分結果而不拋出異常
@@ -1610,11 +1613,11 @@ Partial Class Form1
             monthCount = MergeDictionaries(monthCount, folderMonthCount)
 
             ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派，移除 OrElse processedFolders=totalFolders 特判
-            Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+            Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
                                       Sub()
                                           PgrsBar1.Text = "正在讀取..."
                                           PgrsBar2.Text = $"正在統計 {selectedYear} 年月份分佈: ({processedFolders:N0}/{totalFolders:N0})個資料夾 (相依包含共計 {totalMailCount:N0} 封信)。"
-                                      End Sub)
+                                      End Sub, cToken:=cToken)
         Next
         _dbg(" ├ 結束", $"{selectedYear} 年 | 月份數: {monthCount.Count:N0}")
         Return monthCount

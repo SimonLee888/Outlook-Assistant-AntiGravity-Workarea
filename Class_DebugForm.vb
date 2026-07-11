@@ -46,15 +46,6 @@ Public Class DebugForm
     <Runtime.InteropServices.DllImport("user32.dll")>
     Private Shared Function SendMessage(hWnd As IntPtr, msg As Integer, wParam As IntPtr, lParam As IntPtr) As IntPtr
     End Function
-    <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function CreateRectRgn(x1 As Integer, y1 As Integer, x2 As Integer, y2 As Integer) As IntPtr
-    End Function
-    <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function SelectClipRgn(hDC As IntPtr, hRgn As IntPtr) As Integer
-    End Function
-    <Runtime.InteropServices.DllImport("gdi32.dll")>
-    Private Shared Function DeleteObject(hObject As IntPtr) As Boolean
-    End Function
 
     ' 2026/06/19 by Simon/Claude Opus 4.8: 改 OS 層 class background brush，消除撐高瞬間新區域的黑塊 (受控層 BackColor 太晚、壓不到這一幀)
     <Runtime.InteropServices.DllImport("user32.dll", EntryPoint:="SetClassLongPtrW")>
@@ -80,26 +71,48 @@ Public Class DebugForm
 #End Region
 
 #Region "■ 02 成員變數"
-    Private _msgQueue As New Concurrent.ConcurrentQueue(Of ListViewItem)
-    Private WithEvents QueueTimer As New Timer() With {.Interval = 16}     ' 啟動時先預設每 16ms 清空一次message queue
+    Private WithEvents QueueTimer As New Timer() With {.Interval = 16}      ' 啟動時先預設每 16ms 清空一次message queue
+    Private _msgQueue As New Concurrent.ConcurrentQueue(Of PendingDebugMsg) ' 2026/07/11 by Simon/Sonnet 5: 改存輕量 DTO，ListViewItem 建構延後到 Timer_Tick
     Private _lastRecalcWidth As Integer = 0
+    Private _previousTimestampTicks As Long             ' 2026/07/11 by Simon/Sonnet 5: 原本是 Date 型別，多執行緒同時呼叫 AddMessage3 時「讀取-計算-寫回」不具原子性，交錯執行會讓 Step 間隔算錯或遺失更新。改存 Ticks 用 Interlocked.Exchange 原子交換。
     Public Shared ActiveInstance As DebugForm = Nothing ' by Gemini 3.5 Flash, 2026/06/19: 儲存作用中的 DebugForm 實例以供背景執行緒存取，解決 VB 預設實例在非 UI 執行緒的 Thread-Local 陷阱。
-    Private _previousTimestamp As Date
 
     Private _searchPattern As String = ""
-    Private _searchRegex As Regex = Nothing             ' Tier 3, 2026/06/15 by Simon/Claude: 由 _searchPattern 預編譯, DrawSubItem 直接套用, 省去每格字串多載重複解析
-    Private _fillBrush As New SolidBrush(Color.White)   ' Tier 3, 2026/06/15 by Simon/Claude: 背景填色重用同一支 brush (改 .Color 即可), 取代每格 New SolidBrush/Dispose
+    Private _searchRegex As Regex = Nothing             ' 2026/06/15 by Simon/Claude: 由 _searchPattern 預編譯, DrawSubItem 直接套用, 省去每格字串多載重複解析
+    Private _fillBrush As New SolidBrush(Color.White)   ' 2026/06/15 by Simon/Claude: 背景填色重用同一支 brush (改 .Color 即可), 取代每格 New SolidBrush/Dispose
     Private _classBgBrush As IntPtr = IntPtr.Zero       ' 2026/06/19: OS 層白底 brush，存欄位避免被回收
 
     Private _lastHighlightedPair As ListViewItem        ' by Gemini, 2026/03/29: O(1) 顏色還原，取代 For Each 全域清除
+    Private _suppressPairing As Boolean = False         ' 2026/07/11 by Simon/Sonnet 5: Timer_Tick 自動捲動選取時設 True, 讓 ItemSelectionChanged 略過配對高亮掃描 (原本每 100ms 觸發一次 O(N) FindSimilarPair)
     Private _historyDebug As New List(Of String)(256)   ' by AntiGravity, 2026/04/07: 搜尋歷史紀錄
     Private _historyIndex As Integer = 0                ' by AntiGravity, 2026/04/07: 目前歷史紀錄索引 (與 Count 相同時代表原始輸入區)
     Private _tempInput As String = ""                   ' by AntiGravity, 2026/04/07: 暫存回溯前的原始輸入內容
-    Private Class DebugItemTag          ' 2026/3/28 by Gemini: 定義快取結構，加速 OwnerDraw 繪製
-        Public textFullRow As String    ' 預先合併好的整行小寫文字 (用於搜尋)
-        Public isHit As Boolean         ' 是否命中目前搜尋關鍵字
-        Public timeStamp As Date        ' 2026/3/28 by Gemini: 原始時間戳記 (供雙擊重算時間差，免去 TryParse 反解)
+    Private _cachedKeywordsLower As New List(Of String) ' 2026/07/11 by Simon/Sonnet 5: RefreshSearchCache 預先算好的小寫關鍵字，AddMessage3 只讀欄位, 不碰 txtDebug/checkAndOr (可能由背景執行緒呼叫)
+    Private _cachedAndMode As Boolean = False           ' 2026/07/11: 同上，快取 AND/OR 模式
+    Private Class DebugItemTag              ' 2026/3/28 by Gemini: 定義快取結構，加速 OwnerDraw 繪製
+        Public textFullRow As String        ' 預先合併好的整行小寫文字 (用於搜尋)
+        Public isHit As Boolean             ' 是否命中目前搜尋關鍵字
+        Public timeStamp As Date            ' 2026/3/28 by Gemini: 原始時間戳記 (供雙擊重算時間差，免去 TryParse 反解)
+        Public coreKey As String            ' 2026/07/11 by Simon/Sonnet 5: FindSimilarPair 用的比對核心鍵 (RemoveBeginEnd 結果)，建立時算一次
+        Public isBeginRow As Boolean        ' 2026/07/11: 是否為「開始」行，建立時算一次
+        Public isEndRow As Boolean          ' 2026/07/11: 是否為「結束」行，建立時算一次
     End Class
+    Private Class PendingDebugMsg
+        ' 2026/07/11 by Simon/Sonnet 5: AddMessage3 端的輕量 DTO，只夾帶字串與時間戳。
+        ' ListViewItem/SubItems/DebugItemTag 的建構全部延後到 Timer_Tick 批次處理時才做，讓呼叫端(可能是密集迴圈或背景執行緒)不必再付出 WinForms 物件配置的成本。
+        Public msgContent As String
+        Public timeNow As Date
+        Public timeSpan As TimeSpan
+        Public lineNo As Integer
+    End Class
+
+    ' 2026/07/11 by Simon/Sonnet 5: 兩個狀態機名稱 Regex 改成 Shared ReadOnly + Compiled，只編譯一次終身重用，
+    ' 取代原本 GetCallerName 每次呼叫、每個 Async 呼叫者都用字串多載重新解析 pattern
+    Private Shared ReadOnly _vbStateMachineRegex As New Regex("^VB\$StateMachine_\d+_(.*)$", RegexOptions.Compiled)
+    Private Shared ReadOnly _csStateMachineRegex As New Regex("^<(.*)>d__.*$", RegexOptions.Compiled)
+    ' 2026/07/11 by Simon/Sonnet 5: 拆詞 pattern 改成 Shared ReadOnly + Compiled，只編譯一次終身重用，
+    ' 取代原本每次搜尋框變動 (每敲一鍵) 都用字串多載重新解析 pattern
+    Private Shared ReadOnly _keywordSplitRegex As New Regex("(?:""(?<q>[^""]*)""|(?<w>\S+))", RegexOptions.Compiled)
 #End Region
 
 #Region "■ 03 表單生命週期"
@@ -159,7 +172,7 @@ Public Class DebugForm
         'Dim pi = lvwDebug.GetType().GetProperty("DoubleBuffered", BindingFlags.Instance Or BindingFlags.NonPublic)
         'If pi IsNot Nothing Then pi.SetValue(lvwDebug, True, Nothing)
 
-        _previousTimestamp = Now : QueueTimer.Start()   ' 啟動時先預設每 16ms 清空一次message queue
+        _previousTimestampTicks = Now.Ticks : QueueTimer.Start()   ' 啟動時先預設每 16ms 清空一次message queue
         AddHandler lvwDebug.HandleCreated, AddressOf OnLvwHandleCreated ' 💡 2026/04/13 by Gemini 3 Flash: 註冊 HandleCreated，確保 ListView 重建時修復依然生效
 
         ' 2026/06/19 by Simon/Claude: 把 debugForm 的 class 背景 brush 換成白色，讓 OS 在 SetWindowPos 撐高瞬間用白色填新區域，取代預設 NULL→黑。
@@ -337,7 +350,7 @@ Public Class DebugForm
         '   forceCaller: 若傳入的函數名數無法顯示, 可在第3個字串強制指定
         ' ============================================================
         ' ⚠️ 【安全性關鍵警語 - 跨執行緒風險】 by Gemini 3.5 Flash, 2026/06/19
-        ' 這份安全性 100% 建立在「AddMessage3 是 enqueue-only」（僅將訊息寫入 Queue，不直接觸發 UI 更新）。
+        ' 這份安全性 100% 建立在「AddMessage3 是 enqueue-only」（僅將訊息包成 DTO 寫入 Queue，不直接觸發 UI 更新、不建構任何 WinForms 物件）。
         ' 哪天若有人在此方法內部（或 enqueue 之後的呼叫鏈中）直接更動 ListView、Label 等 UI 控制項，
         ' 背景路徑 (如 Task.Run) 就會立刻發生跨執行緒存取崩潰 (Cross-thread violation)。修補此方法時請務必守住這條紅線！
         ' ============================================================
@@ -347,9 +360,11 @@ Public Class DebugForm
         Dim callingMethod As String = If(forcedCaller <> "", forcedCaller, WhoCallsMe(1))
 
         ' 計算時間差
+        ' 2026/07/11 by Simon/Sonnet 5: Interlocked.Exchange 原子地「取回舊值+寫入新值」，
+        ' 修正多執行緒交錯呼叫時的資料競爭 (讀-改-寫非原子，會算錯 Step 或遺失更新)
         Dim timeNow As Date = Now
-        Dim timeSpan As TimeSpan = timeNow - _previousTimestamp
-        _previousTimestamp = timeNow
+        Dim prevTicks As Long = System.Threading.Interlocked.Exchange(_previousTimestampTicks, timeNow.Ticks)
+        Dim timeSpan As New TimeSpan(timeNow.Ticks - prevTicks)
 
         Static lineCount As Integer
         Dim newLine As Integer = System.Threading.Interlocked.Increment(lineCount)
@@ -358,20 +373,10 @@ Public Class DebugForm
         Dim msgContent As String = $"{newLine.ToString("00")} {strA} {callingMethod}"
         If Not String.IsNullOrEmpty(strB) Then msgContent &= $" ({strB})"
 
-        Dim newItem As New ListViewItem(msgContent)
-        newItem.SubItems.Add(timeNow.ToString("HH:mm:ss.ff"))
-        newItem.SubItems.Add(If(newLine > 1, timeSpan.TotalMilliseconds.ToString("#,##0.00"), "-")) ' Index 2: Step (物理間隔)
-        newItem.SubItems.Add("")                                                                    ' Index 3: Elapsed (邏輯耗時，預設空，由 Timer_Tick 填入)
-
-        ' 2026/3/28 by Gemini: 預先計算快取資訊存入tag備用
-        Dim tag As New DebugItemTag()
-        tag.textFullRow = (newItem.Text & " " & newItem.SubItems(1).Text & " " & newItem.SubItems(2).Text & " " & newItem.SubItems(3).Text).ToLower()
-        tag.isHit = _searchPattern.Length > 0 AndAlso CheckIsHitInternal(tag.textFullRow)   ' 新訊息加入瞬間也要先比對是否已符合搜尋字串 ' 2026/6/13 改成：_searchPattern 空的話直接跳過
-        tag.timeStamp = timeNow                                                             ' 2026/3/28 by Gemini: 保留原始精度供日後計算
-        newItem.Tag = tag
-
-        ' by Gemini, 2026/04/03: 區隔邏輯與 Enqueue
-        _msgQueue.Enqueue(newItem)                      ' 2026-03-25 by Gemini: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
+        ' 2026/07/11 by Simon/Sonnet 5: AddMessage3 現在只組字串、塞進輕量 DTO 就 Enqueue。
+        ' ListViewItem/SubItems/DebugItemTag(含 coreKey/textFullRow 等) 的建構全部移到 Timer_Tick 批次處理時才做 (見 BuildListViewItem)，
+        ' 呼叫端 (常是密集迴圈或背景執行緒) 不再需要付出 WinForms 物件配置與字串快取準備的成本。
+        _msgQueue.Enqueue(New PendingDebugMsg With {.msgContent = msgContent, .timeNow = timeNow, .timeSpan = timeSpan, .lineNo = newLine})
 
     End Sub
     Private Function WhoCallsMe(Optional skipLevels As Integer = 1) As String
@@ -415,7 +420,7 @@ Public Class DebugForm
             ' 💡 處理 Async 非同步狀態機器 (MoveNext)
             If m.Name = "MoveNext" AndAlso m.DeclaringType.GetInterface("IAsyncStateMachine") IsNot Nothing Then
                 ' 1. VB.NET 格式: VB$StateMachine_123_MethodName
-                Dim matchVB = Regex.Match(typeName, "^VB\$StateMachine_\d+_(.*)$")
+                Dim matchVB = _vbStateMachineRegex.Match(typeName)
                 If matchVB.Success Then
                     Dim originalName As String = matchVB.Groups(1).Value
                     Dim parentType = m.DeclaringType.DeclaringType ' 狀態機器類別的上一層通常就是原始類別
@@ -423,7 +428,7 @@ Public Class DebugForm
                 End If
 
                 ' 2. C# 格式: <MethodName>d__XX (兼顧未來可能混合 C# 專案的情況)
-                Dim matchCS = Regex.Match(typeName, "^<(.*)>d__.*$")
+                Dim matchCS = _csStateMachineRegex.Match(typeName)
                 If matchCS.Success Then
                     Dim originalName As String = matchCS.Groups(1).Value
                     Dim parentType = m.DeclaringType.DeclaringType
@@ -440,67 +445,102 @@ Public Class DebugForm
         ' 2026-03-25 by Gemini: 改用 ConcurrentQueue 與 Timer 定期批次新增，大幅提升迴圈寫入效能
         If _msgQueue.IsEmpty Then Return
 
+        ' 2026/07/11 by Simon/Sonnet 5: 從輕量 DTO 建構 ListViewItem 移到這裡批次處理 (見 BuildListViewItem)，
+        ' 取代原本在 AddMessage3 呼叫端就建構整組 ListViewItem/SubItems/Tag 的做法
         Dim itemsToAdd As New List(Of ListViewItem)(256)
-        Dim item As ListViewItem = Nothing
-        While _msgQueue.TryDequeue(item) : itemsToAdd.Add(item) : End While
+        Dim pending As PendingDebugMsg = Nothing
+        While _msgQueue.TryDequeue(pending) : itemsToAdd.Add(BuildListViewItem(pending)) : End While
 
         If itemsToAdd.Count > 0 Then
             ' 2026/03/31 by Gemini: 自動為「結束」行預算總耗時
             ' 2026/04/11 by Gemini: 改填入 SubItems(3) (Elapsed 欄位)，並支援跨集合搜尋 (itemsToAdd)
             ' 2206/06/13 by Claude: 效能優化 - 現在要新增的項目如果包含「結束」，才進行配對搜尋，避免每次 Timer 都無差別地 O(N²) 搜尋整個 itemsToAdd 集合
-            If itemsToAdd.Any(Function(lvi) lvi.Text.Contains("結束")) Then
+            ' 2026/07/11 by Simon/Sonnet 5: 改讀 tag.isEndRow 快取，取代 lvi.Text.Contains("結束") 的重複字串掃描
+            If itemsToAdd.Any(Function(lvi) DirectCast(lvi.Tag, DebugItemTag).isEndRow) Then
                 For Each lvi In itemsToAdd
-                    If lvi.Text.Contains("結束") Then
+                    Dim tagCurrent = DirectCast(lvi.Tag, DebugItemTag)
+                    If tagCurrent.isEndRow Then
                         Dim pair As ListViewItem = FindSimilarPair(lvi, itemsToAdd)
                         If pair IsNot Nothing Then
-                            Dim tagCurrent = TryCast(lvi.Tag, DebugItemTag)
-                            Dim tagPair = TryCast(pair.Tag, DebugItemTag)
-
-                            If tagCurrent IsNot Nothing AndAlso tagPair IsNot Nothing Then
-                                Dim totalMs As Double = Math.Abs((tagCurrent.timeStamp - tagPair.timeStamp).TotalMilliseconds)
-                                lvi.SubItems(3).Text = totalMs.ToString("#,##0.00")
-                                ' by Gemini, 2026/04/11: 填入數值後同步更新搜尋快取
-                                tagCurrent.textFullRow = (lvi.Text & " " & lvi.SubItems(1).Text & " " & lvi.SubItems(2).Text & " " & lvi.SubItems(3).Text).ToLower()
-                            End If
+                            Dim tagPair = DirectCast(pair.Tag, DebugItemTag)
+                            Dim totalMs As Double = Math.Abs((tagCurrent.timeStamp - tagPair.timeStamp).TotalMilliseconds)
+                            lvi.SubItems(3).Text = totalMs.ToString("#,##0.00")
+                            ' by Gemini, 2026/04/11: 填入數值後同步更新搜尋快取
+                            ' 2026/07/11 by Simon/Sonnet 5: textFullRow 是延遲建構的，只有先前已經建過(代表搜尋曾經作用中)才需要在這裡同步更新；
+                            ' 若從未建過就不必在此補建，維持延遲建構的原則 (RefreshSearchCache 需要時自然會補)
+                            If tagCurrent.textFullRow IsNot Nothing Then tagCurrent.textFullRow = BuildFullRowText(lvi)
                         End If
                     End If
                 Next
             End If
 
             With lvwDebug
-                    .BeginUpdate()
-                    .Items.AddRange(itemsToAdd.ToArray())
-                    .EndUpdate()
+                .BeginUpdate()
+                .Items.AddRange(itemsToAdd.ToArray())
+                .EndUpdate()
 
-                    ' 💡 2026/04/01 by Gemini:
-                    ' EnsureVisible 必須在 EndUpdate 之後呼叫，避免在暫停繪製期間滾動引發的瞬間畫面撕裂與閃爍
-                    If .Items.Count > 0 Then
-                        Dim lastItem = .Items(.Items.Count - 1)
-                        lastItem.EnsureVisible()
+                ' 💡 2026/04/01 by Gemini:
+                ' EnsureVisible 必須在 EndUpdate 之後呼叫，避免在暫停繪製期間滾動引發的瞬間畫面撕裂與閃爍
+                If .Items.Count > 0 Then
+                    Dim lastItem = .Items(.Items.Count - 1)
+                    lastItem.EnsureVisible()
 
-                        ' 2026/04/09 by Gemini: 修正游標前進但舊選取殘留的問題
-                        ' 由於已開啟 MultiSelect=True，直接設 Selected=True 會變成加選
-                        ' 因此需先手動清除前次的選取，再設定最後一項，並賦予 Focused 確保游標真正前進
-                        .SelectedItems.Clear()
-                        lastItem.Selected = True
-                        lastItem.Focused = True
-                    End If
-                End With
-            End If
+                    ' 2026/04/09 by Gemini: 修正游標前進但舊選取殘留的問題：
+                    '   由於已開啟 MultiSelect=True，直接設 Selected=True 會變成加選，因此需先手動清除前次的選取，再設定最後一項，並賦予 Focused 確保游標真正前進
+                    ' 2026/07/11 by Simon/Sonnet 5: 用 _suppressPairing 包住這段自動捲動選取，避免每次 Timer_Tick 都觸發 ItemSelectionChanged → FindSimilarPair 的 O(N) 配對掃描 (原本每 100ms 一次)
+                    _suppressPairing = True
+                    .SelectedItems.Clear()
+                    lastItem.Selected = True
+                    lastItem.Focused = True
+                    _suppressPairing = False
+                End If
+            End With
+        End If
 
     End Sub
+    Private Function BuildListViewItem(pending As PendingDebugMsg) As ListViewItem
+        ' 2026/07/11 by Simon/Sonnet 5: ListViewItem/DebugItemTag 建構邏輯從 AddMessage3 移到這裡，
+        ' 在 Timer_Tick 批次處理時才建構，讓呼叫端只需組字串+enqueue輕量DTO (PendingDebugMsg)
+        Dim newItem As New ListViewItem(pending.msgContent)
+        newItem.SubItems.Add(pending.timeNow.ToString("HH:mm:ss.ff"))
+        newItem.SubItems.Add(If(pending.lineNo > 1, pending.timeSpan.TotalMilliseconds.ToString("#,##0.00"), "-"))  ' Index 2: Step (物理間隔)
+        newItem.SubItems.Add("")                                                                                    ' Index 3: Elapsed (邏輯耗時，預設空，由上方配對邏輯填入)
+
+        ' 2026/3/28 by Gemini: 預先計算快取資訊存入tag備用
+        Dim tag As New DebugItemTag()
+        tag.timeStamp = pending.timeNow                       ' 2026/3/28 by Gemini: 保留原始精度供日後計算
+        tag.isBeginRow = pending.msgContent.Contains("開始")  ' 2026/07/11 by Simon/Sonnet 5: FindSimilarPair 配對搜尋鍵在此算一次存入 Tag，
+        tag.isEndRow = pending.msgContent.Contains("結束")    ' 取代原本每次配對搜尋都對整個 ListView 逐列重跑 RemoveBeginEnd (Substring+6xReplace+Trim)
+        tag.coreKey = RemoveBeginEnd(pending.msgContent)
+        newItem.Tag = tag
+
+        ' 2026/07/11 by Simon/Sonnet 5: textFullRow 延遲建構 — 只有搜尋作用中才需要組這段字串+ToLower，
+        ' 沒開搜尋 (最常見情況) 完全跳過，等 RefreshSearchCache 真的需要時才補建
+        If _searchPattern.Length > 0 Then
+            tag.textFullRow = BuildFullRowText(newItem)
+            tag.isHit = CheckIsHitInternal(tag.textFullRow)
+        End If
+
+        Return newItem
+
+    End Function
+    Private Function BuildFullRowText(item As ListViewItem) As String
+        ' 2026/07/11 by Simon/Sonnet 5: 抽出共用 helper，取代原本 AddMessage3 與 Timer_Tick 兩處重複的字串串接邏輯
+        Return (item.Text & " " & item.SubItems(1).Text & " " & item.SubItems(2).Text & " " & item.SubItems(3).Text).ToLower()
+
+    End Function
 #End Region
 
 #Region "■ 05 ListView 操作事件"
     Private Sub lvwDebug_ItemSelectionChanged(sender As Object, e As ListViewItemSelectionChangedEventArgs) Handles lvwDebug.ItemSelectionChanged
 
-        ' by Gemini, 2026/04/01: 解決點選配對項目時的閃爍問題 (Flickering)
-        ' 不直接修改 ListViewItem.BackColor 屬性，改為記錄目標並用 Invalidate() 局部重繪。
+        ' by Gemini, 2026/04/01: 解決點選配對項目時的閃爍問題 (Flickering) 不直接修改 ListViewItem.BackColor 屬性，改為記錄目標並用 Invalidate() 局部重繪。
+        ' 2026/07/11 by Simon/Sonnet 5: Timer_Tick 的自動捲動選取不需要配對高亮，直接跳過整段掃描
+        If _suppressPairing Then Return
         If Not e.IsSelected Then Return
 
         ' by Gemini, 2026/03/29: 選取變更時自動標記配對的「開始/結束」行
-        ' 效能優化: 使用 _lastHighlightedPair 做 O(1) 顏色還原，取代原本的 For Each 全域清除
-        '           原本 Shift 多選 100 筆時會觸發 100 次事件 × N 筆 = O(N²) 重繪，改為 O(1)
+        ' 效能優化: 使用 _lastHighlightedPair 做 O(1) 顏色還原，取代原本的 For Each 全域清除。原本 Shift 多選 100 筆時會觸發 100 次事件 × N 筆 = O(N²) 重繪，改為 O(1)
         ' 2026/04/01 by Gemini: 效能閥值管理, 防止 Shift 多選上千筆時產生 O(N²) 的效能雪崩 (延遲)
         ' 當使用者框選多筆資料時，配對高光沒有意義，直接清除高光並 Return 離開，省下幾百萬次的字串比對
         If lvwDebug.SelectedIndices.Count > 1 Then
@@ -630,12 +670,6 @@ Public Class DebugForm
 
         ''' 2026/04/12 by Claude: 同時清除 GDI 系統 clip，確保 TextRenderer 不受 dirty region 限制
         ''' 否則 ScrollBar 消失時 dirty region 只有右側條帶，TextRenderer (GDI) 畫不出左側文字
-        ''Dim hDC As IntPtr = e.Graphics.GetHdc()
-        ''Dim hRgn As IntPtr = CreateRectRgn(e.Bounds.Left, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom)
-        ''SelectClipRgn(hDC, hRgn)
-        ''DeleteObject(hRgn)
-        ''e.Graphics.ReleaseHdc(hDC)
-        ''e.Graphics.SetClip(e.Bounds)    ' GDI+ clip 同步設定
 
         ' Step 1. Background
         Dim backColor As Color = e.Item.BackColor
@@ -717,18 +751,16 @@ Public Class DebugForm
 
                 ' 💡 2026/04/13 by Gemini 3 Flash: 邊界防禦 (高亮塊)
                 If currentX + szMatch.Width > textRect.Right Then
-                    Using highlightBrush As New SolidBrush(Color.Yellow)
-                        ' Tier 3, 2026/06/15 by Simon/Claude: 改用 framework 快取的 Brushes.Yellow，零配置
-                        e.Graphics.FillRectangle(Brushes.Yellow, New Rectangle(currentX, e.Bounds.Y + 2, textRect.Right - currentX, e.Bounds.Height - 4))
-                    End Using
+                    ' Tier 3, 2026/06/15 by Simon/Claude: 改用 framework 快取的 Brushes.Yellow，零配置
+                    ' 2026/07/11 by Simon/Sonnet 5: 移除多餘的 Using New SolidBrush 外殼 (實際繪製早已改用 Brushes.Yellow，外殼只是浪費一次 New+Dispose)
+                    e.Graphics.FillRectangle(Brushes.Yellow, New Rectangle(currentX, e.Bounds.Y + 2, textRect.Right - currentX, e.Bounds.Height - 4))
                     TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, New Rectangle(currentX, e.Bounds.Y, textRect.Right - currentX, e.Bounds.Height), Color.Black, flags Or TextFormatFlags.EndEllipsis)
                     lastPos = itemText.Length : Exit For
                 End If
 
-                Using highlightBrush As New SolidBrush(Color.Yellow)
-                    ' Tier 3, 2026/06/15 by Simon/Claude: 同上，改用 Brushes.Yellow
-                    e.Graphics.FillRectangle(Brushes.Yellow, New Rectangle(currentX, e.Bounds.Y + 2, szMatch.Width, e.Bounds.Height - 4))
-                End Using
+                ' Tier 3, 2026/06/15 by Simon/Claude: 同上，改用 Brushes.Yellow
+                ' 2026/07/11 by Simon/Sonnet 5: 移除多餘的 Using New SolidBrush 外殼
+                e.Graphics.FillRectangle(Brushes.Yellow, New Rectangle(currentX, e.Bounds.Y + 2, szMatch.Width, e.Bounds.Height - 4))
                 Dim rMatch As New Rectangle(currentX, e.Bounds.Y, szMatch.Width, e.Bounds.Height)
                 TextRenderer.DrawText(e.Graphics, matchPart, e.Item.Font, rMatch, Color.Black, flags)
                 currentX += szMatch.Width
@@ -760,14 +792,14 @@ Public Class DebugForm
         ' 搜尋字串變更: 重繪 ListView
         UpdateSearchCaption() ' by Gemini, 2026/03/31: 同步更新視窗標題
         RefreshSearchCache()  ' 2026/3/28 by Gemini: 批次更新快取
-        lvwDebug.Refresh()
+        lvwDebug.Invalidate() ' 2026/07/11 by Simon/Sonnet 5: 改用 Invalidate() 讓 Windows 合併重繪，取代 Refresh() 的強制同步重繪
 
     End Sub
     Private Sub chkSearchLogic_CheckedChanged(sender As Object, e As EventArgs) Handles checkAndOr.CheckedChanged
         checkAndOr.Text = If(checkAndOr.Checked, "AND", "OR")
         UpdateSearchCaption() ' by Gemini, 2026/03/31: 切換模式時同步更新視窗標題
         RefreshSearchCache()  ' 2026/3/28 by Gemini: 批次更新快取
-        lvwDebug.Refresh()
+        lvwDebug.Invalidate() ' 2026/07/11 by Simon/Sonnet 5: 改用 Invalidate() 讓 Windows 合併重繪，取代 Refresh() 的強制同步重繪
 
     End Sub
     Private Sub UpdateSearchCaption()
@@ -837,7 +869,6 @@ Public Class DebugForm
         End If
         txtDebug.SelectionStart = txtDebug.Text.Length
     End Sub
-
     Private Sub CalculateSelectedTimeSpan(sender As Object, e As EventArgs)
         ' by Gemini, 2026/03/29: 加總選取項目各自的耗時間隔 (使用 .Tag.timeStamp)
         ' 每個項目的耗時 = 該項目的 timeStamp - ListView 中前一項的 timeStamp
@@ -860,11 +891,14 @@ Public Class DebugForm
     End Sub
     Private Sub DeleteSelectedItems(sender As Object, e As EventArgs)
         ' by Gemini, 2026/03/29: 刪除選取項目，剩餘項目自動往上遞補，行號序號保留不變
-        ' debug: 大量刪除時崩潰
+        ' 2026/07/11 by Simon/Sonnet 5: 修正大量刪除時崩潰 —
+        '   原本邊列舉 SelectedItems 邊 Items.Remove()會在列舉過程中改動集合本身 (SelectedItems 是即時反映 Items 的視圖)，導致列舉失效。
+        '   改成先複製索引並反向由大到小刪除，刪除較高索引不會影響尚未處理的較低索引。
+        Dim indices() As Integer = lvwDebug.SelectedIndices.Cast(Of Integer)().OrderByDescending(Function(i) i).ToArray()
+        If indices.Length = 0 Then Return
+
         lvwDebug.BeginUpdate()
-        For Each item As ListViewItem In lvwDebug.SelectedItems
-            lvwDebug.Items.Remove(item)
-        Next
+        For Each idx As Integer In indices : lvwDebug.Items.RemoveAt(idx) : Next
         lvwDebug.EndUpdate()
 
     End Sub
@@ -875,18 +909,23 @@ Public Class DebugForm
 
         ' 預先產生 Regex 模式，徹底移除 DrawSubItem 中的 LINQ 與字串運算
         Dim keywords = ParseSearchKeywords(txtDebug.Text.Trim())
-        _searchPattern = If(keywords.Count > 0,
-            String.Join("|", keywords.OrderByDescending(Function(k) k.Length).Select(Function(kw) System.Text.RegularExpressions.Regex.Escape(kw))), "")
+        _searchPattern = If(keywords.Count > 0, String.Join("|", keywords.OrderByDescending(Function(k) k.Length).Select(Function(kw) System.Text.RegularExpressions.Regex.Escape(kw))), "")
 
         ' Tier 3, 2026/06/15 by Simon/Claude: 僅在搜尋字串變動時重建 Regex 實例 (含 IgnoreCase)，供 DrawSubItem 重複使用，避免每格用字串多載重新解析 pattern
         _searchRegex = If(String.IsNullOrEmpty(_searchPattern), Nothing, New Regex(_searchPattern, RegexOptions.IgnoreCase))
 
-        lvwDebug.BeginUpdate()
+        _cachedKeywordsLower = keywords.Select(Function(k) k.ToLower()).ToList()    ' 2026/07/11 by Simon/Sonnet 5: 關鍵字轉小寫一次存欄位，供 CheckIsHitInternal 重複使用；
+        _cachedAndMode = checkAndOr.Checked                                         ' 2026/07/11 by Simon/Sonnet 5: 同時把 checkAndOr.Checked 也快取成欄位，讓 AddMessage3 (可能來自背景執行緒) 不必再讀 UI 控制項
+
         For Each lvi As ListViewItem In lvwDebug.Items
             Dim tag = TryCast(lvi.Tag, DebugItemTag)
-            If tag IsNot Nothing Then tag.isHit = CheckIsHitInternal(tag.textFullRow, keywords)
+            If tag IsNot Nothing Then
+                ' 2026/07/11 by Simon/Sonnet 5: textFullRow 現在是延遲建構的 (沒開搜尋時不會預先組好)，
+                ' 第一次真的需要搜尋時才在這裡補建一次，之後就常駐快取，不用每次都重組
+                If tag.textFullRow Is Nothing Then tag.textFullRow = BuildFullRowText(lvi)
+                tag.isHit = CheckIsHitInternal(tag.textFullRow)
+            End If
         Next
-        lvwDebug.EndUpdate()
 
     End Sub
 
@@ -895,8 +934,7 @@ Public Class DebugForm
         ' Regex 模式: (?:""(?<q>[^""]*)""|(?<w>\S+))
         Dim keywords As New List(Of String)(16)
         If String.IsNullOrWhiteSpace(searchText) Then Return keywords
-        Dim pattern As String = "(?:""(?<q>[^""]*)""|(?<w>\S+))"
-        Dim matches = System.Text.RegularExpressions.Regex.Matches(searchText, pattern)
+        Dim matches = _keywordSplitRegex.Matches(searchText)
         For Each m As System.Text.RegularExpressions.Match In matches
             If m.Groups("q").Success Then
                 keywords.Add(m.Groups("q").Value)
@@ -907,13 +945,14 @@ Public Class DebugForm
         Return keywords
 
     End Function
-    Private Function CheckIsHitInternal(fullText As String, Optional preParsedKeywords As List(Of String) = Nothing) As Boolean
-        ''' 2026/3/28 by Gemini: 內部判斷邏輯，可傳入預解析關鍵字以加速批次處理
-        Dim keywords = If(preParsedKeywords, ParseSearchKeywords(txtDebug.Text.Trim()))
-        If keywords.Count = 0 Then Return False
-        Return If(checkAndOr.Checked,
-            keywords.All(Function(kw) fullText.Contains(kw.ToLower())), ' AND
-            keywords.Any(Function(kw) fullText.Contains(kw.ToLower()))) ' OR
+    Private Function CheckIsHitInternal(fullText As String) As Boolean
+        ' 2026/3/28 by Gemini: 內部判斷邏輯
+        ' 2026/07/11 by Simon/Sonnet 5: 改讀 RefreshSearchCache 預先準備好的 _cachedKeywordsLower/_cachedAndMode，
+        ' 不再現場讀 txtDebug.Text / checkAndOr.Checked (AddMessage3 可能來自背景執行緒呼叫，直接碰 UI 控制項不安全)，也不再每個關鍵字都重新 ToLower()
+        If _cachedKeywordsLower.Count = 0 Then Return False
+
+        Return If(_cachedAndMode, _cachedKeywordsLower.All(Function(kw) fullText.Contains(kw)), ' AND
+                                  _cachedKeywordsLower.Any(Function(kw) fullText.Contains(kw))) ' OR
 
     End Function
     Private Function FindSimilarPair(selectedItem As ListViewItem, Optional additionalItems As List(Of ListViewItem) = Nothing) As ListViewItem
@@ -928,47 +967,44 @@ Public Class DebugForm
         '   _dbg("Begin: This is a test.")
         '   _dbg("Ended: This is a test.")
         '   _dbg("Finish: This is a test.")
-        Dim txt As String = selectedItem.Text
-        Dim coreName As String = RemoveBeginEnd(txt)
-        Dim isBegin As Boolean = txt.Contains("開始")
-        Dim isEnd As Boolean = txt.Contains("結束")
-        If Not isBegin AndAlso Not isEnd Then Return Nothing
+
+        ' 2026/07/11 by Simon/Sonnet 5: coreKey/isBeginRow/isEndRow 已在 AddMessage3 建立時算好存入 Tag，
+        ' 這裡直接讀快取，取代原本每次配對搜尋都對逐一列重跑 RemoveBeginEnd (Substring+6xReplace+Trim)，
+        ' 這是配對搜尋 (Timer_Tick 每則「結束」訊息、選取高亮、雙擊) 的主要 GC 來源
         Dim depth As Integer = 0
+        Dim tagSel = DirectCast(selectedItem.Tag, DebugItemTag)
+        Dim coreName As String = tagSel.coreKey
+        Dim isBegin As Boolean = tagSel.isBeginRow
+        Dim isEnd As Boolean = tagSel.isEndRow
+        If Not isBegin AndAlso Not isEnd Then Return Nothing
+
         If isBegin Then
             ' 向下搜尋配對的「結束」
             For i As Integer = selectedItem.Index + 1 To lvwDebug.Items.Count - 1
-                ' debug: 這裡一直存取物件不會有性能問題嗎? 改成 with lvwDebug? OR??
+                ' todo: debug: 這裡一直存取物件不會有性能問題嗎? 改成 with lvwDebug? OR??
                 Dim item As ListViewItem = lvwDebug.Items(i)
-                Dim itemCore As String = RemoveBeginEnd(item.Text)
-                If IsContentSimilar(coreName, itemCore) Then
-                    If item.Text.Contains("開始") Then
+                Dim itemTag = DirectCast(item.Tag, DebugItemTag)
+                If IsContentSimilar(coreName, itemTag.coreKey) Then
+                    If itemTag.isBeginRow Then
                         depth += 1                      ' 同名的巢狀開始，深度 +1
-                    ElseIf item.Text.Contains("結束") Then
+                    ElseIf itemTag.isEndRow Then
                         If depth = 0 Then Return item   ' 深度歸零 = 正確配對
                         depth -= 1                      ' 消耗一層巢狀
                     End If
                 End If
             Next
+
         ElseIf isEnd Then
             ' 向上搜尋配對的「開始」
+            ' 2026/07/11 by Simon/Sonnet 5: 原本這裡有兩段幾乎一模一樣的向回掃描迴圈 (待處理批次 / 已顯示 ListView)，
+            ' 抽成 ScanBackwardForBegin 共用。depth 用 ByRef 傳遞，讓 Level 2 能接續 Level 1 已累積的巢狀深度繼續找 (與原邏輯等價)。
 
             ' 💡 Level 1: 先在「同一批批次(待處理)」清單中往回搜尋 (優先級最高，因為距離最近)
             If additionalItems IsNot Nothing Then
-                ' 從 selectedItem 在清單中的位置往前找
-                Dim selfIdx As Integer = additionalItems.IndexOf(selectedItem)
+                Dim selfIdx As Integer = additionalItems.IndexOf(selectedItem)  ' 從 selectedItem 在清單中的位置往前找
                 If selfIdx > 0 Then
-                    For i As Integer = selfIdx - 1 To 0 Step -1
-                        Dim item As ListViewItem = additionalItems(i)
-                        Dim itemCore As String = RemoveBeginEnd(item.Text)
-                        If IsContentSimilar(coreName, itemCore) Then
-                            If item.Text.Contains("結束") Then
-                                depth += 1
-                            ElseIf item.Text.Contains("開始") Then
-                                If depth = 0 Then Return item
-                                depth -= 1
-                            End If
-                        End If
-                    Next
+                    Dim pairInBatch As ListViewItem = ScanBackwardForBegin(additionalItems, selfIdx - 1, coreName, depth)
+                    If pairInBatch IsNot Nothing Then Return pairInBatch
                 End If
             End If
 
@@ -977,22 +1013,28 @@ Public Class DebugForm
             ' 當 selectedItem 尚未加入 ListView 時 (Timer_Tick 批次處理中)，Index 會是 -1。
             ' 此時應從 ListView 的最末端 (Items.Count - 1) 開始往回找。
             Dim startIdx As Integer = If(selectedItem.Index >= 0, selectedItem.Index - 1, lvwDebug.Items.Count - 1)
-            For i As Integer = startIdx To 0 Step -1
-                Dim item As ListViewItem = lvwDebug.Items(i)
-                Dim itemCore As String = RemoveBeginEnd(item.Text)
-                If IsContentSimilar(coreName, itemCore) Then
-                    If item.Text.Contains("結束") Then
-                        depth += 1                      ' 同名的巢狀結束，深度 +1
-                    ElseIf item.Text.Contains("開始") Then
-                        If depth = 0 Then Return item   ' 深度歸零 = 正確配對
-                        depth -= 1                      ' 消耗一層巢狀
-                    End If
-                End If
-            Next
+            Return ScanBackwardForBegin(lvwDebug.Items, startIdx, coreName, depth)
         End If
 
         Return Nothing
 
+    End Function
+    Private Function ScanBackwardForBegin(items As Collections.IList, startIdx As Integer, coreName As String, ByRef depth As Integer) As ListViewItem
+        ' 2026/07/11 by Simon/Sonnet 5: FindSimilarPair「向上找開始」的共用邏輯，原本在 additionalItems 與 lvwDebug.Items 兩處各重複一份。
+        ' 參數吃非泛型 IList 是因為 List(Of ListViewItem) 與 ListView.ListViewItemCollection 都實作 IList，但彼此沒有共同的泛型介面。
+        For i As Integer = startIdx To 0 Step -1
+            Dim item As ListViewItem = DirectCast(items(i), ListViewItem)
+            Dim itemTag = DirectCast(item.Tag, DebugItemTag)
+            If IsContentSimilar(coreName, itemTag.coreKey) Then
+                If itemTag.isEndRow Then
+                    depth += 1                      ' 同名的巢狀結束，深度 +1
+                ElseIf itemTag.isBeginRow Then
+                    If depth = 0 Then Return item   ' 深度歸零 = 正確配對
+                    depth -= 1                      ' 消耗一層巢狀
+                End If
+            End If
+        Next
+        Return Nothing
     End Function
     Private Function RemoveBeginEnd(content As String) As String
         ' 2026/03/31 by Gemini: 強化提取比對核心 (Key) 的邏輯

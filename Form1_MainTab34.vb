@@ -108,7 +108,7 @@ Partial Class Form1
                 ' 2026/04/16 by Gemini: 指定使用 Tuple 內的 .Folder 與 .fPath
                 Dim c As Integer = GetMailCount(fPaths(i), folderList(i).eid, folderList(i).sid)    ' 從 400ms 降至近乎 0ms! (2026/06/28 Stage2: 免-folder 多載)
                 If c > 0 Then totalMailCount += c
-                Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle
+                Await SmartThrottle(swThrottle3, ThrottleFreq.Hii, cToken:=cToken) ' 2026/04/16 by Simon/Claude: 改用 ThrottleFreq.Hii + SmartThrottle
             Next
             _dbg("結束step2迴圈")
             Dim tStep2_MailCountLoop = swStep.Elapsed.TotalMilliseconds : swStep.Restart() ' by Gemini 3.0 flash, 2026/04/16: 改名以區分 (GetMailCount Loop)
@@ -128,12 +128,12 @@ Partial Class Form1
                     ' 2026/06/29 by Simon/Claude [Stage2]: 改傳 id-tuple，眼物化移除——folder 由免-folder 多載延後到 ③ 才建
                     Dim folderResult = Await GetAttMailList(fPaths(i), folderList(i).eid, folderList(i).sid, progressPhase1, cToken:=cToken)
                     targetMails.AddRange(folderResult)
-                    Await SmartThrottle(swThrottle3, cToken:=cToken, ThrottleFreq.Hii,
+                    Await SmartThrottle(swThrottle3, ThrottleFreq.Hii,
                                         Sub()
                                             Dim eta = CalculateSpeedAndETA(folderList.Count, processed, swStep.Elapsed.TotalSeconds)
                                             progressPhase1?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = folderList.Count,
                                                                                             .Message = $"Phase 1 (載入資料夾清單): {processed} / {folderList.Count} 個資料夾 ({eta.Speed:F0} 個/秒{eta.EtaString})"})
-                                        End Sub)
+                                        End Sub, cToken:=cToken)
                 Next
                 _dbg("結束step3迴圈")
             Catch ex As OperationCanceledException
@@ -292,12 +292,12 @@ Partial Class Form1
                 ' 避免被下方的 Guard Clauses (Continue For) 略過而導致長時間霸佔主執行緒, 未更新UI進度反饋
                 processed = curMail + 1
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle 與 onThrottled 委派
-                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
                                     Sub()
                                         Dim eta = CalculateSpeedAndETA(total, processed, swTotal.Elapsed.TotalSeconds)
                                         progress?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = total,
                                                                                         .Message = $"Phase 2 (開始逐一開啟郵件讀取附件名稱): {processed} / {total}，已符合 {resultList.Count} 封 ({eta.Speed:F0} 封/秒{eta.EtaString})"})
-                                    End Sub)
+                                    End Sub, cToken:=cToken)
 
                 Dim currentMail As MailItemInfo = sourceList(curMail)
                 Dim cachedAttFilenames As List(Of String) = GetAttFilename(currentMail, skipCache:=False)
@@ -757,8 +757,8 @@ Partial Class Form1
                 fakeNodes.Add(New TreeNode() With {.Tag = f})
             Next
             Dim targetTupleList = Await GetUniqueFolderList(fakeNodes, includeSub:=True, progress:=progress4, cToken:=cToken)
-            Await PreLoadMailCacheAsync(targetTupleList, cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
-            Await PreLoadMailCacheRdoAsync(targetTupleList, progress4, cToken)   ' 2026/07/10 by Simon/Claude Fable 5: 冷夾 RDO by-store 平行預熱(PROBE_PARSCAN 實測 net 3.3×),之後主迴圈全 ① 記憶體命中
+            Await PreLoadMailCacheAsync(targetTupleList, cToken:=cToken)   ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
+            Await PreLoadMailCacheRdoAsync(targetTupleList, progress4, cToken:=cToken)   ' 2026/07/10 by Simon/Claude Fable 5: 冷夾 RDO by-store 平行預熱(PROBE_PARSCAN 實測 net 3.3×),之後主迴圈全 ① 記憶體命中
 
             ' 2026/06/29 by Simon/Claude [Stage2]: 移除整批眼物化，直接走 id-tuple；folder 由免-folder 多載延後到 ③ 才建
             Dim processed As Integer = 0
@@ -773,13 +773,13 @@ Partial Class Form1
                 processed += 1
 
                 ' 2026/04/16 by Gemini 3.0 flash: 改用 ThrottleFreq.Hii + SmartThrottle
-                Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
                                     Sub()
                                         ' 新版 (2026/05/10 by Simon/Claude: 加入 ETA 顯示，對齊 Tab3 做法)
                                         Dim eta = CalculateSpeedAndETA(targetTupleList.Count, processed, sw.Elapsed.TotalSeconds)
                                         progress4?.Report(New ProgressReport With {.CurrentCount = processed, .TotalCount = targetTupleList.Count,
                                                                                    .Message = $"正在掃描系列郵件: {processed} / {targetTupleList.Count} 個資料夾 ({eta.Speed:F0} 個/秒{eta.EtaString})"})
-                                    End Sub)
+                                    End Sub, cToken:=cToken)
             Next
 
             ' ✅ 2026/05/23 by Simon/Claude: 改用 SimTree 內建快照，取代舊版手動備份節點清單，SaveTreeNodeSnap 會在 Nodes.Clear() 之前安全地儲存節點物件與選取狀態
@@ -1238,7 +1238,8 @@ Partial Class Form1
         th.Start()
 
     End Sub
-    Private Async Function ProcessLv4SimBatch(lv As ListView, chunk As ListViewItem(), baseBody As String, baseEntryID As String, pathById As Dictionary(Of String, String), token As CancellationToken) As Task
+    Private Async Function ProcessLv4SimBatch(lv As ListView, chunk As ListViewItem(), baseBody As String, baseEntryID As String, pathById As Dictionary(Of String, String),
+                                              token As CancellationToken) As Task
         ' ---------------------------------------------------------------
         ' ProcessLv4SimBatch — 處理單一批次的「讀 body → 平行算 Jaccard → 批次更新 UI」
         ' 2026/06/16 by Simon/Claude Opus 4.8: 自 Lv4_SelectedIndexChanged 抽出，三階段邏輯原樣不變，僅作用範圍縮為一批 (chunk)

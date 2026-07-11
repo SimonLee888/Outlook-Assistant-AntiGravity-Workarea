@@ -1,5 +1,6 @@
 ﻿Imports System.Runtime.InteropServices
 Imports System.Threading
+Imports Microsoft.Data.Sqlite
 Imports Microsoft.Office.Interop
 Imports Microsoft.Office.Interop.Outlook
 
@@ -9,6 +10,7 @@ Partial Class Form1
     ' ── Tab5 SimTree 多選控制項 (2026/05/01 by Claude: 取代舊版 TreeView5，對齊 Tab1~4 操作行為) ──
     'Private Listview6 As ListView = Nothing                    ' by Gemini 3 Flash, 2026/04/20: 動態建立的統計列表
     Private rbExactMatch, rbFuzzyMatch As New RadioButton()     ' tab5 用到的radio button
+    Private ctxMenuLv6 As ContextMenuStrip = Nothing            ' 2026/07/11 by Simon/Claude: ListView6「刪除這個 Table」右鍵選單 (單一實例，初始化於 InitLv6ContextMenu)
     Private _includeSubTab5 As Boolean = True                   ' Tab5 是否含子資料夾，由 CheckSubFolder5 CheckBox 控制，預設 True
     Private _tv5PrevSearchMode As Boolean = True                ' by Gemini 3 Flash, 2026/05/06: 記憶最後一次掃描的模式
     Private _lv5LastSortColumn As Integer = -1                  ' by Simon/Claude, 2026/05/10: Tab5 欄位排序狀態
@@ -74,17 +76,17 @@ Partial Class Form1
             ' 2026/06/17 by Simon/Claude Opus 4.8: Exact 維持原主鍵分桶；Fuzzy 改走 SimHash+bigram Jaccard 內文比對管線(S3→S6)
             Dim groupDict As Dictionary(Of String, List(Of MailItemInfo))
             If isExactMode Then
-                groupDict = Await ScanMailsToGroupDict(folderList, True, progress5, cToken)
+                groupDict = Await ScanMailsToGroupDict(folderList, True, progress5, cToken:=cToken)
                 _lv5FuzzyScoreMap = Nothing ' Exact 不用 scoreMap
             Else
                 ' 沿用 ScanMailsToGroupDict 完成資料夾列舉 + L2.5 快取，攤平成全體郵件(主旨分桶鍵在 Fuzzy 不再使用)
-                Dim scanned = Await ScanMailsToGroupDict(folderList, False, progress5, cToken)
+                Dim scanned = Await ScanMailsToGroupDict(folderList, False, progress5, cToken:=cToken)
                 Dim allMails = scanned.Values.SelectMany(Function(x) x).ToList()
                 Dim targetT As Double = GetFuzzyTargetT()                                       ' S8 改接trackbar控制項參數 (低/中/高/極高)
                 Dim thread_K As Integer = GetThreadCount()                                      ' 2026/07/07 by Simon/Claude: 讀 UI(numThread)一次，往下貫穿 S3/S4/S5 三處平行化
-                Await PreComputeSimHash(allMails, progress5, cToken, thread_K)                  ' S3 build pass(暖快取跳過已算)
-                Dim cand = Await PairFuzzyCandidates(allMails, targetT, thread_K, cToken)       ' S4 size 視窗 + Hamming 一階
-                Dim filt = Await FilterCandidates(cand, targetT, progress5, thread_K, cToken)   ' S5 候選 body Jaccard 精算
+                Await PreComputeSimHash(allMails, thread_K, progress5, cToken:=cToken)                  ' S3 build pass(暖快取跳過已算)
+                Dim cand = Await PairFuzzyCandidates(allMails, targetT, thread_K, cToken:=cToken)       ' S4 size 視窗 + Hamming 一階
+                Dim filt = Await FilterCandidates(cand, targetT, thread_K, progress5, cToken:=cToken)   ' S5 候選 body Jaccard 精算
                 Dim fuzzy = BuildFuzzyGroups(filt.Pairs, filt.Sets)                             ' S6 union-find 分群 + scoreMap
                 _lv5FuzzyScoreMap = fuzzy.ScoreMap
                 groupDict = fuzzy.GroupDict
@@ -115,8 +117,8 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Layer2 流程協調層"
-    Private Async Function ScanMailsToGroupDict(folderList As List(Of (eid As String, sid As String, fPath As String)), isExact As Boolean, progress As IProgress(Of ProgressReport),   ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
-                                                     cToken As CancellationToken) As Task(Of Dictionary(Of String, List(Of MailItemInfo)))
+    Private Async Function ScanMailsToGroupDict(folderList As List(Of (eid As String, sid As String, fPath As String)), isExact As Boolean, ' 2026/06/28 Stage2: 合約改 (eid,sid,fPath)
+                                                progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task(Of Dictionary(Of String, List(Of MailItemInfo)))
         ' ---------------------------------------------------------------
         ' ScanMailsToGroupDict — 改用 GetMailInfo L2.5 快取（Tab4/Tab5 共用）
         ' 2026/05/06 by Claude: 原版直接 GetTable COM 掃描已移除，改走 L2.5 快取代理層
@@ -132,8 +134,8 @@ Partial Class Form1
         Dim swTotal As Stopwatch = Stopwatch.StartNew()     ' 2026/05/10 by Simon/Claude: 供 ETA 計算使用; refactored by Claude Sonnet 4.6, 2026/06/07
 
         ' 2026/05/11 by Simon/Claude: SSD 批次預讀，將 DB 中的 mail_info 一次拉入記憶體
-        Await PreLoadMailCacheAsync(folderList, cToken)
-        Await PreLoadMailCacheRdoAsync(folderList, progress, cToken)   ' 2026/07/10 by Simon/Claude Fable 5: 冷夾 RDO by-store 平行預熱(PROBE_PARSCAN 實測 net 3.3×),之後主迴圈全 ① 記憶體命中
+        Await PreLoadMailCacheAsync(folderList, cToken:=cToken)
+        Await PreLoadMailCacheRdoAsync(folderList, progress, cToken:=cToken)   ' 2026/07/10 by Simon/Claude Fable 5: 冷夾 RDO by-store 平行預熱(PROBE_PARSCAN 實測 net 3.3×),之後主迴圈全 ① 記憶體命中
 
         For i As Integer = 0 To folderList.Count - 1
             ' 2026/06/29 by Simon/Claude [Stage2]: 改走 id-tuple，眼物化移除——folder 由免-folder 多載延後到 ③ 才建
@@ -142,7 +144,7 @@ Partial Class Form1
             Dim fPath As String = folderList(i).fPath
             Try
                 ' 透過 L2.5 取得（含快取），needTopic:=False (Tab5 不需要)
-                Dim rows = Await GetMailInfo(fPath, eid, sid, needTopic:=False, cToken)
+                Dim rows = Await GetMailInfo(fPath, eid, sid, needTopic:=False, cToken:=cToken)
                 For Each row In rows
                     Dim m As MailItemInfo = row.Mail
                     ' SenderEmail 優先，無則 fallback SenderName（與原版邏輯一致）
@@ -156,11 +158,11 @@ Partial Class Form1
             End Try
 
             totalProcessed += 1
-            Await SmartThrottle(swThrottle, cToken:=cToken, ThrottleFreq.Hii,
+            Await SmartThrottle(swThrottle, ThrottleFreq.Hii,
                                 Sub()   ' 新版 (2026/05/10 by Simon/Claude: 加入 ETA 顯示，對齊 Tab3 做法)
                                     Dim eta = CalculateSpeedAndETA(totalFolders, totalProcessed, swTotal.Elapsed.TotalSeconds)
                                     progress?.Report(New ProgressReport With {.Message = $"掃描中: {totalProcessed}/{totalFolders} 個資料夾 ({eta.Speed:F0} 個/秒{eta.EtaString})"})
-                                End Sub)
+                                End Sub, cToken:=cToken)
         Next
         Return groupDict
     End Function
@@ -375,7 +377,7 @@ Partial Class Form1
     End Sub
 #End Region
 #Region "  ├ Fuzzy 模糊比對專用區塊 (SimHash + bigram Jaccard)"
-    Private Async Function PreComputeSimHash(mails As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken, thread_K As Integer) As Task
+    Private Async Function PreComputeSimHash(mails As List(Of MailItemInfo), thread_K As Integer, progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
         ' 對「_cacheSimHash 沒有的」郵件讀 body 算 simhash+bigram_count，寫回獨立 db 與記憶體快取。已算過的(暖快取)直接跳過。
         ' 2026/07/03 by Simon/Claude [平行化SimHash]: PROBE_BODYPAR 實測(跨349資料夾/205616封母體樣本) numThread=8 平行讀 body 效率75%，
         '   35萬封估4.3分鐘(對比單執行緒約25分鐘)。_rdo2 在且 Outlook session 就緒時走平行版；否則(未勾CheckRDO)退回序列版。
@@ -385,9 +387,9 @@ Partial Class Form1
         If todo.Count = 0 Then Return
 
         If _rdo2 IsNot Nothing AndAlso _olNS IsNot Nothing Then
-            Await PreComputeSimHashParallel(todo, progress, thread_K, cToken)
+            Await PreComputeSimHashParallel(todo, thread_K, progress, cToken:=cToken)
         Else
-            Await PreComputeSimHashSerial(todo, progress, cToken)
+            Await PreComputeSimHashSerial(todo, progress, cToken:=cToken)
         End If
     End Function
     Private Async Function PreComputeSimHashSerial(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
@@ -415,14 +417,14 @@ Partial Class Form1
                 Dim eta = CalculateSpeedAndETA(todo.Count, i + 1, swEta.Elapsed.TotalSeconds)   ' 2026/06/17 by Simon/Claude: 加入速度與 ETA 顯示，對齊 Tab3/Tab4 做法
                 progress?.Report(New ProgressReport With {.Message = $"計算內文指紋: {i + 1}/{todo.Count} ({eta.Speed:F0} 個/秒{eta.EtaString})"})
                 ' 2026/06/25 by Gemini 3.1 Pro: 不帶入 onThrottled 委派，避免產生 Closure 記憶體配置，純享受其 Delay 與 OCE
-                Await SmartThrottle(swThrottle, cToken, ThrottleFreq.Hii)
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii, cToken:=cToken)
             End If
         Next
         _dbg("[SimHash]", $"序列版讀 {todo.Count} 封, body 累計 {totalBodyChars:N0} 字元 ≈ {totalBodyChars * 2 / 1048576:F0} MB(純UTF-16)")
 
         If batch.Count > 0 Then SaveDbMail(batch)
     End Function
-    Private Async Function PreComputeSimHashParallel(todo As List(Of MailItemInfo), progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) As Task
+    Private Async Function PreComputeSimHashParallel(todo As List(Of MailItemInfo), thread_K As Integer, progress As IProgress(Of ProgressReport), cToken As CancellationToken) As Task
         ' 平行版：每個 worker 在自己的 ThreadPool 執行緒內自建/自用/自 Logoff 一個獨立 RDOSession(不碰共用 _rdo2/UI 緒)，
         '   對齊 PROBE_BODYPAR 探針驗證過、確實能拿到平行加速的用法(memory_20260622_1846 §八: OOM 物件才必須留 UI 緒, RDO 獨立 session 可背景跑)。
         '   RDO 解析失敗的少數信(探針觀察約0.3%)收進回傳清單，等全部 worker 結束、續回本協調函數(繼承呼叫端的 UI 緒 SynchronizationContext)後，
@@ -440,18 +442,16 @@ Partial Class Form1
         Dim tasks As New List(Of Task(Of List(Of MailItemInfo)))()
         For w As Integer = 0 To numThread - 1
             Dim idx As Integer = w
-            tasks.Add(Task.Run(Function() SimHashParallelWorker(profileName, chunks(idx), processedCounter, totalCount, swEta, lastReportMs, reportGate, progress, numThread, cToken)))
+            tasks.Add(Task.Run(Function() SimHashParallelWorker(profileName, chunks(idx), processedCounter, totalCount, swEta, lastReportMs, reportGate, numThread, progress, cToken:=cToken)))
         Next
         Dim rdoFailedLists = Await Task.WhenAll(tasks)
-        ' 2026/07/11 by Simon/Claude Fable 5 [ESC 偵錯器誤斷修正]: worker 是同步函數,跑在 ThreadPool 裸堆疊上 —
-        '   若在 worker 內 ThrowIfCancellationRequested,拋出當下該執行緒堆疊上沒有任何使用者 catch(Bt5_Click 的 Catch OCE 在 UI 緒 async 鏈上),
+        ' 2026/07/11 by Simon/Claude Fable 5 [ESC 偵錯器誤斷修正]:
+        '   worker 是同步函數,跑在 ThreadPool 裸堆疊上 — 若在 worker 內 ThrowIfCancellationRequested, 拋出當下該執行緒堆疊上沒有任何使用者 catch(Bt5_Click 的 Catch OCE 在 UI 緒 async 鏈上),
         '   VS 偵錯器「使用者未處理例外」判定只看實體堆疊 → 每次 ESC 都誤觸發中斷(App 本身其實接得住,執行期無害)。
-        '   改為 worker 合作式退出(IsCancellationRequested → Exit For,不拋例外),取消例外統一在這裡(UI 緒 async 續體)拋出 —
-        '   與序列版同一條路徑,偵錯器的 async 感知判定看得到上層 Catch,不會誤斷。
+        '   改為 worker 合作式退出(IsCancellationRequested → Exit For,不拋例外),取消例外統一在這裡(UI 緒 async 續體)拋出 — 與序列版同一條路徑,偵錯器的 async 感知判定看得到上層 Catch,不會誤斷。
         cToken.ThrowIfCancellationRequested()
         Dim rdoFailed = rdoFailedLists.SelectMany(Function(x) x).ToList()
-
-        _dbg("[SimHash]", $"平行化(K={numThread}) 完成 {todo.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
+        _dbg("[SimHash]", $"平行化 K={numThread}) 完成 {todo.Count - rdoFailed.Count} 封, RDO失敗待OOM補算 {rdoFailed.Count} 封")
 
         ' RDO 解析失敗的少數信，回到 UI 緒用既有 GetMailBody(內建OOM fallback) 逐封補算
         If rdoFailed.Count > 0 Then
@@ -467,8 +467,9 @@ Partial Class Form1
             SaveDbMail(fallbackBatch)
         End If
     End Function
-    Private Function SimHashParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer, swEta As Stopwatch,
-                                           lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) As List(Of MailItemInfo)
+    Private Function SimHashParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer,
+                                           swEta As Stopwatch, lastReportMs As Long(), reportGate As Object, thread_K As Integer,
+                                           progress As IProgress(Of ProgressReport), cToken As CancellationToken) As List(Of MailItemInfo)
         ' 平行版 worker：自建獨立 session 掃 subset 算 simhash，寫入 _cacheSimHash(ConcurrentDictionary,執行緒安全)與 _dbMail(自帶鎖)。
         '   RDO 解析失敗(store找不到/GetMessageFromID失敗/.Body失敗)的信收進回傳清單，交還協調函數做OOM補算(worker背景緒不可碰OOM)。
         Dim rdoFailed As New List(Of MailItemInfo)()
@@ -479,7 +480,7 @@ Partial Class Form1
                 session = New Redemption.RDOSession()
                 session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
             Catch ex As System.Exception
-                _dbg("SimHashParallelWorker Logon失敗", ex.Message)
+                _dbg("Logon失敗", ex.Message)
                 Return subset   ' 這個 worker 的整批信全部交還協調函數用 OOM 補算
             End Try
 
@@ -542,7 +543,8 @@ Partial Class Form1
             End If
         End Try
     End Function
-    Private Async Function PairFuzzyCandidates(mails As List(Of MailItemInfo), targetT As Double, thread_K As Integer, cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
+    Private Async Function PairFuzzyCandidates(mails As List(Of MailItemInfo), targetT As Double, thread_K As Integer,
+                                               cToken As CancellationToken) As Task(Of List(Of (A As MailItemInfo, B As MailItemInfo)))
         ' size 1/T 滑動視窗收斂 O(n²) + Hamming 一階篩。純 CPU、無 COM → 放 Task.Run 不凍 UI。
         Dim hThr As Integer = HammingThresholdFor(targetT)
         Dim maxRatio As Double = 1.0 / targetT
@@ -582,7 +584,8 @@ Partial Class Form1
                 Return result
             End Function, cToken)
     End Function
-    Private Async Function FilterCandidates(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
+    Private Async Function FilterCandidates(candidates As List(Of (A As MailItemInfo, B As MailItemInfo)), targetT As Double, thread_K As Integer,
+                                            progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
                                             As Task(Of (Pairs As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), Sets As Dictionary(Of String, HashSet(Of Integer))))
 
         ' 只對通過 S4 的少數候選讀 body、建 bigram 集合、算精確 bigram Jaccard。集合回傳給 S6 算群代表分數，免重讀。
@@ -623,7 +626,7 @@ Partial Class Form1
             Dim tasks As New List(Of Task(Of (Sets As Dictionary(Of String, HashSet(Of Integer)), RdoFailed As List(Of MailItemInfo))))()
             For w As Integer = 0 To wK - 1
                 Dim idx As Integer = w
-                tasks.Add(Task.Run(Function() MailBodyParallelWorker(profileName, chunks(idx), processedCounter, missing.Count, dbHitCount, swEta, lastReportMs, reportGate, progress, wK, cToken)))
+                tasks.Add(Task.Run(Function() MailBodyParallelWorker(profileName, chunks(idx), processedCounter, missing.Count, dbHitCount, swEta, lastReportMs, reportGate, wK, progress, cToken:=cToken)))
             Next
             Dim results = Await Task.WhenAll(tasks)
             cToken.ThrowIfCancellationRequested()   ' 2026/07/11 by Simon/Claude Fable 5: 同 S3 — worker 合作式退出不拋例外,取消統一在 UI 緒 async 續體拋出(原因詳見 PreComputeSimHashParallel 同位置註解)
@@ -708,8 +711,9 @@ Partial Class Form1
             End Function, cToken)
         Return (pairs, sets)
     End Function
-    Private Function MailBodyParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer, dbHitCount As Integer, swEta As Stopwatch,
-                                            lastReportMs As Long(), reportGate As Object, progress As IProgress(Of ProgressReport), thread_K As Integer, cToken As CancellationToken) _
+    Private Function MailBodyParallelWorker(profileName As String, subset As List(Of MailItemInfo), processedCounter As Integer(), totalCount As Integer,
+                                            dbHitCount As Integer, swEta As Stopwatch, lastReportMs As Long(), reportGate As Object, thread_K As Integer,
+                                            progress As IProgress(Of ProgressReport), cToken As CancellationToken) _
                                             As (Sets As Dictionary(Of String, HashSet(Of Integer)), RdoFailed As List(Of MailItemInfo))
         ' 2026/07/08 by Simon/Claude: S5-1b 平行版 worker — 對齊 SimHashParallelWorker(S3)的手法：
         '   自建獨立 RDOSession(不碰共用 _rdo2/UI 緒)，逐封讀 body → 正規化 → 建 bigram 集合(不算 simhash，S5 只需要集合)。
@@ -777,7 +781,8 @@ Partial Class Form1
             End If
         End Try
     End Function
-    Private Function BuildFuzzyGroups(similar As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), sets As Dictionary(Of String, HashSet(Of Integer))) As (GroupDict As Dictionary(Of String, List(Of MailItemInfo)), ScoreMap As Dictionary(Of String, Double))
+    Private Function BuildFuzzyGroups(similar As List(Of (A As MailItemInfo, B As MailItemInfo, Score As Double)), sets As Dictionary(Of String, HashSet(Of Integer))) _
+                                      As (GroupDict As Dictionary(Of String, List(Of MailItemInfo)), ScoreMap As Dictionary(Of String, Double))
         ' 通過 Jaccard 門檻的配對 → union-find 連通分量 → G1,G2…；每群選 bigram_count 最大者為代表，每封顯示「對代表的 bigram Jaccard %」。
         Dim parent As New Dictionary(Of String, String)()
         Dim mailById As New Dictionary(Of String, MailItemInfo)()
@@ -1280,7 +1285,7 @@ Partial Class Form1
                         If healedPaths.Add(m.FolderPath) Then SelfHealDeadEntryId(m.FolderPath)
                     Case Else : stats.Errored += 1
                 End Select
-                Await SmartThrottle(swThrottle, ct, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (逐封): {i + 1} / {total}...")
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (逐封): {i + 1} / {total}...", cToken:=ct)
             Next
         Else
             ' ── 方法B：依資料夾批次 GetTable+GetArray ──
@@ -1302,7 +1307,7 @@ Partial Class Form1
                             Case Else : stats.Errored += 1
                         End Select
                         done += 1
-                        Await SmartThrottle(swThrottle, ct, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (退回逐封): {done} / {total}...")
+                        Await SmartThrottle(swThrottle, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (退回逐封): {done} / {total}...", cToken:=ct)
                     Next
                     Continue For
                 End If
@@ -1320,7 +1325,7 @@ Partial Class Form1
                     End If
                     done += 1
                 Next
-                Await SmartThrottle(swThrottle, ct, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (批次): {done} / {total}...")
+                Await SmartThrottle(swThrottle, ThrottleFreq.Hii, Sub() PgrsBar2.Text = $"刷新郵件 (批次): {done} / {total}...", cToken:=ct)
             Next
         End If
 
@@ -1589,9 +1594,9 @@ Partial Class Form1
                 Case DialogResult.No
                     If MessageBox.Show("【安全提示】這將把目前的 SSD 快取檔更名備份 ( .zip) 並重新建立空白資料表。" & vbCrLf & "這可以解決 Schema 不相容問題且具備救援機制，確定嗎？", "重置 SSD 快取", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) = DialogResult.OK Then
                         Await ZipAndRebuildDB()
-                        If chkClearSimHash.Checked Then DeleteDbMail() ' 2026/06/17 by Simon/Claude Opus 4.8: 勾選 chkClearSimHash 時連同 SSD 一併清除 SimHash 獨立 db (DeleteDbMail 內含關連線/刪檔/清記憶體/重建空表)
-                        PgrsBar2.Text = "已完成：SSD 資料庫已備份並重新初始化" & If(chkClearSimHash.Checked, " (含 SimHash 清除)", "")
-                        _dbg("清理", "僅 SSD (已備份)" & If(chkClearSimHash.Checked, " + SimHash", ""))
+                        If chkClearDbMail.Checked Then DeleteDbMail() ' 2026/06/17 by Simon/Claude Opus 4.8: 勾選 chkClearSimHash 時連同 SSD 一併清除 SimHash 獨立 db (DeleteDbMail 內含關連線/刪檔/清記憶體/重建空表)
+                        PgrsBar2.Text = "已完成：SSD 資料庫已備份並重新初始化" & If(chkClearDbMail.Checked, " (含 SimHash 清除)", "")
+                        _dbg("清理", "僅 SSD (已備份)" & If(chkClearDbMail.Checked, " + SimHash", ""))
                     End If
 
                     ' 兩者皆清
@@ -1599,13 +1604,13 @@ Partial Class Form1
                     If MessageBox.Show("確定要清除記憶體並備份重置 SSD 快取嗎？", "最後確認", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) = DialogResult.OK Then
                         ClearMemoryCachesCore()
                         Await ZipAndRebuildDB()
-                        If chkClearSimHash.Checked Then DeleteDbMail() ' 2026/06/17 by Simon/Claude Opus 4.8: 勾選 chkClearSimHash 時連同 SSD 一併清除 SimHash 獨立 db
-                        PgrsBar2.Text = "已完成：記憶體與 SSD 快取已全數歸零 (舊 SSD 檔已備份)" & If(chkClearSimHash.Checked, " + SimHash 已清除", "")
-                        _dbg("清理", "FULL CLEAN (已備份)" & If(chkClearSimHash.Checked, " + SimHash", ""))
+                        If chkClearDbMail.Checked Then DeleteDbMail() ' 2026/06/17 by Simon/Claude Opus 4.8: 勾選 chkClearSimHash 時連同 SSD 一併清除 SimHash 獨立 db
+                        PgrsBar2.Text = "已完成：記憶體與 SSD 快取已全數歸零 (舊 SSD 檔已備份)" & If(chkClearDbMail.Checked, " + SimHash 已清除", "")
+                        _dbg("清理", "FULL CLEAN (已備份)" & If(chkClearDbMail.Checked, " + SimHash", ""))
                     End If
             End Select
         End Using
-        chkClearSimHash.CheckState = CheckState.Unchecked
+        chkClearDbMail.CheckState = CheckState.Unchecked
 
         RefreshLv6DbStats()
         _dbg("結束")
@@ -1792,6 +1797,107 @@ Partial Class Form1
         ' F5 強制刷新
         If e.KeyCode = Keys.F5 Then RefreshLv6DbStats()
     End Sub
+    Private Sub Lv6_MouseDown(sender As Object, e As MouseEventArgs) Handles ListView6.MouseDown
+        ' 2026/07/11 by Simon/Claude: 右鍵點在項目上時強制單選該項 (刪除功能只支援單選，不保留原本的多選狀態)
+        If e.Button <> MouseButtons.Right Then Return
+
+        Dim it = ListView6.GetItemAt(e.X, e.Y)
+        If it Is Nothing Then Return
+
+        For Each i As ListViewItem In ListView6.Items
+            If i IsNot it Then i.Selected = False
+        Next
+        it.Selected = True : it.Focused = True
+    End Sub
+    Private Function ResolveLv6DeletableTable(label As String) As String
+        ' ---------------------------------------------------------------
+        ' 2026/07/11 by Simon/Claude: 判斷 ListView6 選取列是否對應到「可安全單獨刪除」的實體資料表
+        ' 標題列/DB 檔案大小/備份 ZIP 等非資料表項目回傳 ""；
+        ' senders 因被 mail_info.sender_id 外鍵參照 (DROP 後 AUTOINCREMENT 歸零會讓既有 sender_id 全部指錯人) 故不開放單獨刪除；
+        ' bigram_set 是 mail_simhash 表內的欄位而非獨立資料表，同樣不開放
+        ' ---------------------------------------------------------------
+        If String.IsNullOrEmpty(label) Then Return ""
+        If label.Contains("folder_info") Then Return "folder_info"
+        If label.Contains("mail_info") Then Return "mail_info"
+        If label.Contains("att_maillist") Then Return "att_maillist"
+        If label.Contains("att_filenames") Then Return "att_filenames"
+        If label.Contains("year_count") Then Return "year_count"
+        If label.Contains("month_count") Then Return "month_count"
+        If label.Contains("mail_simhash") Then Return "mail_simhash"
+        Return ""
+    End Function
+    Private Sub ClearLv6TableMemoryCache(tableName As String)
+        ' 2026/07/11 by Simon/Claude: 刪表後同步清除對應的記憶體快取，避免下次 SaveCache(timerSaveCache)
+        ' 或 lazy-load 把記憶體裡仍殘留的舊資料寫回剛清空的表，讓「刪除」形同虛設
+        Select Case tableName
+            Case "folder_info"
+                _cacheMailCount.Clear() : _cacheMailCountAll.Clear()
+                _cacheFolderCount.Clear() : _cacheFolderCountAll.Clear()
+                _cacheFolderSize.Clear() : _cacheFolderSizeAll.Clear()
+                _cacheFolderIDs.Clear() : _cacheFolderCommitMax.Clear()
+            Case "mail_info" : _cacheMailInfo.Clear()
+            Case "att_maillist" : _cacheAttMailList.Clear()
+            Case "att_filenames" : _cacheAttFilename.Clear()
+            Case "year_count" : _cacheYearCount.Clear()
+            Case "month_count" : _cacheMonthCount.Clear()
+            Case "mail_simhash" : _cacheSimHash.Clear()
+        End Select
+    End Sub
+    Private Async Function DeleteLv6Table(tableName As String, displayLabel As String) As Task
+        ' ---------------------------------------------------------------
+        ' 2026/07/11 by Simon/Claude: Tab6 右鍵「刪除這個 Table」— 二次確認後 DROP TABLE，
+        ' 立即以既有 CREATE TABLE IF NOT EXISTS schema 重建空表 (比照 DeleteDbMail 的慣例，避免其餘功能因表不存在而拋例外)，
+        ' 並清對應記憶體快取，最後刷新 Lv6 統計顯示
+        ' ---------------------------------------------------------------
+        Dim conn As SqliteConnection = If(tableName = "att_filenames" OrElse tableName = "mail_simhash", _dbMail, _dbCache)
+        If conn Is Nothing Then Return
+
+        Dim confirm = MessageBox.Show($"確定要刪除資料表「{displayLabel}」嗎？" & vbCrLf & vbCrLf &
+                                       "此操作會清空該表所有資料(含對應的記憶體快取)，且無法復原！",
+                                       "確認刪除資料表", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2)
+        If confirm <> DialogResult.Yes Then Return
+
+        _dbg("開始", $"🗑️{tableName}")
+        Try
+            Await Task.Run(Sub()
+                               Using cmd As New SqliteCommand($"DROP TABLE IF EXISTS [{tableName}]", conn) : cmd.ExecuteNonQuery() : End Using
+                               If conn Is _dbCache Then
+                                   Using cmd As New SqliteCommand(BuildSQLiteTableString(), _dbCache) : cmd.ExecuteNonQuery() : End Using
+                               Else
+                                   EnsureDbMailSchema()
+                               End If
+                           End Sub)
+
+            ClearLv6TableMemoryCache(tableName)
+            RefreshLv6DbStats()
+            PgrsBar2.Text = $"已刪除資料表「{tableName}」"
+            _dbg("結束", "已刪除並重建空表")
+
+        Catch ex As System.Exception
+            _dbg("❌ 錯誤", $"刪除 {tableName} 失敗: {ex.Message}")
+            MessageBox.Show($"刪除失敗: {ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Function
+    Private Sub InitLv6ContextMenu()
+        ' 2026/07/11 by Simon/Claude: ListView6 右鍵選單，冪等 (重複呼叫只建一次)；僅支援單選單一資料表刪除
+        If ctxMenuLv6 IsNot Nothing Then Return Else ctxMenuLv6 = New ContextMenuStrip()
+
+        Dim mnuDeleteTable As New ToolStripMenuItem("刪除這個 Table(&D)")
+        ctxMenuLv6.Items.Add(mnuDeleteTable)
+
+        AddHandler mnuDeleteTable.Click, Async Sub(sender, e)
+                                             If ListView6.SelectedItems.Count <> 1 Then Return
+                                             Dim label = ListView6.SelectedItems(0).Text
+                                             Dim tbl = ResolveLv6DeletableTable(label)
+                                             If tbl <> "" Then Await DeleteLv6Table(tbl, label)
+                                         End Sub
+
+        ' 只有單選且選中項目對應到真正可刪除的資料表時才顯示選單
+        AddHandler ctxMenuLv6.Opening, Sub(s, ev)
+                                           If ListView6.SelectedItems.Count <> 1 Then ev.Cancel = True : Return
+                                           If ResolveLv6DeletableTable(ListView6.SelectedItems(0).Text) = "" Then ev.Cancel = True
+                                       End Sub
+    End Sub
     Private Sub CheckDebug_CheckedChanged(sender As Object, e As EventArgs) Handles CheckDebug.CheckedChanged
         _isDebugMode = CheckDebug.Checked
         _dbg("開始", _isDebugMode.ToString)
@@ -1838,7 +1944,7 @@ Partial Class Form1
         '   按住 Ctrl = 呼叫正式版 ShowMailQuickPreview，方便跟前兩者同批次比較耗時
 
         ' PROBE_PARSCAN ↓↓↓ 整塊可刪(連同下方三支 ProbeParScan 函式) ↓↓↓
-        Await ProbeParScanAsync()
+
         ' PROBE_PARSCAN ↑↑↑ 整塊可刪 ↑↑↑
     End Sub
 
@@ -1854,187 +1960,6 @@ Partial Class Form1
     '   看門狗: CTS 8 分鐘硬上限；探針執行中再按一次 Debug 鈕 = 手動取消。中斷時回報已完成的 pass。
     Private _probeParScanCts As CancellationTokenSource = Nothing
 
-    Private Async Function ProbeParScanAsync() As Task
-        If _probeParScanCts IsNot Nothing Then
-            _dbg("PROBE_PARSCAN", "收到第二次點擊 → 手動取消進行中的探針")
-            _probeParScanCts.Cancel() : Return
-        End If
-        If _olNS Is Nothing Then _dbg("PROBE_PARSCAN", "Outlook session 未就緒，中止") : Return
-
-        ' 母體: DB folder_info 全部郵件夾(eid/sid 齊全者)。不經 UI 樹、不物化 OOM folder。
-        Dim allRows = LoadAllFolderInfo().Where(Function(r) r.isMail = 1 AndAlso r.eid <> "" AndAlso r.sid <> "").ToList()
-        If allRows.Count = 0 Then _dbg("PROBE_PARSCAN", "folder_info 無資料，請先 RenewCache 建庫") : Return
-
-        Dim profileName As String = _olNS.CurrentProfileName
-        _probeParScanCts = New CancellationTokenSource(TimeSpan.FromMinutes(8))   ' 看門狗: 8 分鐘硬上限
-        Dim ct As CancellationToken = _probeParScanCts.Token
-
-        ' pass 清單: K=0 + ByStore=True 代表「每個 store 一條 worker」
-        Dim passes As New List(Of (Label As String, K As Integer, ByStore As Boolean)) From {
-            ("S1a 循序基準", 1, False), ("P2 round-robin", 2, False), ("P4 round-robin", 4, False),
-            ("P8 round-robin", 8, False), ("PS 每store一緒", 0, True), ("S1b 循序複測", 1, False)}
-        Dim lines As New List(Of String)
-        Dim serialScanSecs As New List(Of Double)                       ' S1a/S1b 純掃秒數，算 speedup 分母
-        Dim passScan As New List(Of (Label As String, Secs As Double))  ' 各 pass 純掃秒數
-        Dim basePerFolder As Dictionary(Of String, Integer) = Nothing   ' S1a 每夾列數，供 parity 比對
-        Dim swTotal As Stopwatch = Stopwatch.StartNew()
-        _dbg("PROBE_PARSCAN 開始", $"母體 {allRows.Count} 夾 | 6 pass A/B/A | 看門狗 8 分鐘")
-        Try
-            For Each p In passes
-                ct.ThrowIfCancellationRequested()
-                PgrsBar2.Text = $"PROBE_PARSCAN: {p.Label} 掃描中 ({allRows.Count} 夾)..."
-
-                ' 分工: ByStore = 按 PST 分組(測跨 store 平行極限)；否則 round-robin 交錯發牌(打散 store 聚集)
-                Dim chunks As List(Of List(Of FolderInfoDbRow))
-                If p.ByStore Then
-                    chunks = allRows.GroupBy(Function(r) GetStoreNameFromPath(r.path)).Select(Function(g) g.ToList()).ToList()
-                Else
-                    chunks = Enumerable.Range(0, p.K).Select(Function(w) New List(Of FolderInfoDbRow)).ToList()
-                    For i As Integer = 0 To allRows.Count - 1 : chunks(i Mod p.K).Add(allRows(i)) : Next
-                End If
-
-                Dim sw As Stopwatch = Stopwatch.StartNew()
-                Dim tasks = chunks.Select(Function(c) Task.Run(Function() ProbeParScanWorker(profileName, c, ct))).ToList()
-                Dim workerResults = Await Task.WhenAll(tasks)
-                sw.Stop()
-
-                Dim rows As Long = workerResults.Sum(Function(w) w.Rows)
-                Dim fails As Integer = workerResults.Sum(Function(w) w.Fails)
-                Dim scanSecs As Double = workerResults.Max(Function(w) w.ScanMs) / 1000.0   ' 最慢 worker 的純掃時間(排除 Logon/store dict 建置)
-                Dim perFolder As New Dictionary(Of String, Integer)(allRows.Count)
-                For Each w In workerResults : For Each kv In w.PerFolder : perFolder(kv.Key) = kv.Value : Next : Next
-
-                ' parity: 各 pass 每夾列數 vs S1a 基準(掃描期間信箱若有增刪會出現少量差異,屬正常,回報數字自行判讀)
-                Dim parityStr As String = ""
-                If basePerFolder Is Nothing Then
-                    basePerFolder = perFolder
-                Else
-                    Dim mismatch As Integer = perFolder.Where(Function(kv) Not basePerFolder.ContainsKey(kv.Key) OrElse basePerFolder(kv.Key) <> kv.Value).Count()
-                    parityStr = $", parity差異 {mismatch} 夾"
-                End If
-
-                If Not p.ByStore AndAlso p.K = 1 Then serialScanSecs.Add(scanSecs)
-                passScan.Add((p.Label, scanSecs))
-                Dim line As String = $"{p.Label} K={chunks.Count}: wall {sw.Elapsed.TotalSeconds:0.00}s (純掃 {scanSecs:0.00}s), {rows:N0} 列, {If(scanSecs > 0, rows / scanSecs, 0):N0} 列/s, 失敗夾 {fails}{parityStr}"
-                lines.Add(line)
-                _dbg(" ├ pass 完成", line)
-            Next
-
-            ' 總結: speedup 分母 = S1a/S1b 純掃平均(A/B/A 消快取暖化偏差)
-            Dim baseAvg As Double = serialScanSecs.Average()
-            Dim warmBias As String = If(serialScanSecs.Count = 2 AndAlso serialScanSecs(0) > 0,
-                $"S1a→S1b 暖化比 {serialScanSecs(1) / serialScanSecs(0):0.00} (≪1 = OS快取暖化明顯,平行數字要打折)", "")
-            _dbg("PROBE_PARSCAN 總結", $"總耗時 {swTotal.Elapsed.TotalSeconds:0.0}s | 循序基準(平均) {baseAvg:0.00}s | {warmBias}")
-            For Each ps In passScan
-                If ps.Secs > 0 Then _dbg(" ├ speedup", $"{ps.Label}: {baseAvg / ps.Secs:0.00}× (省 {baseAvg - ps.Secs:0.00}s)")
-            Next
-            PgrsBar1.Text = $"PROBE_PARSCAN 完成 — 循序 {baseAvg:0.00}s，詳見 Debug log" : PgrsBar2.Text = ""
-        Catch ex As OperationCanceledException
-            _dbg("PROBE_PARSCAN", $"已中斷(看門狗超時或手動取消)，已完成 {lines.Count}/{passes.Count} pass")
-            For Each l In lines : _dbg(" ├ 部分結果", l) : Next
-            PgrsBar1.Text = "PROBE_PARSCAN 已中斷" : PgrsBar2.Text = ""
-        Catch ex As System.Exception
-            _dbg("PROBE_PARSCAN 例外", ex.Message)
-            PgrsBar1.Text = "PROBE_PARSCAN 失敗，見 Debug log" : PgrsBar2.Text = ""
-        Finally
-            _probeParScanCts.Dispose() : _probeParScanCts = Nothing
-        End Try
-    End Function
-
-    Private Function ProbeParScanWorker(profileName As String, subset As List(Of FolderInfoDbRow), ct As CancellationToken) _
-                                       As (Rows As Long, Fails As Integer, ScanMs As Long, PerFolder As Dictionary(Of String, Integer))
-        ' worker: 自建獨立 RDOSession(鐵律)，逐夾呼叫 ProbeParScanOneFolder。ScanMs 只計純掃描(Logon/store dict 建置排除)。
-        Dim perFolder As New Dictionary(Of String, Integer)(subset.Count)
-        Dim fails As Integer = 0, totalRows As Long = 0
-        Dim session As Redemption.RDOSession = Nothing
-        Dim storeByName As New Dictionary(Of String, Redemption.RDOStore)()
-        Try
-            Try
-                session = New Redemption.RDOSession()
-                session.Logon(ProfileName:=profileName, Password:="", ShowDialog:=False, NewSession:=True)
-                storeByName = BuildRdoStoreByNameDict(session)
-            Catch ex As System.Exception
-                _dbg("PROBE_PARSCAN worker", "Logon失敗: " & ex.Message)
-                Return (0L, subset.Count, 0L, perFolder)
-            End Try
-
-            Dim sw As Stopwatch = Stopwatch.StartNew()
-            For Each r In subset
-                ct.ThrowIfCancellationRequested()
-                Dim n As Integer = ProbeParScanOneFolder(storeByName, r)
-                If n < 0 Then fails += 1 Else totalRows += n : perFolder(r.path) = n
-            Next
-            sw.Stop()
-            Return (totalRows, fails, sw.ElapsedMilliseconds, perFolder)
-        Finally
-            For Each kv In storeByName : Dim o As Object = kv.Value : TryMarshalRelease(o) : Next
-            If session IsNot Nothing Then
-                Try : session.Logoff() : Catch : End Try
-                Dim so As Object = session : TryMarshalRelease(so)
-            End If
-        End Try
-    End Function
-
-    Private Function ProbeParScanOneFolder(storeByName As Dictionary(Of String, Redemption.RDOStore), r As FolderInfoDbRow) As Integer
-        ' 單夾掃描核心 — 逐行複製 production GetMailInfoRdo 的讀取+解析形狀(COLS/GetRows(5000)/MailItemInfo 全欄含 XxHash)，
-        '   誠實付同等成本；差異僅: 結果丟棄、不寫任何 production 快取。回傳列數；-1 = 失敗(store 缺/GetFolderFromID 失敗/例外)。
-        Const COLS As String = "EntryID, " & PR_SUBJECT & ", " & PR_MESSAGE_SIZE & ", " & PR_MESSAGE_DELIVERY_TIME & ", " & PR_SENDER_NAME & ", " & PR_INTERNET_MESSAGE_ID_W & ", " & PR_SENDER_EMAIL_ADDRESS_W & ", " & PR_HASATTACH & ", " & DASL_SMARTNOATTACH
-        Dim store As Redemption.RDOStore = Nothing
-        If Not storeByName.TryGetValue(GetStoreNameFromPath(r.path), store) Then Return -1
-
-        Dim rdoFolder As Redemption.RDOFolder = Nothing
-        Dim items As Object = Nothing, tbl As Object = Nothing
-        Try
-            rdoFolder = TryCast(store.GetFolderFromID(r.eid), Redemption.RDOFolder)
-            If rdoFolder Is Nothing Then Return -1
-            items = rdoFolder.Items
-            tbl = items.MAPITable
-            If CInt(tbl.RowCount) = 0 Then Return 0
-
-            tbl.Columns = COLS : tbl.GoToFirst()
-            Dim cnt As Integer = 0
-            Do
-                Dim chunk As Array = TryCast(tbl.GetRows(5000), Array)
-                If chunk Is Nothing Then Exit Do
-                Dim got As Integer = 0
-                For i As Integer = chunk.GetLowerBound(0) To chunk.GetUpperBound(0)
-                    got += 1
-                    Dim row As Array = TryCast(chunk.GetValue(i), Array)
-                    If row Is Nothing Then Continue For
-                    Dim lb As Integer = row.GetLowerBound(0)
-                    Dim entryID As String = RdoTableEidToHex(row.GetValue(lb))
-                    If entryID = "" Then Continue For
-                    Dim msgIdRaw As String = TryCast(row.GetValue(lb + 5), String)
-                    Dim rcvTime As DateTime = DateTime.MinValue
-                    If TypeOf row.GetValue(lb + 3) Is DateTime Then
-                        rcvTime = DateTime.SpecifyKind(CDate(row.GetValue(lb + 3)), DateTimeKind.Utc).ToLocalTime()
-                    End If
-                    Dim info As New MailItemInfo With {.EntryID = entryID,
-                                                       .Subject = If(TryCast(row.GetValue(lb + 1), String), ""),
-                                                       .Size = If(row.GetValue(lb + 2) IsNot Nothing, Convert.ToInt64(row.GetValue(lb + 2)), 0L),
-                                                       .RcvTime = rcvTime,
-                                                       .SenderName = If(TryCast(row.GetValue(lb + 4), String), ""),
-                                                       .FolderPath = r.path,
-                                                       .MsgIDhash = StringToXxHash64Hex(If(msgIdRaw, "")),
-                                                       .SenderEmail = If(TryCast(row.GetValue(lb + 6), String), "")}
-                    ' 迴紋針兩欄照讀照判(付出與 production 相同成本)，結果同樣丟棄
-                    Dim vHas As Object = row.GetValue(lb + 7)
-                    Dim vSmart As Object = row.GetValue(lb + 8)
-                    Dim isAtt As Boolean = (TypeOf vHas Is Boolean AndAlso CBool(vHas)) AndAlso Not (TypeOf vSmart Is Boolean AndAlso CBool(vSmart))
-                    If isAtt OrElse info.EntryID <> "" Then cnt += 1   ' 恆真,防最佳化剔除,兼計列數
-                Next
-                If got < 5000 Then Exit Do
-            Loop
-            Return cnt
-        Catch ex As System.Exception
-            Return -1
-        Finally
-            TryMarshalRelease(tbl) : TryMarshalRelease(items)
-            Dim o As Object = rdoFolder : TryMarshalRelease(o)
-        End Try
-    End Function
-    ' ═════════════════ PROBE_PARSCAN ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
-
     ' ═════════════════ PROBE_F5TIMING ↓↓↓ 整塊可刪(連同 Form1_Shown 尾端的觸發行) ↓↓↓ ═════════════════
     ' 2026/07/10 by Simon/Claude Fable 5: 量測「SimTree1 全選 → F5」端到端耗時，F5 重複計算修正的前後對比用。
     '   背景: 修正前 SimTree F5 = ForceTvRefresh(RestoreTreeState 觸發 AfterSelect 全樹 BFS = 工作A)
@@ -2047,89 +1972,6 @@ Partial Class Form1
     '   觸發: 命令列 /autoprobef5timing (+ /autoclose)。看門狗: 就緒等待 3 分鐘、單 pass 4 分鐘硬上限。
     Private _probeF5Lines As New List(Of String)
     Private _probeF5LastChange As Date = Date.MinValue
-
-    Private Sub ProbeF5Log(s As String)
-        _probeF5Lines.Add($"{Now:HH:mm:ss.fff} {s}")
-        Try
-            System.IO.File.WriteAllLines(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_F5Timing.txt"), _probeF5Lines)
-        Catch : End Try
-    End Sub
-
-    Private Sub ProbeF5OnBarText(sender As Object, e As EventArgs)
-        _probeF5LastChange = Now
-        Dim item As ToolStripItem = TryCast(sender, ToolStripItem)
-        If item IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(item.Text) Then ProbeF5Log($"      [{item.Name}] {item.Text}")
-    End Sub
-
-    Private Async Function ProbeF5RunPass(label As String, trigger As System.Action) As Task(Of Double)
-        ProbeF5Log($"── {label}: 觸發")
-        Dim t0 As Date = Now
-        _probeF5LastChange = t0
-        Dim swPass As Stopwatch = Stopwatch.StartNew()
-        trigger()
-        Do
-            Await Task.Delay(250)
-            If (Now - _probeF5LastChange).TotalSeconds >= 4 AndAlso Not _isUserBusy Then Exit Do
-            If swPass.Elapsed.TotalMinutes > 4 Then
-                ProbeF5Log($"── {label}: ⚠ 超過 4 分鐘看門狗，強制結束本 pass")
-                Exit Do
-            End If
-        Loop
-        Dim total As Double = (_probeF5LastChange - t0).TotalSeconds
-        ProbeF5Log($"── {label}: 完成，總耗時 {total:0.00}s (觸發 → 最後一次 PgrsBar 變化)")
-        Return total
-    End Function
-
-    Private Async Sub ProbeF5TimingAsync()
-        Dim autoClose As Boolean = Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase))
-        Dim swAll As Stopwatch = Stopwatch.StartNew()
-        ProbeF5Log($"=== PROBE_F5TIMING 啟動 (autoClose={autoClose}) ===")
-        Try
-            ' ① 等啟動就緒: Tab1 首次統計完成(停錶) + RDO 背景 init 完成 + 無進行中運算 (上限 3 分鐘)
-            Do
-                If _startupStopwatch IsNot Nothing AndAlso Not _startupStopwatch.IsRunning AndAlso
-                   _rdo2 IsNot Nothing AndAlso ListView1.Items.Count > 0 AndAlso Not _isUserBusy Then Exit Do
-                If swAll.Elapsed.TotalMinutes > 3 Then
-                    ProbeF5Log("⚠ 等待啟動就緒逾時 3 分鐘，中止")
-                    Return
-                End If
-                Await Task.Delay(500)
-            Loop
-            ProbeF5Log($"啟動就緒 @ +{swAll.Elapsed.TotalSeconds:0.0}s (ListView1 {ListView1.Items.Count} 列)")
-            Await Task.Delay(2000)
-
-            ' ② 靜默全選 SimTree1 全部可見節點 (等同 Ctrl+A 的範圍，但不觸發 AfterSelect，讓 F5 成為唯一計時對象)
-            SimTree1.ClearSelectedNodes()
-            Dim nd As TreeNode = SimTree1.Nodes(0)
-            Dim cnt As Integer = 0
-            Do While nd IsNot Nothing
-                SimTree1.AddSelectedNode(nd) : cnt += 1
-                nd = nd.NextVisibleNode
-            Loop
-            ProbeF5Log($"全選完成: {cnt} 個可見節點，父子去重後 {SimTree1.GetDedupedSelection().Count} 個")
-
-            ' ③ 三個 pass；PgrsBar TextChanged 全程掛鉤記錄訊息時間戳
-            AddHandler PgrsBar1.TextChanged, AddressOf ProbeF5OnBarText
-            AddHandler PgrsBar2.TextChanged, AddressOf ProbeF5OnBarText
-            Try
-                Dim t1 As Double = Await ProbeF5RunPass("Pass1 SimTree F5 (第一次)", Sub() HandleTvKeyDown(SimTree1, New KeyEventArgs(Keys.F5)))
-                Await Task.Delay(1500)
-                Dim t2 As Double = Await ProbeF5RunPass("Pass2 SimTree F5 (第二次)", Sub() HandleTvKeyDown(SimTree1, New KeyEventArgs(Keys.F5)))
-                Await Task.Delay(1500)
-                Dim t3 As Double = Await ProbeF5RunPass("Pass3 ListView1 F5 (對照組, 只走 ForceLv1Refresh)", Sub() Call ForceLv1Refresh())
-                ProbeF5Log($"=== 總結: Pass1={t1:0.00}s | Pass2={t2:0.00}s | Pass3={t3:0.00}s ===")
-            Finally
-                RemoveHandler PgrsBar1.TextChanged, AddressOf ProbeF5OnBarText
-                RemoveHandler PgrsBar2.TextChanged, AddressOf ProbeF5OnBarText
-            End Try
-        Catch ex As System.Exception
-            ProbeF5Log("例外: " & ex.ToString())
-        Finally
-            ProbeF5Log($"=== PROBE_F5TIMING 結束，全程 {swAll.Elapsed.TotalSeconds:0.0}s ===")
-            If autoClose Then Me.BeginInvoke(Sub() Me.Close())
-        End Try
-    End Sub
-    ' ═════════════════ PROBE_F5TIMING ↑↑↑ 整塊可刪 ↑↑↑ ═════════════════
 
     ' ═════════════════ PROBE_S3CANCEL ↓↓↓ 整塊可刪(連同 Form1_Shown 尾端的觸發行) ↓↓↓ ═════════════════
     ' 2026/07/11 by Simon/Claude Fable 5: 驗證「ESC 取消 SimHash/body 平行化不再從 worker 執行緒拋 OCE」修正。
@@ -2150,7 +1992,6 @@ Partial Class Form1
             System.IO.File.WriteAllLines(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_S3Cancel.txt"), _probeS3Lines)
         Catch : End Try
     End Sub
-
     Private Sub ProbeS3OnFirstChance(sender As Object, e As System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs)
         ' 注意: first-chance 時 e.Exception.StackTrace 尚未填入(例外還沒開始傳播),要用 Environment.StackTrace 抓「拋出當下」的執行緒堆疊
         If Not (TypeOf e.Exception Is OperationCanceledException) Then Return
@@ -2160,7 +2001,6 @@ Partial Class Form1
         Dim userFrames = stk.Split(CChar(vbLf)).Where(Function(l) l.Contains("Outlook_Assistant.")).Take(2).Select(Function(l) l.Trim())
         _probeS3OceLog.Enqueue($"{Now:HH:mm:ss.fff} OCE {If(bad, "❌worker堆疊", "○async鏈(預期)")} @ {String.Join(" ← ", userFrames)}")
     End Sub
-
     Private Function ProbeS3ArmedProgress(cts As CancellationTokenSource, armKeyword As String, delayMs As Integer, armedFlag As Boolean()) As IProgress(Of ProgressReport)
         ' 等目標平行段的進度訊息真的出現才起算取消倒數 — 確保取消訊號落在 worker 迴圈執行中,而非之前的準備階段
         Return New Progress(Of ProgressReport)(Sub(p)
@@ -2172,7 +2012,6 @@ Partial Class Form1
                                                    End If
                                                End Sub)
     End Function
-
     Private Async Sub ProbeS3CancelAsync()
         Dim autoClose As Boolean = Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase))
         Dim swAll As Stopwatch = Stopwatch.StartNew()
@@ -2194,7 +2033,7 @@ Partial Class Form1
             Do While nd IsNot Nothing : nodes.Add(nd) : nd = nd.NextVisibleNode : Loop
             Dim prog As IProgress(Of ProgressReport) = New Progress(Of ProgressReport)(Sub(p) PgrsBar2.Text = p.Message)
             Dim folderList = Await GetUniqueFolderList(nodes, includeSub:=True, cToken:=CancellationToken.None, progress:=prog)
-            Dim scanned = Await ScanMailsToGroupDict(folderList, False, prog, CancellationToken.None)
+            Dim scanned = Await ScanMailsToGroupDict(folderList, False, prog, cToken:=CancellationToken.None)
             Dim allMails = scanned.Values.SelectMany(Function(x) x).ToList()
             ProbeS3Log($"母體就緒: {folderList.Count} 夾 / {allMails.Count:N0} 封 @ +{swAll.Elapsed.TotalSeconds:0.0}s")
             Dim K As Integer = GetThreadCount()
@@ -2210,7 +2049,7 @@ Partial Class Form1
                 Dim swA As Stopwatch = Stopwatch.StartNew()
                 Dim outcomeA As String
                 Try
-                    Await PreComputeSimHashParallel(todoA, progA, K, ctsA.Token)
+                    Await PreComputeSimHashParallel(todoA, K, progA, cToken:=ctsA.Token)
                     outcomeA = If(armedA(0), "❌ 取消後仍跑完,未中止", "⚠ 平行段進度未出現就跑完(母體太小?),取消未涵蓋")
                 Catch ex As OperationCanceledException
                     outcomeA = $"✅ OCE 由 async 鏈傳回探針 catch(與 Bt5_Click 行99 同路徑),總耗時 {swA.Elapsed.TotalSeconds:0.0}s"
@@ -2227,7 +2066,7 @@ Partial Class Form1
             If todoB.Count = 0 Then todoB = allMails.Take(600).ToList()
             ProbeS3Log($"Test B: todo={todoB.Count} 不取消,驗證 happy path")
             Try
-                Await PreComputeSimHashParallel(todoB, prog, K, CancellationToken.None)
+                Await PreComputeSimHashParallel(todoB, K, prog, cToken:=CancellationToken.None)
                 Dim covered = todoB.Where(Function(m) _cacheSimHash.ContainsKey(m.EntryID)).Count
                 ProbeS3Log($"Test B 結果: 正常完成,指紋覆蓋 {covered}/{todoB.Count} {If(covered = todoB.Count, "✅", "❌")}")
             Catch ex As System.Exception
@@ -2247,7 +2086,7 @@ Partial Class Form1
                 Dim swC As Stopwatch = Stopwatch.StartNew()
                 Dim outcomeC As String
                 Try
-                    Await FilterCandidates(candPairs, GetFuzzyTargetT(), progC, K, ctsC.Token)
+                    Await FilterCandidates(candPairs, GetFuzzyTargetT(), K, progC, cToken:=ctsC.Token)
                     outcomeC = If(armedC(0), "❌ 取消後仍跑完,未中止", "⚠ S5-1b 平行段未出現(候選集合可能全在 DB 快取),取消未涵蓋")
                 Catch ex As OperationCanceledException
                     outcomeC = $"✅ OCE 由 async 鏈傳回探針 catch,總耗時 {swC.Elapsed.TotalSeconds:0.0}s"
@@ -2302,7 +2141,6 @@ Partial Class Form1
             System.IO.File.WriteAllLines(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookAssistant_ProbeResult_RenewEx.txt"), _probeRenewLines)
         Catch : End Try
     End Sub
-
     Private Shared Function ProbeRenewFrame(line As String) As String
         ' 「   於 Outlook_Assistant.Form1.PeekFolderLastUpdateTime(Folder folder, …)」→「Form1.PeekFolderLastUpdateTime」
         Dim i As Integer = line.IndexOf("Outlook_Assistant.", StringComparison.Ordinal)
@@ -2311,7 +2149,6 @@ Partial Class Form1
         Dim p As Integer = s.IndexOf("("c)
         Return If(p > 0, s.Substring(0, p), s).Trim()
     End Function
-
     Private Sub ProbeRenewOnFirstChance(sender As Object, e As System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs)
         If Not _probeRenewArmed OrElse _probeRenewInHook Then Return
         _probeRenewInHook = True
@@ -2338,7 +2175,6 @@ Partial Class Form1
             _probeRenewInHook = False
         End Try
     End Sub
-
     Private Sub ProbeRenewDump(label As String)
         Dim rank = _probeRenewSig.ToArray().OrderByDescending(Function(kv) kv.Value.Count).ToList()
         ProbeRenewLog($"   ▼ {label}: 總例外 {_probeRenewTotal} 顆 / 簽章 {rank.Count} 種")
@@ -2353,7 +2189,6 @@ Partial Class Form1
             If Not String.IsNullOrEmpty(kv.Value.FirstStack) Then ProbeRenewLog($"          首例堆疊:{vbLf}{kv.Value.FirstStack}")
         Next
     End Sub
-
     Private Sub ProbeRenewHarvest(peekFail As HashSet(Of String), resolveFail As HashSet(Of String))
         ' 從本 pass 簽章蒐集失敗夾,供 ⑤ 微探針取樣 (Peek* = 屬性讀取失敗;RenewCacheToDB 框架直呼 = GetFolderFromID 孤兒/GetItemFromID 探活失敗)
         For Each kv In _probeRenewSig
@@ -2367,12 +2202,10 @@ Partial Class Form1
             Next
         Next
     End Sub
-
     Private Sub ProbeRenewReset()
         _probeRenewSig.Clear()
         _probeRenewTotal = 0
     End Sub
-
     Private Function ProbeRenewTryGetProp(f As Folder, tag As String) As String
         Try
             Dim v = f.PropertyAccessor.GetProperty(tag)
@@ -2381,7 +2214,6 @@ Partial Class Form1
             Return $"拋{ex.GetType().Name}(hr=0x{ex.HResult:X8})"
         End Try
     End Function
-
     Private Sub ProbeRenewMicroProbes(peekFail As HashSet(Of String), resolveFail As HashSet(Of String))
         ProbeRenewLog($"── ⑤ 微探針(不列入統計): Peek失敗 {peekFail.Count} 夾 / RenewCacheToDB內直呼失敗 {resolveFail.Count} 夾 (各取樣 12/8)")
         For Each fp In peekFail.Take(12)
@@ -2437,13 +2269,11 @@ Partial Class Form1
             ProbeRenewLog($"   ◆ RenewCacheToDB 直呼失敗夾: {fp} (孤兒 GetFolderFromID 或 GetItemFromID 探活失敗 — 對照該 pass 簽章的 hr/訊息)")
         Next
     End Sub
-
     Private Async Function ProbeRenewWaitIdle(tag As String) As Task
         Dim sw As Stopwatch = Stopwatch.StartNew()
         Do While _isUserBusy AndAlso sw.Elapsed.TotalSeconds < 60 : Await Task.Delay(250) : Loop
         If _isUserBusy Then ProbeRenewLog($"⚠ {tag}: 等待 idle 60s 仍 busy,continue anyway")
     End Function
-
     Private Async Sub ProbeRenewExAsync()
         Dim autoClose As Boolean = Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoclose", StringComparison.OrdinalIgnoreCase))
         Dim swAll As Stopwatch = Stopwatch.StartNew()

@@ -389,16 +389,6 @@ Partial Class Form1
         End If
         If Not String.IsNullOrEmpty(_startupElapsedMsg) Then PgrsBar1.Text = _startupElapsedMsg
 
-        ' PROBE_F5TIMING ↓↓↓ 整塊可刪 (本體在 Form1_Maintab56.vb 探針區) ↓↓↓
-        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoprobef5timing", StringComparison.OrdinalIgnoreCase)) Then ProbeF5TimingAsync()
-        ' PROBE_F5TIMING ↑↑↑ 整塊可刪 ↑↑↑
-        ' PROBE_S3CANCEL ↓↓↓ 整塊可刪 (本體在 Form1_Maintab56.vb 探針區) ↓↓↓
-        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoprobes3cancel", StringComparison.OrdinalIgnoreCase)) Then ProbeS3CancelAsync()
-        ' PROBE_S3CANCEL ↑↑↑ 整塊可刪 ↑↑↑
-        ' PROBE_RENEWEX ↓↓↓ 整塊可刪 (本體在 Form1_Maintab56.vb 探針區) ↓↓↓
-        If Environment.GetCommandLineArgs().Any(Function(a) a.Equals("/autoproberenewex", StringComparison.OrdinalIgnoreCase)) Then ProbeRenewExAsync()
-        ' PROBE_RENEWEX ↑↑↑ 整塊可刪 ↑↑↑
-
     End Sub
     Private Async Sub Form1_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
 
@@ -1025,6 +1015,20 @@ Partial Class Form1
         _dbg("結束")
 
     End Sub
+    Private Sub InitTab6UI()
+
+        ' 2026/7/11 by simon, 把 ListView6 的初始化移到這裡
+        ListView6.BorderStyle = BorderStyle.None
+        ListView6.BackColor = Color.White
+        ListView6.Columns.Add("Item", 200)
+        ListView6.Columns.Add("Value", 120, HorizontalAlignment.Right)
+        ListView6.BringToFront()
+
+        ' 2026/07/11 by Simon/Claude: 掛上「刪除這個 Table」右鍵選單 (單選單一資料表刪除)
+        InitLv6ContextMenu()
+        ListView6.ContextMenuStrip = ctxMenuLv6
+
+    End Sub
     Private Sub InitChart2()
         _dbg("開始", Chart2.Name)
 
@@ -1043,13 +1047,11 @@ Partial Class Form1
             .TextAntiAliasingQuality = TextAntiAliasingQuality.High
 
             ' 添加 Chart 的 Series
-            Dim mailCount As New Series With {.Name = "郵件數量",
-                                              .ChartType = SeriesChartType.Column, .Color = ThemeColors.barNormal}
+            Dim mailCount As New Series With {.Name = "郵件數量", .ChartType = SeriesChartType.Column, .Color = ThemeColors.barNormal}
 
             ' 添加 Chart 的 ChartArea
             ' by Gemini 3.0 Flash, 2026/04/17: 修正 BackColor 為 ThemeColors.bgColor 以確保與原本樣式統一
-            Dim mailChart As New ChartArea With {.Name = "長條圖",
-                                                 .BackColor = ThemeColors.bgColor, .BorderColor = Color.DarkGray}
+            Dim mailChart As New ChartArea With {.Name = "長條圖", .BackColor = ThemeColors.bgColor, .BorderColor = Color.DarkGray}
 
             ' ── [遷移] 最大化 ChartArea 和 InnerPlotPosition by Gemini 3.0 Flash, 2026/04/17 ──
             With mailChart
@@ -1123,7 +1125,7 @@ Partial Class Form1
         _cts = New CancellationTokenSource()
         Return _cts.Token
     End Function
-    Private Function SmartThrottle(sw As Stopwatch, cToken As CancellationToken, Optional intervalMs As Integer = ThrottleFreq.Mid, Optional onThrottled As System.Action = Nothing) As Task
+    Private Function SmartThrottle(sw As Stopwatch, Optional intervalMs As Integer = ThrottleFreq.Mid, Optional onThrottled As System.Action = Nothing, Optional cToken As CancellationToken = Nothing) As Task
 
         ' '' <summary>
         ''' 統一的節流讓出點，適用於所有需要在長時間迴圈中偶爾讓出 UI 執行權的情境
@@ -1226,17 +1228,10 @@ Partial Class Form1
                 ' 2026/04/19 by Claude: 利用 tabIndex > 5 的早返回點順帶刷新 txtDatabaseStats
                 If selectedTab.Text = "6.Setting" Then
                     ' ── 步驟 1: 第一次執行時，動態建立並配置 ListView ──
-                    If ListView6.Items.Count = 0 Then
-                        ListView6.BorderStyle = BorderStyle.None
-                        ListView6.BackColor = Color.White
-                        ListView6.Columns.Add("Item", 200)
-                        ListView6.Columns.Add("Value", 120, HorizontalAlignment.Right)
-                        ListView6.BringToFront()
-                    End If
+                    If ListView6.Items.Count = 0 Then InitTab6UI()
                     RefreshLv6DbStats() ' 現在是 Async Sub，呼叫後會立即返回不阻塞 Tab 切換
 
                 ElseIf selectedTab.Text = "7.OST 解析" Then
-
                     InitTab7UI()   ' by Gemini 3.0 Flash, 2026/04/23: 設置控制項 Anchor 與事件
 
                 End If

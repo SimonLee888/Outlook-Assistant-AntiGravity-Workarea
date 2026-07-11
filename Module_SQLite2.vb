@@ -444,22 +444,26 @@ Partial Class Form1
             _dbMail = New SqliteConnection($"Data Source={_dbMailPath};Mode=ReadWriteCreate")   ' 2026/07/03 by Simon/Claude: 移除 Cache=Shared，理由同 _dbCache
             _dbMail.Open()
             Using cmd As New SqliteCommand("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", _dbMail) : cmd.ExecuteNonQuery() : End Using
-            ' 2026/07/07 by Simon/Claude: 新增 bigram_set BLOB(核心版候選集合快取) — 只有進過 Tab5 S5 精算的候選信才會回填此欄
-            '   (每 bigram 4 bytes packed Int32, 實測全庫平均每封僅 ~2.4KB)。舊 DB 無此欄位者直接整檔重建, 不做 ALTER 遷移。
-            Using cmd As New SqliteCommand("CREATE TABLE IF NOT EXISTS mail_simhash (entry_id BLOB PRIMARY KEY, simhash INTEGER NOT NULL, bigram_count INTEGER NOT NULL, bigram_set BLOB);", _dbMail)
-                cmd.ExecuteNonQuery()
-            End Using
-
-            ' 2026/06/21 by Simon/Claude Opus 4.8: att_filenames 由 OLAcache.db 搬入本檔(schema 原樣保留：entry_id BLOB PK / folder_hash / filenames / msg_size)
-            Using cmd As New SqliteCommand("CREATE TABLE IF NOT EXISTS att_filenames (entry_id BLOB PRIMARY KEY, folder_hash INTEGER NOT NULL, filenames TEXT, msg_size INTEGER);" &
-                                           "CREATE INDEX IF NOT EXISTS idx_ma_folder ON att_filenames(folder_hash);", _dbMail)
-                cmd.ExecuteNonQuery()
-            End Using
+            EnsureDbMailSchema()
             _dbg("", $"已開啟 OLAcacheMail db: {_dbMailPath}")
 
         Catch ex As System.Exception
             _dbg("       ├ 錯誤", ex.Message) : _dbMail = Nothing   ' 出錯設 Nothing，後續 sim 讀寫自動跳過 (同主 db 容錯策略)
         End Try
+    End Sub
+    Private Sub EnsureDbMailSchema()
+        ' 2026/07/11 by Simon/Claude: 從 InitDbMail 抽出，供「Tab6 單表刪除」DROP 後重建 schema 共用，避免 CREATE TABLE 語句重複維護兩份
+        ' 2026/07/07 by Simon/Claude: 新增 bigram_set BLOB(核心版候選集合快取) — 只有進過 Tab5 S5 精算的候選信才會回填此欄
+        '   (每 bigram 4 bytes packed Int32, 實測全庫平均每封僅 ~2.4KB)。舊 DB 無此欄位者直接整檔重建, 不做 ALTER 遷移。
+        Using cmd As New SqliteCommand("CREATE TABLE IF NOT EXISTS mail_simhash (entry_id BLOB PRIMARY KEY, simhash INTEGER NOT NULL, bigram_count INTEGER NOT NULL, bigram_set BLOB);", _dbMail)
+            cmd.ExecuteNonQuery()
+        End Using
+
+        ' 2026/06/21 by Simon/Claude Opus 4.8: att_filenames 由 OLAcache.db 搬入本檔(schema 原樣保留：entry_id BLOB PK / folder_hash / filenames / msg_size)
+        Using cmd As New SqliteCommand("CREATE TABLE IF NOT EXISTS att_filenames (entry_id BLOB PRIMARY KEY, folder_hash INTEGER NOT NULL, filenames TEXT, msg_size INTEGER);" &
+                                       "CREATE INDEX IF NOT EXISTS idx_ma_folder ON att_filenames(folder_hash);", _dbMail)
+            cmd.ExecuteNonQuery()
+        End Using
     End Sub
     Private Sub LoadDbMail()
         ' 2026/06/17 by Simon/Claude Opus 4.8: mail_simhash 整表 lazy load 進記憶體 (僅一次)。每列 16B+eid，量小可全載。
@@ -711,7 +715,7 @@ Partial Class Form1
         '
         ' 流程：
         '   Phase 1. BFS 掃出所有 live folders (COM，~1ms/資料夾) 
-        '   Phase 2. 每個 folder 讀 PeekFolderSnapCommitOOM (單次 GetProperties 批次讀 count+commit_max) vs DB snapshot → 找 dirty folders
+        '   Phase 2. 每個 folder 讀 PeekFolderTimeSnapOOM (單次 GetProperties 批次讀 count+commit_max) vs DB snapshot → 找 dirty folders
         '            (2026/07/04 三訊號: count 抓增刪、commit_max 抓淨零置換/內容修改、兩者皆淨時再抽樣 GetItemFromID 探活抓純壓縮換ID)
         '   Phase 3. 對每個 dirty folder 重新計算：
         '              mc/fc (快，~1ms) 
@@ -794,13 +798,12 @@ Partial Class Form1
                 liveFolderPaths.Add(fPath)
 
                 ' 5. 【Rule 4 & 2】比對 Snap 與更新邏輯
-                ' 2026/07/04 by Simon/Claude Fable 5: 雙訊號 dirty 判定 — 純 count 抓不到「數量不變但內容置換」
-                '   (copy→修改→放回→刪原始 = 淨零變動)，加入 PR_LOCAL_COMMIT_TIME_MAX 比對。
+                ' 2026/07/04 by Simon/Claude Fable 5: 雙訊號 dirty 判定 — 純 count 抓不到「數量不變但內容置換」(copy→修改→放回→刪原始 = 淨零變動)，加入 PR_LOCAL_COMMIT_TIME_MAX 比對。
                 '   lastUpdated 刻意在重掃「之前」讀取：重掃期間若又有變動，commit 會高於本次存值 → 下次 Renew 再補抓，方向保守安全。
                 '   任一端未知 (-1 / DB NULL) 時退回純 count 比對，不誤判 dirty；首次升級後 DB 全為 NULL → 狀況 B 採認現值當基準，防護自下次生效。
                 ' 2026/07/11 by Simon/Claude Fable 5 [RenewCache 例外歸零]: 原兩次 GetProperty(PeekLiveFolderSnapOOM+PeekFolderLastUpdateTime)
                 '   併為單次 GetProperties 批次 — 缺屬性不再拋例外(舊寫法每夾每次噴一顆 COMException)，並少一次 COM 往返。
-                Dim peeked = PeekFolderSnapCommitOOM(folder, fPath)
+                Dim peeked = PeekFolderTimeSnapOOM(folder, fPath)
                 Dim liveSnap As Integer = peeked.snap
                 Dim lastUpdated As Long = peeked.cmx
                 Dim commitDirty As Boolean = lastUpdated >= 0 AndAlso row.cmx >= 0 AndAlso lastUpdated <> row.cmx
@@ -873,7 +876,7 @@ Partial Class Form1
                     If lastUpdated >= 0 Then _cacheFolderCommitMax(fPath) = lastUpdated   ' 2026/07/04 by Simon/Claude Fable 5: DB 為 NULL 時採認現值當基準(升級後首跑)；已有值時等值覆寫無害
                 End If
                 processed += 1
-                Await SmartThrottle(swThrottle, cToken, ThrottleFreq.Low, Sub() PgrsBar2.Text = $"對帳中 {processed}/{dbList.Count}...")
+                Await SmartThrottle(swThrottle, ThrottleFreq.Low, Sub() PgrsBar2.Text = $"對帳中 {processed}/{dbList.Count}...", cToken:=cToken)
             Next
             If _probeRenewArmed Then _probeRenewCurrentPath = ""   ' PROBE_RENEWEX breadcrumb 清空(整塊可刪) — 迴圈後的例外不再歸因到最後一夾
 

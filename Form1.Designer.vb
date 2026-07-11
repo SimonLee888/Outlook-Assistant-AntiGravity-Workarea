@@ -99,7 +99,7 @@ Partial Class Form1
         ListView6 = New ListView()
         SettingGroup = New GroupBox()
         RenewCache = New Button()
-        chkClearSimHash = New CheckBox()
+        chkClearDbMail = New CheckBox()
         SaveCache = New Button()
         RenewAttachFilename = New CheckBox()
         ClearCache = New Button()
@@ -339,7 +339,7 @@ Partial Class Form1
         ListView2.Location = New Point(0, 0)
         ListView2.Margin = New Padding(4)
         ListView2.Name = "ListView2"
-        ListView2.Size = New Size(724, 395)
+        ListView2.Size = New Size(720, 395)
         ListView2.TabIndex = 2
         ListView2.UseCompatibleStateImageBehavior = False
         ListView2.View = View.Details
@@ -374,7 +374,7 @@ Partial Class Form1
         Series1.Legend = "Legend1"
         Series1.Name = "Series1"
         Chart2.Series.Add(Series1)
-        Chart2.Size = New Size(724, 857)
+        Chart2.Size = New Size(720, 857)
         Chart2.TabIndex = 4
         Chart2.Text = "Chart1"
         ' 
@@ -430,7 +430,7 @@ Partial Class Form1
         CheckSubFolder3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         CheckSubFolder3.AutoSize = True
         CheckSubFolder3.FlatStyle = FlatStyle.System
-        CheckSubFolder3.Location = New Point(587, 77)
+        CheckSubFolder3.Location = New Point(583, 77)
         CheckSubFolder3.Margin = New Padding(4)
         CheckSubFolder3.Name = "CheckSubFolder3"
         CheckSubFolder3.Size = New Size(126, 27)
@@ -444,7 +444,7 @@ Partial Class Form1
         Button3.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button3.FlatStyle = FlatStyle.System
         Button3.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button3.Location = New Point(594, 10)
+        Button3.Location = New Point(590, 10)
         Button3.Margin = New Padding(4)
         Button3.Name = "Button3"
         Button3.Size = New Size(108, 60)
@@ -527,7 +527,7 @@ Partial Class Form1
         ListView3.Location = New Point(0, 111)
         ListView3.Margin = New Padding(4)
         ListView3.Name = "ListView3"
-        ListView3.Size = New Size(724, 1133)
+        ListView3.Size = New Size(720, 1133)
         ListView3.TabIndex = 33
         ListView3.UseCompatibleStateImageBehavior = False
         ListView3.View = View.Details
@@ -773,7 +773,7 @@ Partial Class Form1
         Listview4.Location = New Point(0, 111)
         Listview4.Margin = New Padding(4)
         Listview4.Name = "Listview4"
-        Listview4.Size = New Size(724, 1133)
+        Listview4.Size = New Size(720, 1133)
         Listview4.TabIndex = 13
         Listview4.UseCompatibleStateImageBehavior = False
         Listview4.View = View.Details
@@ -794,7 +794,7 @@ Partial Class Form1
         ButtonDeleteMail.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ButtonDeleteMail.FlatAppearance.MouseOverBackColor = Color.FromArgb(CByte(255), CByte(192), CByte(192))
         ButtonDeleteMail.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        ButtonDeleteMail.Location = New Point(610, 15)
+        ButtonDeleteMail.Location = New Point(606, 15)
         ButtonDeleteMail.Margin = New Padding(4)
         ButtonDeleteMail.Name = "ButtonDeleteMail"
         ButtonDeleteMail.Size = New Size(96, 60)
@@ -806,7 +806,7 @@ Partial Class Form1
         ' 
         Button4.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Button4.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
-        Button4.Location = New Point(506, 15)
+        Button4.Location = New Point(502, 15)
         Button4.Margin = New Padding(4)
         Button4.Name = "Button4"
         Button4.Size = New Size(96, 60)
@@ -863,7 +863,7 @@ Partial Class Form1
         lblThreads.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         lblThreads.AutoSize = True
         lblThreads.Enabled = False
-        lblThreads.Location = New Point(588, 76)
+        lblThreads.Location = New Point(584, 76)
         lblThreads.Name = "lblThreads"
         lblThreads.Size = New Size(61, 22)
         lblThreads.TabIndex = 20
@@ -874,7 +874,7 @@ Partial Class Form1
         numThreads.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         numThreads.Enabled = False
         numThreads.Increment = New Decimal(New Integer() {2, 0, 0, 0})
-        numThreads.Location = New Point(656, 73)
+        numThreads.Location = New Point(652, 73)
         numThreads.Margin = New Padding(4)
         numThreads.Maximum = New Decimal(New Integer() {12, 0, 0, 0})
         numThreads.Name = "numThreads"
@@ -956,13 +956,14 @@ Partial Class Form1
         ' SettingGroup
         ' 
         SettingGroup.Controls.Add(RenewCache)
-        SettingGroup.Controls.Add(chkClearSimHash)
+        SettingGroup.Controls.Add(chkClearDbMail)
         SettingGroup.Controls.Add(SaveCache)
         SettingGroup.Controls.Add(RenewAttachFilename)
         SettingGroup.Controls.Add(ClearCache)
         SettingGroup.Controls.Add(checkShowAllFolders)
         SettingGroup.Controls.Add(LoadCache)
         SettingGroup.Controls.Add(CheckRDO)
+        SettingGroup.FlatStyle = FlatStyle.Flat
         SettingGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
         SettingGroup.Location = New Point(8, 16)
         SettingGroup.Name = "SettingGroup"
@@ -975,6 +976,7 @@ Partial Class Form1
         ' 
         RenewCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         RenewCache.BackColor = Color.LightCyan
+        RenewCache.FlatStyle = FlatStyle.System
         RenewCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         RenewCache.ForeColor = SystemColors.ActiveCaptionText
         RenewCache.Location = New Point(172, 169)
@@ -984,22 +986,23 @@ Partial Class Form1
         RenewCache.Text = "更新快取"
         RenewCache.UseVisualStyleBackColor = False
         ' 
-        ' chkClearSimHash
+        ' chkClearDbMail
         ' 
-        chkClearSimHash.AutoSize = True
-        chkClearSimHash.FlatStyle = FlatStyle.System
-        chkClearSimHash.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
-        chkClearSimHash.Location = New Point(307, 122)
-        chkClearSimHash.Name = "chkClearSimHash"
-        chkClearSimHash.Size = New Size(132, 24)
-        chkClearSimHash.TabIndex = 14
-        chkClearSimHash.TabStop = False
-        chkClearSimHash.Text = "清除SimHash"
-        chkClearSimHash.UseVisualStyleBackColor = True
+        chkClearDbMail.AutoSize = True
+        chkClearDbMail.FlatStyle = FlatStyle.System
+        chkClearDbMail.Font = New Font("Microsoft JhengHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point, CByte(136))
+        chkClearDbMail.Location = New Point(307, 122)
+        chkClearDbMail.Name = "chkClearDbMail"
+        chkClearDbMail.Size = New Size(149, 24)
+        chkClearDbMail.TabIndex = 14
+        chkClearDbMail.TabStop = False
+        chkClearDbMail.Text = "同時清除dbMail"
+        chkClearDbMail.UseVisualStyleBackColor = True
         ' 
         ' SaveCache
         ' 
         SaveCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SaveCache.FlatStyle = FlatStyle.System
         SaveCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         SaveCache.Location = New Point(172, 29)
         SaveCache.Name = "SaveCache"
@@ -1025,6 +1028,7 @@ Partial Class Form1
         ' 
         ClearCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         ClearCache.BackColor = Color.MistyRose
+        ClearCache.FlatStyle = FlatStyle.System
         ClearCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         ClearCache.ForeColor = SystemColors.ActiveCaptionText
         ClearCache.Location = New Point(172, 100)
@@ -1053,6 +1057,7 @@ Partial Class Form1
         ' LoadCache
         ' 
         LoadCache.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        LoadCache.FlatStyle = FlatStyle.System
         LoadCache.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         LoadCache.Location = New Point(178, 34)
         LoadCache.Name = "LoadCache"
@@ -1083,6 +1088,7 @@ Partial Class Form1
         DebugGroup.Controls.Add(OKiLikeNoisy)
         DebugGroup.Controls.Add(CheckDebug)
         DebugGroup.Controls.Add(DebugButton)
+        DebugGroup.FlatStyle = FlatStyle.Flat
         DebugGroup.Font = New Font("Microsoft JhengHei UI", 10F, FontStyle.Bold, GraphicsUnit.Point, CByte(136))
         DebugGroup.Location = New Point(8, 531)
         DebugGroup.Name = "DebugGroup"
@@ -1127,6 +1133,7 @@ Partial Class Form1
         ' DebugButton
         ' 
         DebugButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        DebugButton.FlatStyle = FlatStyle.System
         DebugButton.Font = New Font("Microsoft JhengHei UI", 12F, FontStyle.Bold)
         DebugButton.Location = New Point(172, 40)
         DebugButton.Name = "DebugButton"
@@ -1454,7 +1461,7 @@ Partial Class Form1
     Friend WithEvents Lv4Topic As ListView
     Friend WithEvents ColumnHeader41 As ColumnHeader
     Friend WithEvents ColumnHeader42 As ColumnHeader
-    Friend WithEvents chkClearSimHash As CheckBox
+    Friend WithEvents chkClearDbMail As CheckBox
     Friend WithEvents TrackBar1 As StepTrackBar ' 改為 StepTrackBar，點擊滑軌只移一格。by Claude Sonnet 4.6, 2026/06/18
     Friend WithEvents numThreads As NumericUpDown
     Friend WithEvents lblThreads As Label

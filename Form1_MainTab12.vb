@@ -414,6 +414,7 @@ Partial Class Form1
         ' 更新快取
         _cacheMailCount(rootPath) = rootMc : _cacheMailCountAll(rootPath) = rootMca
         _cacheFolderCount(rootPath) = rootFc : _cacheFolderCountAll(rootPath) = rootFca
+        InvalidateStaleMailInfoByFreshMc(rootPath, rootMc)   ' 2026/07/11 [F5串行化 補遺]: 以剛取得的真實 mc 手術式失效過期的 _cacheMailInfo
 
         Dim rows As New List(Of FolderBfsEntry) From {New FolderBfsEntry With {.Folder = folder, .FolderPath = rootPath,
                                                                                .DirectMailCount = rootMc, .TotalMailCount = rootMca, .TotalSubCount = rootFca}}
@@ -435,6 +436,7 @@ Partial Class Form1
             _cacheFolderCount(childPath) = GetFolderCount(child, childPath, skipCache:=True)
             _cacheMailCountAll(childPath) = Await GetMailCountAllOOM(child, skipCache:=True, cToken:=cToken)
             _cacheFolderCountAll(childPath) = Await GetFolderCountAllOOM(child, skipCache:=True, cToken:=cToken)
+            InvalidateStaleMailInfoByFreshMc(childPath, _cacheMailCount(childPath))   ' 2026/07/11 [F5串行化 補遺]: 同 root，手術式失效
 
             rows.Add(New FolderBfsEntry With {.Folder = child, .FolderPath = childPath,
                                               .DirectMailCount = _cacheMailCount(childPath),
@@ -443,6 +445,23 @@ Partial Class Form1
         Next
         Return rows
     End Function
+    Private Sub InvalidateStaleMailInfoByFreshMc(fPath As String, freshMc As Long)
+        ' ---------------------------------------------------------------
+        ' InvalidateStaleMailInfoByFreshMc — F5 手術式失效 _cacheMailInfo
+        ' 2026/07/11 by Simon/Claude Fable 5 [F5串行化 補遺]:
+        '   GetMailInfo 的 ① 記憶體命中是無條件信任 (Module_Outlook.vb，不驗 snap)，session 中 Outlook 外部增刪郵件後，
+        '   _cacheMailInfo 的失效完全依賴「有人清它」(程式內刪信 InvalidateMailCache / 原地 patch / RenewCache 狀況A)。
+        '   舊 F5 靠 ClearMemoryCachesCore 整批清空順帶涵蓋；Step4 窄化後改在本函式以 F5 剛取得的真實 mc 比對 Snap，
+        '   只清真的過期的資料夾 — Tab4/5 已掃描的其他資料夾快取不陪葬。
+        '   已知盲點:「數量不變但內容置換」(淨零變動) 比對不到，由 RenewCache 的雙訊號 (count + commit_time) 負責，
+        '   舊 F5 全清後走 DB lazy 對深層資料夾同樣驗不出來，此為既有分工而非新缺口。
+        ' ---------------------------------------------------------------
+        Dim entry As (Mails As List(Of (Mail As MailItemInfo, Topic As String)), Snap As Long) = Nothing
+        If _cacheMailInfo.TryGetValue(fPath, entry) AndAlso entry.Snap <> freshMc Then
+            _cacheMailInfo.TryRemove(fPath, Nothing)
+            _dbg(" ├ F5 郵件快取失效", $"{ExtractFolderName(fPath)}: mailInfo snap {entry.Snap} ≠ 現值 {freshMc}，已清除待 lazy 重掃")
+        End If
+    End Sub
 
     ' 以下為 CollectFolderInfoByBFS 專用的拆分子函數 (Steps 1~5)
     Private Async Function BuildBfsFolderTree(rootFolder As Folder, Optional progress As IProgress(Of ProgressReport) = Nothing,

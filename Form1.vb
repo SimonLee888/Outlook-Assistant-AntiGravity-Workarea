@@ -1927,6 +1927,8 @@ Partial Class Form1
             ClearFolderCachesCore()                     ' 【修復關鍵 1】清除資料夾結構+統計快取，包含 _cacheFolderIDs，防止幽靈復活, 2026/6/1 by Simon/Gemini 3.1 Pro
             ' 2026/07/10 [F5串行化 Step4]: 原呼叫 ClearMemoryCachesCore 整批清空，連 _cacheMailBody/_cacheMailInfo 等
             '   郵件層快取都陪葬。統計新鮮度現由 ForceLv1Refresh 的 skipCache 直讀保證，郵件層快取得以保留。
+            ' 2026/07/11 [F5串行化 補遺]: _cacheMailInfo 的過期改由 InvalidateStaleMailInfoByFreshMc (Form1_MainTab12.vb) 手術式失效 —
+            '   ForceLv1Refresh 拿到真實 mc 時逐夾比對 Snap，只清真的變動過的資料夾。
             _isForceRefreshing = True                   ' 確保繞過 SSD 快取，強制打 COM (若原 codebase 沒加這行請務必補上), 2026/6/1 by Simon/Gemini 3.1 Pro
             tv.ClearSelectedNodes()
             tv.Nodes.Clear()
@@ -2332,6 +2334,11 @@ Partial Class Form1
         ' 2026/07/10 by Simon/Claude Fable 5 [F5串行化 Step4]: 從 ClearMemoryCachesCore 拆出，供 ForceTvRefresh (F5 樹重刷) 使用 —
         '   郵件層快取 (_cacheMailBody/_cacheMailInfo/_cacheCleanSubject/_dirtyMailFolders) 與資料夾結構無關，F5 不必陪葬。
         '   注意: _cacheFolderTree/_cacheSubTreeList/_cacheFolderIDs 仍必清 — 樹結構幽靈復活防護 (2026/6/1) 語意不變。
+        ' 2026/07/11 [F5串行化 補遺] 郵件層三者的過期機制盤點 (F5 不清的正當性依據):
+        '   _cacheMailInfo    → F5 路徑由 InvalidateStaleMailInfoByFreshMc 以真實 mc 比對 Snap 手術式失效;
+        '                       程式內刪信/改信走 InvalidateMailCache/原地 patch;完整驗證歸 RenewCache 狀況A。
+        '   _cacheMailBody    → key=EntryID,只有「就地修改」會過期,由 RenewCache 的 msg_size 修改偵測精準清除。
+        '   _cacheCleanSubject→ key=subject 字串本身 (內容定址 memoization),邏輯上不可能過期,清除純屬記憶體衛生。
         ' ---------------------------------------------------------------
         _dbg("開始", "清理資料夾結構+統計快取")
         _cacheMailCount.Clear()
